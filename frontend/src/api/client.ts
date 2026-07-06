@@ -1,6 +1,11 @@
 import { useAuthStore } from "../store/authStore";
 
-async function refreshTokens(): Promise<boolean> {
+// Shared across concurrent callers: if two requests 401 around the same time, they
+// must not both try to redeem the same single-use refresh token (the second one
+// would get a "revoked" error and log the user out even though the first succeeded).
+let inFlightRefresh: Promise<boolean> | null = null;
+
+async function doRefresh(): Promise<boolean> {
   const { refreshToken, setTokens, clear } = useAuthStore.getState();
   if (!refreshToken) return false;
 
@@ -16,6 +21,15 @@ async function refreshTokens(): Promise<boolean> {
   const data = await res.json();
   setTokens(data.access_token, data.refresh_token);
   return true;
+}
+
+function refreshTokens(): Promise<boolean> {
+  if (!inFlightRefresh) {
+    inFlightRefresh = doRefresh().finally(() => {
+      inFlightRefresh = null;
+    });
+  }
+  return inFlightRefresh;
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {

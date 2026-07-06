@@ -27,4 +27,6 @@ async def log_event(
             event_metadata=metadata or {},
         )
     )
-    await db.commit()
+    # Flush only - the caller commits once, atomically, alongside whatever business
+    # change (or lockout counter update) this event is describing.
+    await db.flush()

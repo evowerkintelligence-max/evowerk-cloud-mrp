@@ -15,6 +15,13 @@ Foundation only: repo scaffold, auth (OAuth2 password grant + JWT + TOTP MFA),
 multi-tenant data model (`org_id` scoping baked into every table from day one),
 audit logging skeleton, and local dev setup. No business features yet.
 
+Hardened after an initial security pass: account lockout after repeated failed
+logins/MFA attempts, TOTP secrets encrypted at rest, MFA re-enrollment requires
+password confirmation (and never disables an active MFA secret until the new
+one is verified), timing-safe login for nonexistent users, a server-side
+password policy, a unique constraint on `users.email`, and an `is_active` flag
+enforced on both login and token auth.
+
 ## Stack
 
 - **Backend**: FastAPI, async SQLAlchemy 2.0, Alembic, Postgres.
@@ -39,7 +46,7 @@ cd backend
 python -m venv .venv
 .venv/Scripts/activate  # or `source .venv/bin/activate` on macOS/Linux
 pip install -r requirements.txt
-cp .env.example .env    # edit JWT_SECRET_KEY and DATABASE_URL
+cp .env.example .env    # edit JWT_SECRET_KEY, MFA_ENCRYPTION_KEY, and DATABASE_URL
 alembic upgrade head
 uvicorn app.main:app --reload
 
@@ -80,3 +87,8 @@ read another org's data).
 - TLS termination / hosting choice (EvoWerk-managed vs. customer's cloud).
 - Fine-grained RBAC (currently a single `role` string per user).
 - Compliance tooling (SAST/DAST scanning, SOC2 evidence collection).
+- Per-IP rate limiting. Account lockout (`MAX_FAILED_LOGIN_ATTEMPTS`) protects a
+  given account from brute force, but there's no throttle yet against one IP
+  hammering many different accounts (credential stuffing).
+- Account deactivation/invite UI — `is_active` exists and is enforced, but
+  nothing sets it to `false` yet.

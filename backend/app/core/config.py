@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
 
     totp_issuer: str = "EvoWerk Cloud MRP"
+    # Fernet key (Fernet.generate_key()) used to encrypt TOTP secrets at rest.
+    mfa_encryption_key: str
+
+    max_failed_login_attempts: int = 5
+    account_lockout_minutes: int = 15
 
     cors_origins: list[str] = ["http://localhost:5173"]
 

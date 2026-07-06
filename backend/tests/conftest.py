@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+
+from cryptography.fernet import Fernet
+
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-that-is-long-enough-for-hs256")
+os.environ.setdefault("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient

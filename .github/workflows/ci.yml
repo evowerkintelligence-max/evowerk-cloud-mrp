@@ -132,3 +132,27 @@ jobs:
         run: alembic upgrade head
       - name: Verify audit_logs is append-only
         run: python scripts/verify_audit_log_immutable.py
+
+  terraform-lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # aws isn't in this list yet - infra/terraform/aws only exists on the
+        # still-open "Add AWS Terraform" PR, not on this branch. Add it back
+        # to the matrix once that PR merges into master.
+        cloud: [azure]
+    defaults:
+      run:
+        working-directory: infra/terraform/${{ matrix.cloud }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "1.9.8"
+      - run: terraform fmt -check -recursive
+      # -backend=false: no real AWS/Azure credentials in CI, this only
+      # catches syntax/reference errors against the real provider schema,
+      # not real plan-time issues (missing permissions, invalid instance
+      # types, etc.) - see infra/terraform/<cloud>/README.md.
+      - run: terraform init -backend=false
+      - run: terraform validate

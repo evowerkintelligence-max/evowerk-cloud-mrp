@@ -4,6 +4,8 @@ import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
 import { MfaChallenge } from "./pages/MfaChallenge";
 import { Dashboard } from "./pages/Dashboard";
+import { Items } from "./pages/Items";
+import { Boms } from "./pages/Boms";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -29,6 +31,22 @@ export function App() {
         element={
           <RequireAuth>
             <Dashboard />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/items"
+        element={
+          <RequireAuth>
+            <Items />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/boms"
+        element={
+          <RequireAuth>
+            <Boms />
           </RequireAuth>
         }
       />

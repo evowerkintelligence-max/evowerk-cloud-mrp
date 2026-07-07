@@ -8,6 +8,8 @@ export default defineConfig({
     proxy: {
       "/auth": "http://localhost:8000",
       "/orgs": "http://localhost:8000",
+      "/items": "http://localhost:8000",
+      "/boms": "http://localhost:8000",
     },
   },
 });

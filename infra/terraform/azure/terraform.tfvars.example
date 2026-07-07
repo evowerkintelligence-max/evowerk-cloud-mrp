@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars (gitignored) and fill in. Don't commit the real
+# file - it ends up holding the Fernet key in plaintext.
+
+azure_location = "eastus"
+project_name   = "evowerk-mrp"
+environment    = "production"
+
+# Generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Required - there's no safe way to auto-generate a valid Fernet key here.
+mfa_encryption_key = "REPLACE_ME"
+
+# Leave empty to auto-generate a random one instead.
+jwt_secret_key = ""
+
+# Must already be pushed to the ACR repos this module creates before you
+# apply the Container Apps - see README.md for the two-phase apply.
+image_tag = "latest"

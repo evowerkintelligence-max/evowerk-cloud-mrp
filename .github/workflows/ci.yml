@@ -86,8 +86,11 @@ jobs:
           # any shipped artifact. Revisit this exclusion once a real multi-stage
           # production frontend image (build stage + static-file server, no
           # devDependencies) exists - that image should be scanned with none of
-          # this skipped.
-          skip-dirs: /app/node_modules
+          # this skipped. Also skipping npm's own vendored node_modules
+          # (/usr/local/lib/node_modules/npm) - that's baked into every official
+          # node:* image by Node itself, not something this Dockerfile controls,
+          # and it's npm's internal tooling, never our app's code path.
+          skip-dirs: /app/node_modules,/usr/local/lib/node_modules/npm
 
   migration-check:
     runs-on: ubuntu-latest

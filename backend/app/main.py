@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, boms, items, orgs
+from app.api.routes import auth, boms, items, orgs, purchase_orders, suppliers
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -26,6 +26,8 @@ app.include_router(auth.router)
 app.include_router(orgs.router)
 app.include_router(items.router)
 app.include_router(boms.router)
+app.include_router(suppliers.router)
+app.include_router(purchase_orders.router)
 
 
 @app.get("/health")

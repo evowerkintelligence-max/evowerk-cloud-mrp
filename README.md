@@ -9,11 +9,53 @@ No code is shared beyond common pip packages for core math (data cleaning,
 OEE calc, forecasting) — see the desktop repo's `project_product_separation`
 notes for why.
 
-## Phase 0 (this repo, current state)
+## Phase 1 (this repo, current state)
 
-Foundation only: repo scaffold, auth (OAuth2 password grant + JWT + TOTP MFA),
-multi-tenant data model (`org_id` scoping baked into every table from day one),
-audit logging skeleton, and local dev setup. No business features yet.
+Security foundation on top of the Phase 0 scaffold: auth (OAuth2 password
+grant + JWT + TOTP MFA), multi-tenant data model (`org_id` scoping baked into
+every table from day one), an append-only audit log, and CI/CD security
+gates. Still no business features.
+
+### Audit log: append-only at the database level
+
+`audit_logs` rows can only be inserted, never updated or deleted — enforced
+by a Postgres trigger (migration `0c1e0833260f`), not just app-layer
+discipline (the app never issues UPDATE/DELETE against this table either, but
+the DB-level trigger is what holds even if the app has a bug or is
+compromised). Only a Postgres superuser bypassing triggers entirely could get
+around it; that's the accepted trust boundary. CI's `migration-check` job
+proves this against a real Postgres instance on every push (inserts a row,
+then asserts both UPDATE and DELETE raise).
+
+### CI/CD security gates
+
+Every push/PR runs, in addition to lint + tests:
+- **SAST**: `bandit` over `app/` (backend).
+- **Dependency scanning**: `pip-audit` (backend) and `npm audit
+  --audit-level=high` (frontend).
+- **Secret scanning**: `detect-secrets` against a checked-in
+  `.secrets.baseline` — new secrets fail the build; known-safe dev/CI
+  placeholders (e.g. `postgres:postgres`, the CI-only JWT/Fernet keys) are
+  whitelisted in the baseline.
+- **Container scanning**: Trivy scans both the backend and frontend Docker
+  images for HIGH/CRITICAL OS + dependency CVEs.
+- **Migration check**: applies every Alembic migration against a real
+  Postgres service container (the test suite itself runs against SQLite, so
+  this is the only place migrations are validated against the database
+  engine they're actually written for) and verifies audit-log immutability.
+
+Locally, install the pre-commit hooks so the same secret-scan/lint checks run
+before you commit, not just in CI:
+
+```bash
+cd backend && pip install -r requirements-dev.txt && cd ..
+pre-commit install
+```
+
+If you add a new, real config value that looks like a secret, run
+`detect-secrets scan --baseline .secrets.baseline` and commit the updated
+baseline; `detect-secrets audit .secrets.baseline` lets you review/label
+findings interactively.
 
 Hardened after an initial security pass: account lockout after repeated failed
 logins/MFA attempts, TOTP secrets encrypted at rest, MFA re-enrollment requires
@@ -97,11 +139,23 @@ token), account lockout, password policy, the MFA-disable-bypass regression,
 cross-tenant isolation, and per-IP rate limiting (both that it trips, and that
 it doesn't get in the way of many legitimate concurrent users).
 
-## Deferred past Phase 0
+## Deferred past Phase 1
 
-- Secrets-manager integration (Vault/Doppler).
+- Secrets-manager integration (Vault/Doppler) — deferred until a hosting
+  target is chosen; funneling everything through one `Settings` object keeps
+  that a one-file change later.
 - TLS termination / hosting choice (EvoWerk-managed vs. customer's cloud).
-- Fine-grained RBAC (currently a single `role` string per user).
-- Compliance tooling (SAST/DAST scanning, SOC2 evidence collection).
+- Encryption at rest for the Postgres volume itself (as opposed to the
+  application-level encryption TOTP secrets already get) — typically a
+  property of the managed Postgres offering you deploy to, so tied to the
+  hosting decision above.
+- DAST (dynamic scanning, e.g. OWASP ZAP) — needs a running deployed target,
+  so deferred until there's a staging environment; SAST/dependency/secret/
+  container scanning all run in CI today (see above).
+- Fine-grained RBAC (currently a single `role` string per user) — per-feature
+  permission checks are a Phase 2 (feature development) concern.
+- SOC2/GDPR/HIPAA/ISO 27001 evidence collection — Phase 3.
 - Account deactivation/invite UI — `is_active` exists and is enforced, but
   nothing sets it to `false` yet.
+- Signed commits — not enforceable from inside the repo; requires a GitHub
+  branch-protection rule (`Require signed commits`) turned on for this repo.

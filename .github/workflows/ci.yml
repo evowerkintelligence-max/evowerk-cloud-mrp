@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 jobs:
@@ -15,11 +16,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: ruff check app tests
+      - run: pip install -r requirements-dev.txt
+      # Linting itself runs once, in the pre-commit job (pinned ruff version,
+      # covers backend/app + backend/tests) - not duplicated here.
       - run: pytest -q
         env:
           JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
+      - name: SAST (bandit)
+        run: bandit -r app scripts -ll
+      - name: Dependency scan (pip-audit)
+        run: pip-audit -r requirements.txt
 
   frontend:
     runs-on: ubuntu-latest
@@ -33,3 +39,90 @@ jobs:
           node-version: "20"
       - run: npm install
       - run: npx tsc -b
+      - name: Dependency scan (npm audit)
+        # --omit=dev: devDependencies (vite/esbuild's dev server, etc.) never
+        # ship in the production build, so a dev-server-only advisory there
+        # (e.g. GHSA-67mh-4wv8-2f99) shouldn't block CI the way a vulnerable
+        # runtime dependency would.
+        run: npm audit --omit=dev --audit-level=high
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1
+
+  container-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t evowerk-cloud-mrp-backend:ci ./backend
+      - name: Build frontend image
+        run: docker build -t evowerk-cloud-mrp-frontend:ci ./frontend
+      - name: Scan backend image (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: evowerk-cloud-mrp-backend:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+      - name: Scan frontend image (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: evowerk-cloud-mrp-frontend:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          # This image only runs `vite dev` (see frontend/Dockerfile) - there's no
+          # production build/serve stage yet (deferred with hosting choice, see
+          # README "Deferred past Phase 1"). node_modules here is 100% the dev
+          # toolchain (vite/esbuild/typescript and their transitive deps), which
+          # never reaches a real deployment, so scanning it against a
+          # production-grade HIGH/CRITICAL bar just chases devDependency CVEs
+          # (e.g. an old Go binary vendored inside esbuild) that can't affect
+          # any shipped artifact. Revisit this exclusion once a real multi-stage
+          # production frontend image (build stage + static-file server, no
+          # devDependencies) exists - that image should be scanned with none of
+          # this skipped. Also skipping npm's own vendored node_modules
+          # (/usr/local/lib/node_modules/npm) - that's baked into every official
+          # node:* image by Node itself, not something this Dockerfile controls,
+          # and it's npm's internal tooling, never our app's code path.
+          skip-dirs: /app/node_modules,/usr/local/lib/node_modules/npm
+
+  migration-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp
+      JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
+      MFA_ENCRYPTION_KEY: "nH7PbBN1oDWzZ8t0w9di2vDvxTFeOY1SOfYfnkIeXJo="
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: evowerk_cloud_mrp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run migrations against real Postgres
+        run: alembic upgrade head
+      - name: Verify audit_logs is append-only
+        run: python scripts/verify_audit_log_immutable.py

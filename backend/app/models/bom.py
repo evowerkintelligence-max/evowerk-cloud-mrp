@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,6 +24,9 @@ class Item(Base):
     # new type later doesn't need a migration, validated in the route instead.
     item_type: Mapped[str] = mapped_column(String(50), nullable=False, default="component")
     unit_of_measure: Mapped[str] = mapped_column(String(20), nullable=False, default="ea")
+    # Opt-in: only lot-tracked items require/get a Lot on PO receipt - see
+    # app.api.routes.purchase_orders.receive_purchase_order.
+    is_lot_tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

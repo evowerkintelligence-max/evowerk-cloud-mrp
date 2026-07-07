@@ -21,6 +21,7 @@ class ItemCreateRequest(BaseModel):
     name: str
     item_type: str = "component"
     unit_of_measure: str = "ea"
+    is_lot_tracked: bool = False
 
 
 class ItemResponse(BaseModel):
@@ -29,6 +30,7 @@ class ItemResponse(BaseModel):
     name: str
     item_type: str
     unit_of_measure: str
+    is_lot_tracked: bool
 
 
 def _to_response(item: Item) -> ItemResponse:
@@ -38,6 +40,7 @@ def _to_response(item: Item) -> ItemResponse:
         name=item.name,
         item_type=item.item_type,
         unit_of_measure=item.unit_of_measure,
+        is_lot_tracked=item.is_lot_tracked,
     )
 
 
@@ -56,6 +59,7 @@ async def create_item(
         name=body.name,
         item_type=body.item_type,
         unit_of_measure=body.unit_of_measure,
+        is_lot_tracked=body.is_lot_tracked,
     )
     db.add(item)
     try:

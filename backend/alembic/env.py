@@ -9,7 +9,7 @@ from sqlalchemy import pool
 
 from app.core.config import get_settings
 from app.db.base import Base
-from app.models import audit, bom, procurement, tenant, user  # noqa: F401 - registers models with Base.metadata
+from app.models import audit, bom, lot, procurement, tenant, user  # noqa: F401 - registers models with Base.metadata
 
 config = context.config
 settings = get_settings()

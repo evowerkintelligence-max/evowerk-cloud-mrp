@@ -40,7 +40,8 @@ export function Dashboard() {
       </p>
       <p>
         <Link to="/items">Items</Link> · <Link to="/boms">Bills of Materials</Link> ·{" "}
-        <Link to="/suppliers">Suppliers</Link> · <Link to="/purchase-orders">Purchase Orders</Link>
+        <Link to="/suppliers">Suppliers</Link> · <Link to="/purchase-orders">Purchase Orders</Link> ·{" "}
+        <Link to="/lots">Lots</Link>
       </p>
       <button onClick={logout}>Log out</button>
     </div>

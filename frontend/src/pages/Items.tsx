@@ -9,6 +9,7 @@ interface ItemResponse {
   name: string;
   item_type: string;
   unit_of_measure: string;
+  is_lot_tracked: boolean;
 }
 
 export function Items() {
@@ -17,6 +18,7 @@ export function Items() {
   const [name, setName] = useState("");
   const [itemType, setItemType] = useState("component");
   const [unitOfMeasure, setUnitOfMeasure] = useState("ea");
+  const [isLotTracked, setIsLotTracked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const items = useQuery<ItemResponse[]>({
@@ -32,7 +34,13 @@ export function Items() {
     mutationFn: async () => {
       const res = await apiFetch("/items", {
         method: "POST",
-        body: JSON.stringify({ sku, name, item_type: itemType, unit_of_measure: unitOfMeasure }),
+        body: JSON.stringify({
+          sku,
+          name,
+          item_type: itemType,
+          unit_of_measure: unitOfMeasure,
+          is_lot_tracked: isLotTracked,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -82,6 +90,14 @@ export function Items() {
           Unit of measure
           <input value={unitOfMeasure} onChange={(e) => setUnitOfMeasure(e.target.value)} required />
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={isLotTracked}
+            onChange={(e) => setIsLotTracked(e.target.checked)}
+          />
+          Lot tracked
+        </label>
         {error && <p role="alert">{error}</p>}
         <button type="submit" disabled={createItem.isPending}>
           Add item
@@ -95,6 +111,7 @@ export function Items() {
             <th>Name</th>
             <th>Type</th>
             <th>UoM</th>
+            <th>Lot tracked</th>
           </tr>
         </thead>
         <tbody>
@@ -104,6 +121,7 @@ export function Items() {
               <td>{item.name}</td>
               <td>{item.item_type}</td>
               <td>{item.unit_of_measure}</td>
+              <td>{item.is_lot_tracked ? "Yes" : "No"}</td>
             </tr>
           ))}
         </tbody>

@@ -17,7 +17,7 @@ from app.core import redis_client
 from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
-from app.models import audit, bom, procurement, tenant, user  # noqa: F401 - register models
+from app.models import audit, bom, lot, procurement, tenant, user  # noqa: F401 - register models
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 

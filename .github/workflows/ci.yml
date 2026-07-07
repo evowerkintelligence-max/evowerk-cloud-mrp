@@ -137,10 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # aws isn't in this list yet - infra/terraform/aws only exists on the
-        # still-open "Add AWS Terraform" PR, not on this branch. Add it back
-        # to the matrix once that PR merges into master.
-        cloud: [azure]
+        cloud: [aws, azure]
     defaults:
       run:
         working-directory: infra/terraform/${{ matrix.cloud }}

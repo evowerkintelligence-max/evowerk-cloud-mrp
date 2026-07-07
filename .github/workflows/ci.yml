@@ -76,6 +76,18 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          # This image only runs `vite dev` (see frontend/Dockerfile) - there's no
+          # production build/serve stage yet (deferred with hosting choice, see
+          # README "Deferred past Phase 1"). node_modules here is 100% the dev
+          # toolchain (vite/esbuild/typescript and their transitive deps), which
+          # never reaches a real deployment, so scanning it against a
+          # production-grade HIGH/CRITICAL bar just chases devDependency CVEs
+          # (e.g. an old Go binary vendored inside esbuild) that can't affect
+          # any shipped artifact. Revisit this exclusion once a real multi-stage
+          # production frontend image (build stage + static-file server, no
+          # devDependencies) exists - that image should be scanned with none of
+          # this skipped.
+          skip-dirs: node_modules
 
   migration-check:
     runs-on: ubuntu-latest

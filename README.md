@@ -37,8 +37,9 @@ Every push/PR runs, in addition to lint + tests:
   `.secrets.baseline` — new secrets fail the build; known-safe dev/CI
   placeholders (e.g. `postgres:postgres`, the CI-only JWT/Fernet keys) are
   whitelisted in the baseline.
-- **Container scanning**: Trivy scans both the backend and frontend Docker
-  images for HIGH/CRITICAL OS + dependency CVEs.
+- **Container scanning**: Trivy scans the backend image, the local-dev
+  frontend image, and the production frontend image (see below) for
+  HIGH/CRITICAL OS + dependency CVEs.
 - **Migration check**: applies every Alembic migration against a real
   Postgres service container (the test suite itself runs against SQLite, so
   this is the only place migrations are validated against the database
@@ -112,6 +113,28 @@ npm install
 npm run dev
 ```
 
+## Production frontend image
+
+`frontend/Dockerfile` (used by `docker-compose`) is dev-only — it runs the
+Vite dev server for HMR. `frontend/Dockerfile.prod` is the real deployment
+artifact: a multi-stage build (`npm run build` in a `node:20-alpine` stage,
+then the static `dist/` output served by `nginx:1.27-alpine` — no Node/npm/
+devDependencies in the final image at all).
+
+The app calls the backend via same-origin relative paths (e.g.
+`fetch("/auth/refresh")` in `src/api/client.ts`) rather than an absolute API
+URL, mirroring `vite.config.ts`'s dev-mode proxy. In production, nginx plays
+the same role: `nginx.conf.template` reverse-proxies `/auth/` and `/orgs/` to
+`$BACKEND_UPSTREAM` (defaults to `backend:8000`, override per deployment) and
+falls back to `index.html` for everything else (client-side routing). Adding
+a new backend router means adding its prefix to both `vite.config.ts` (dev)
+and `nginx.conf.template` (prod).
+
+```bash
+docker build -t evowerk-frontend-prod -f frontend/Dockerfile.prod ./frontend
+docker run -p 8080:80 -e BACKEND_UPSTREAM=host.docker.internal:8000 evowerk-frontend-prod
+```
+
 ## Secrets
 
 All secrets come from environment variables via `app/core/config.py`'s
@@ -141,14 +164,20 @@ it doesn't get in the way of many legitimate concurrent users).
 
 ## Deferred past Phase 1
 
-- Secrets-manager integration (Vault/Doppler) — deferred until a hosting
-  target is chosen; funneling everything through one `Settings` object keeps
-  that a one-file change later.
-- TLS termination / hosting choice (EvoWerk-managed vs. customer's cloud).
+- Secrets-manager integration — hosting is resolved (customer's own
+  cloud infrastructure, not EvoWerk-managed; EvoWerk doesn't take on
+  responsibility for customer data), so there's no EvoWerk-side secrets
+  manager to integrate. Everything already funnels through one `Settings`
+  object reading plain env vars (see `app/core/config.py`), which is exactly
+  right for this model — the customer supplies those env vars via whatever
+  their own cloud offers (AWS Secrets Manager, GCP Secret Manager, etc.).
+- TLS termination — the customer's responsibility (their reverse proxy/load
+  balancer); the app already doesn't attempt to terminate TLS itself.
 - Encryption at rest for the Postgres volume itself (as opposed to the
-  application-level encryption TOTP secrets already get) — typically a
-  property of the managed Postgres offering you deploy to, so tied to the
-  hosting decision above.
+  application-level encryption TOTP secrets already get) — the customer's
+  managed-Postgres choice, not something EvoWerk builds.
+- A deployment guide/IaC (Terraform) for standing the app up on a customer's
+  AWS/GCP/Azure account — not started yet.
 - DAST (dynamic scanning, e.g. OWASP ZAP) — needs a running deployed target,
   so deferred until there's a staging environment; SAST/dependency/secret/
   container scanning all run in CI today (see above).

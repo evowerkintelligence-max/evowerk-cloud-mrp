@@ -63,6 +63,8 @@ jobs:
         run: docker build -t evowerk-cloud-mrp-backend:ci ./backend
       - name: Build frontend image
         run: docker build -t evowerk-cloud-mrp-frontend:ci ./frontend
+      - name: Build frontend production image
+        run: docker build -t evowerk-cloud-mrp-frontend-prod:ci -f frontend/Dockerfile.prod ./frontend
       - name: Scan backend image (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -77,21 +79,25 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
-          # This image only runs `vite dev` (see frontend/Dockerfile) - there's no
-          # production build/serve stage yet (deferred with hosting choice, see
-          # README "Deferred past Phase 1"). node_modules here is 100% the dev
-          # toolchain (vite/esbuild/typescript and their transitive deps), which
-          # never reaches a real deployment, so scanning it against a
-          # production-grade HIGH/CRITICAL bar just chases devDependency CVEs
+          # This is the local-dev image (frontend/Dockerfile, runs `vite dev`),
+          # never deployed anywhere - see frontend/Dockerfile.prod for the real
+          # deployment artifact, scanned separately below with no exclusions.
+          # node_modules here is 100% the dev toolchain (vite/esbuild/typescript
+          # and transitives), which never reaches a real deployment, so scanning
+          # it against a production-grade bar just chases devDependency CVEs
           # (e.g. an old Go binary vendored inside esbuild) that can't affect
-          # any shipped artifact. Revisit this exclusion once a real multi-stage
-          # production frontend image (build stage + static-file server, no
-          # devDependencies) exists - that image should be scanned with none of
-          # this skipped. Also skipping npm's own vendored node_modules
+          # any shipped artifact. Also skipping npm's own vendored node_modules
           # (/usr/local/lib/node_modules/npm) - that's baked into every official
           # node:* image by Node itself, not something this Dockerfile controls,
           # and it's npm's internal tooling, never our app's code path.
           skip-dirs: /app/node_modules,/usr/local/lib/node_modules/npm
+      - name: Scan frontend production image (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: evowerk-cloud-mrp-frontend-prod:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
 
   migration-check:
     runs-on: ubuntu-latest

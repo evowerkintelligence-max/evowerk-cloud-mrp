@@ -1,0 +1,42 @@
+# Mirrors frontend/vite.config.ts's dev proxy: the app calls the backend via
+# same-origin relative paths (see src/api/client.ts), so whatever serves the
+# built static files also has to reverse-proxy those same prefixes. Adding a
+# new backend router means adding its prefix here too, same as it would need
+# adding to vite.config.ts's dev proxy.
+
+server {
+    listen 80;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json;
+
+    location = /nginx-health {
+        return 200 "ok";
+        add_header Content-Type text/plain;
+    }
+
+    location /auth/ {
+        proxy_pass http://${BACKEND_UPSTREAM}/auth/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /orgs/ {
+        proxy_pass http://${BACKEND_UPSTREAM}/orgs/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # SPA client-side routing (react-router-dom) - anything not matched above
+    # falls back to index.html rather than a 404.
+    location / {
+        try_files $uri /index.html;
+    }
+}

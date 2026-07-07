@@ -87,7 +87,7 @@ jobs:
           # production frontend image (build stage + static-file server, no
           # devDependencies) exists - that image should be scanned with none of
           # this skipped.
-          skip-dirs: node_modules
+          skip-dirs: /app/node_modules
 
   migration-check:
     runs-on: ubuntu-latest

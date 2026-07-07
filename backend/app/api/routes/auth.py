@@ -27,11 +27,17 @@ from app.core.security import (
 )
 from app.db.session import get_db
 from app.middleware.audit import log_event
+from app.middleware.rate_limit import rate_limit
 from app.models.tenant import Org
 from app.models.user import RefreshToken, User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
+
+_register_rate_limit = rate_limit("register", settings.rate_limit_register_per_hour, 3600)
+_login_rate_limit = rate_limit("login", settings.rate_limit_login_per_5min, 300)
+_refresh_rate_limit = rate_limit("refresh", settings.rate_limit_refresh_per_5min, 300)
+_mfa_verify_rate_limit = rate_limit("mfa_verify", settings.rate_limit_mfa_verify_per_5min, 300)
 
 
 class RegisterRequest(BaseModel):
@@ -113,7 +119,12 @@ def _reset_failed_attempts(user: User) -> None:
     user.locked_until = None
 
 
-@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_register_rate_limit)],
+)
 async def register(body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
     org = Org(name=body.org_name)
     db.add(org)
@@ -157,7 +168,7 @@ async def _issue_tokens(db: AsyncSession, user: User) -> TokenResponse:
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(_login_rate_limit)])
 async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
@@ -258,7 +269,11 @@ async def mfa_enroll(
     )
 
 
-@router.post("/mfa/verify", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/mfa/verify",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(_mfa_verify_rate_limit)],
+)
 async def mfa_verify(
     body: MfaVerifyRequest,
     request: Request,
@@ -283,7 +298,7 @@ async def mfa_verify(
     await db.commit()
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(_refresh_rate_limit)])
 async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     token_hash = hash_refresh_token(body.refresh_token)
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))

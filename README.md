@@ -19,12 +19,23 @@ Hardened after an initial security pass: account lockout after repeated failed
 logins/MFA attempts, TOTP secrets encrypted at rest, MFA re-enrollment requires
 password confirmation (and never disables an active MFA secret until the new
 one is verified), timing-safe login for nonexistent users, a server-side
-password policy, a unique constraint on `users.email`, and an `is_active` flag
-enforced on both login and token auth.
+password policy, a unique constraint on `users.email`, an `is_active` flag
+enforced on both login and token auth, and Redis-backed per-IP rate limiting
+on register/login/refresh/mfa-verify.
+
+The per-IP limits are deliberately generous (60 login attempts / 5 min per IP
+by default, tunable via `RATE_LIMIT_*` env vars) — many real users can share
+one public IP (office NAT, VPN, campus network), so the goal is to stop
+large-scale credential stuffing, not to cap how many people can use the app
+from behind the same router. Verified in tests that 15 concurrent users behind
+one simulated IP all log in without being throttled. Being Redis-backed (not
+in-process) also means the count is correct across every app instance/worker
+once this runs behind a load balancer, not just on one box.
 
 ## Stack
 
-- **Backend**: FastAPI, async SQLAlchemy 2.0, Alembic, Postgres.
+- **Backend**: FastAPI, async SQLAlchemy 2.0, Alembic, Postgres, Redis (rate
+  limiting only — no business data lives there).
 - **Frontend**: React + TypeScript (Vite), TanStack Query (server state),
   Zustand (session state — access/refresh tokens are kept in memory, not
   localStorage, to reduce XSS token-theft blast radius).
@@ -35,8 +46,11 @@ enforced on both login and token auth.
 docker-compose up --build
 ```
 
-This starts Postgres, runs Alembic migrations, and starts the backend
-(`:8000`) and frontend (`:5173`).
+This starts Postgres + Redis, runs Alembic migrations, and starts the backend
+(`:8000`) and frontend (`:5173`). Before the first run, replace the
+`MFA_ENCRYPTION_KEY` placeholder in `docker-compose.yml` with a real generated
+key (see the comment next to it) — the backend fails fast on startup if it
+isn't a valid Fernet key, by design.
 
 Or run each piece manually:
 
@@ -75,11 +89,13 @@ cd backend
 pytest -q
 ```
 
-Tests run against an in-memory SQLite database (via `aiosqlite`), not
-Postgres, so no external services are required. Coverage: register → login →
-MFA enroll → login-with-MFA → refresh (rotates, old token revoked) → logout
-(revokes token), plus a cross-tenant isolation check (a user in one org can't
-read another org's data).
+Tests run against an in-memory SQLite database (via `aiosqlite`) and an
+in-memory fake Redis (via `fakeredis`), not real Postgres/Redis, so no
+external services are required. Coverage: register → login → MFA enroll →
+login-with-MFA → refresh (rotates, old token revoked) → logout (revokes
+token), account lockout, password policy, the MFA-disable-bypass regression,
+cross-tenant isolation, and per-IP rate limiting (both that it trips, and that
+it doesn't get in the way of many legitimate concurrent users).
 
 ## Deferred past Phase 0
 
@@ -87,8 +103,5 @@ read another org's data).
 - TLS termination / hosting choice (EvoWerk-managed vs. customer's cloud).
 - Fine-grained RBAC (currently a single `role` string per user).
 - Compliance tooling (SAST/DAST scanning, SOC2 evidence collection).
-- Per-IP rate limiting. Account lockout (`MAX_FAILED_LOGIN_ATTEMPTS`) protects a
-  given account from brute force, but there's no throttle yet against one IP
-  hammering many different accounts (credential stuffing).
 - Account deactivation/invite UI — `is_active` exists and is enforced, but
   nothing sets it to `false` yet.

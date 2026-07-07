@@ -15,16 +15,32 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/evowerk_cloud_mrp
+      REDIS_URL: redis://redis:6379/0
       JWT_SECRET_KEY: dev-only-secret-change-me
+      # Dev-only placeholder - generate a real key before running this anywhere but
+      # a laptop: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      MFA_ENCRYPTION_KEY: REPLACE_WITH_GENERATED_FERNET_KEY
       CORS_ORIGINS: '["http://localhost:5173"]'
     ports:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"

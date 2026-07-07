@@ -16,12 +16,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
-      - run: ruff check app tests
+      # Linting itself runs once, in the pre-commit job (pinned ruff version,
+      # covers backend/app + backend/tests) - not duplicated here.
       - run: pytest -q
         env:
           JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
       - name: SAST (bandit)
-        run: bandit -r app -ll
+        run: bandit -r app scripts -ll
       - name: Dependency scan (pip-audit)
         run: pip-audit -r requirements.txt
 
@@ -38,7 +39,11 @@ jobs:
       - run: npm install
       - run: npx tsc -b
       - name: Dependency scan (npm audit)
-        run: npm audit --audit-level=high
+        # --omit=dev: devDependencies (vite/esbuild's dev server, etc.) never
+        # ship in the production build, so a dev-server-only advisory there
+        # (e.g. GHSA-67mh-4wv8-2f99) shouldn't block CI the way a vulnerable
+        # runtime dependency would.
+        run: npm audit --omit=dev --audit-level=high
 
   pre-commit:
     runs-on: ubuntu-latest

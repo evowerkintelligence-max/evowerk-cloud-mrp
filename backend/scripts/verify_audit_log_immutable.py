@@ -8,15 +8,19 @@ suite uses, so it can't be covered there.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.core.config import get_settings
-
 
 async def main() -> None:
-    engine = create_async_engine(get_settings().database_url)
+    # Deliberately not importing app.core.config here: running this as
+    # `python scripts/verify_audit_log_immutable.py` puts the script's own
+    # directory on sys.path, not `backend/`, so `import app` fails. Reading
+    # the env var directly avoids that entirely - this is CI-only tooling,
+    # not part of the app itself.
+    engine = create_async_engine(os.environ["DATABASE_URL"])
 
     async with engine.begin() as conn:
         await conn.execute(

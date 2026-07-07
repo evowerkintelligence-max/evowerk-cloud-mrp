@@ -6,6 +6,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, require_role
@@ -14,6 +15,13 @@ from app.middleware.audit import log_event
 from app.models.bom import Bom, BomLine, Item
 
 router = APIRouter(prefix="/boms", tags=["boms"])
+
+# Guards the version max+1 read-then-insert race: two concurrent creates for
+# the same item can both read the same max and collide on
+# uq_boms_org_item_version. Retry a few times rather than surfacing an
+# unhandled 500 (found during the procurement feature's design review, which
+# uses the identical pattern for po_number - see create_purchase_order).
+MAX_VERSION_ATTEMPTS = 3
 
 # Only activate() walks this graph, since a draft's lines don't affect any live
 # calculation - the only moment a new "produces" edge becomes real is
@@ -128,18 +136,27 @@ async def create_bom(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid item_id") from None
     item = await _get_item_or_404(db, current.org_id, item_id)
 
-    max_version = await db.scalar(
-        select(func.max(Bom.version)).where(Bom.org_id == current.org_id, Bom.item_id == item_id)
-    )
-    bom = Bom(
-        org_id=current.org_id,
-        item_id=item_id,
-        version=(max_version or 0) + 1,
-        status="draft",
-        created_by=current.id,
-    )
-    db.add(bom)
-    await db.flush()
+    for attempt in range(MAX_VERSION_ATTEMPTS):
+        max_version = await db.scalar(
+            select(func.max(Bom.version)).where(Bom.org_id == current.org_id, Bom.item_id == item_id)
+        )
+        bom = Bom(
+            org_id=current.org_id,
+            item_id=item_id,
+            version=(max_version or 0) + 1,
+            status="draft",
+            created_by=current.id,
+        )
+        db.add(bom)
+        try:
+            await db.flush()
+            break
+        except IntegrityError:
+            await db.rollback()
+            if attempt == MAX_VERSION_ATTEMPTS - 1:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "Could not allocate a BOM version, please retry"
+                ) from None
 
     await log_event(
         db,

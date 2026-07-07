@@ -39,7 +39,8 @@ export function Dashboard() {
         <Link to="/mfa">Set up two-factor authentication</Link>
       </p>
       <p>
-        <Link to="/items">Items</Link> · <Link to="/boms">Bills of Materials</Link>
+        <Link to="/items">Items</Link> · <Link to="/boms">Bills of Materials</Link> ·{" "}
+        <Link to="/suppliers">Suppliers</Link> · <Link to="/purchase-orders">Purchase Orders</Link>
       </p>
       <button onClick={logout}>Log out</button>
     </div>

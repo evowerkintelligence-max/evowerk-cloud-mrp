@@ -12,6 +12,7 @@ export default defineConfig({
       "/boms": "http://localhost:8000",
       "/suppliers": "http://localhost:8000",
       "/purchase-orders": "http://localhost:8000",
+      "/lots": "http://localhost:8000",
     },
   },
 });

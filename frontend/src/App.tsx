@@ -8,6 +8,7 @@ import { Items } from "./pages/Items";
 import { Boms } from "./pages/Boms";
 import { Suppliers } from "./pages/Suppliers";
 import { PurchaseOrders } from "./pages/PurchaseOrders";
+import { Lots } from "./pages/Lots";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -65,6 +66,14 @@ export function App() {
         element={
           <RequireAuth>
             <PurchaseOrders />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/lots"
+        element={
+          <RequireAuth>
+            <Lots />
           </RequireAuth>
         }
       />

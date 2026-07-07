@@ -28,6 +28,7 @@ interface PurchaseOrderLineResponse {
   item_id: string;
   item_sku: string;
   item_name: string;
+  item_is_lot_tracked: boolean;
   quantity_ordered: string;
   quantity_received: string;
   unit_price: string;
@@ -50,6 +51,8 @@ export function PurchaseOrders() {
   const [lineUnitPrice, setLineUnitPrice] = useState("0");
   const [receiveLineId, setReceiveLineId] = useState("");
   const [receiveQuantity, setReceiveQuantity] = useState("1");
+  const [receiveLotNumber, setReceiveLotNumber] = useState("");
+  const [receiveExpiryDate, setReceiveExpiryDate] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const items = useQuery<ItemResponse[]>({
@@ -162,11 +165,21 @@ export function PurchaseOrders() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const receivingLineIsLotTracked =
+    poDetail.data?.lines.find((l) => l.id === receiveLineId)?.item_is_lot_tracked ?? false;
+
   const receiveLine = useMutation({
     mutationFn: async () => {
       const res = await apiFetch(`/purchase-orders/${selectedPoId}/receive`, {
         method: "POST",
-        body: JSON.stringify([{ po_line_id: receiveLineId, quantity: receiveQuantity }]),
+        body: JSON.stringify([
+          {
+            po_line_id: receiveLineId,
+            quantity: receiveQuantity,
+            lot_number: receivingLineIsLotTracked ? receiveLotNumber : null,
+            expiry_date: receivingLineIsLotTracked && receiveExpiryDate ? receiveExpiryDate : null,
+          },
+        ]),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -177,7 +190,10 @@ export function PurchaseOrders() {
     onSuccess: () => {
       setReceiveLineId("");
       setReceiveQuantity("1");
+      setReceiveLotNumber("");
+      setReceiveExpiryDate("");
       invalidatePo();
+      queryClient.invalidateQueries({ queryKey: ["lots"] });
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -364,6 +380,26 @@ export function PurchaseOrders() {
                   required
                 />
               </label>
+              {receivingLineIsLotTracked && (
+                <>
+                  <label>
+                    Lot number
+                    <input
+                      value={receiveLotNumber}
+                      onChange={(e) => setReceiveLotNumber(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Expiry date (optional)
+                    <input
+                      type="date"
+                      value={receiveExpiryDate}
+                      onChange={(e) => setReceiveExpiryDate(e.target.value)}
+                    />
+                  </label>
+                </>
+              )}
               <button type="submit" disabled={receiveLine.isPending}>
                 Receive
               </button>

@@ -14,6 +14,7 @@ from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
+from app.models.lot import Lot, LotTransaction
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine, PurchaseOrderReceiptLine, Supplier
 
 router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
@@ -22,6 +23,10 @@ router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 # the same org can both read the same max and collide on uq_pos_org_number.
 # Retry a few times rather than surfacing an unhandled 500.
 MAX_PO_NUMBER_ATTEMPTS = 3
+
+# Same rationale, for the find-or-create-Lot-by-lot_number race in
+# receive_purchase_order.
+MAX_LOT_CREATE_ATTEMPTS = 3
 
 
 class PurchaseOrderLineInput(BaseModel):
@@ -36,6 +41,7 @@ class PurchaseOrderLineResponse(BaseModel):
     item_id: str
     item_sku: str
     item_name: str
+    item_is_lot_tracked: bool
     quantity_ordered: Decimal
     quantity_received: Decimal
     unit_price: Decimal
@@ -45,6 +51,10 @@ class PurchaseOrderLineResponse(BaseModel):
 class ReceiveLineInput(BaseModel):
     po_line_id: str
     quantity: Decimal
+    # Required if the line's item is lot-tracked, rejected otherwise - see
+    # receive_purchase_order's validation loop.
+    lot_number: str | None = None
+    expiry_date: date | None = None
 
 
 class PurchaseOrderCreateRequest(BaseModel):
@@ -186,6 +196,7 @@ async def get_purchase_order(
             item_id=str(line.item_id),
             item_sku=item.sku,
             item_name=item.name,
+            item_is_lot_tracked=item.is_lot_tracked,
             quantity_ordered=line.quantity_ordered,
             quantity_received=line.quantity_received,
             unit_price=line.unit_price,
@@ -279,6 +290,88 @@ async def submit_purchase_order(
     return await _po_to_response(db, po)
 
 
+async def _find_or_create_lot(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    item_id: uuid.UUID,
+    lot_number: str,
+    quantity: Decimal,
+    expiry_date: date | None,
+    created_by: uuid.UUID,
+) -> Lot:
+    """A supplier's single physical batch is often delivered across multiple
+    partial shipments/POs, so a repeat lot_number for the same item tops up
+    the existing Lot rather than being rejected as a duplicate.
+    """
+    result = await db.execute(
+        select(Lot).where(Lot.org_id == org_id, Lot.item_id == item_id, Lot.lot_number == lot_number)
+    )
+    lot = result.scalar_one_or_none()
+    if lot is not None:
+        if expiry_date is not None and lot.expiry_date is not None and lot.expiry_date != expiry_date:
+            # A mismatch is a strong signal of a mistyped lot_number colliding
+            # with a genuinely different batch - silently accepting it would
+            # merge two physical batches under one Lot row.
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Lot {lot_number} already has a different expiry date on file for this item - "
+                "check for a lot_number typo before retrying",
+            )
+        lot.quantity_received += quantity
+        lot.quantity_remaining += quantity
+        if lot.status == "depleted":
+            lot.status = "active"
+        if expiry_date is not None and lot.expiry_date is None:
+            lot.expiry_date = expiry_date
+        return lot
+
+    # Two concurrent receipts could both try to create the same new
+    # lot_number. Each attempt runs in its own SAVEPOINT (not the plain
+    # try/except-rollback used by create_bom/create_purchase_order) because
+    # this function runs inside receive_purchase_order's loop over multiple
+    # receipt lines - a plain db.rollback() here would discard every other
+    # line already processed in this same request, not just this lot.
+    for attempt in range(MAX_LOT_CREATE_ATTEMPTS):
+        try:
+            async with db.begin_nested():
+                new_lot = Lot(
+                    org_id=org_id,
+                    item_id=item_id,
+                    lot_number=lot_number,
+                    quantity_received=quantity,
+                    quantity_remaining=quantity,
+                    status="active",
+                    expiry_date=expiry_date,
+                    created_by=created_by,
+                )
+                db.add(new_lot)
+                await db.flush()
+            return new_lot
+        except IntegrityError:
+            # Savepoint rolled back automatically - the rest of this
+            # request's pending changes are untouched. Someone else created
+            # this lot_number concurrently; top it up instead of erroring,
+            # since that's the correct outcome for a repeat lot_number.
+            result = await db.execute(
+                select(Lot).where(
+                    Lot.org_id == org_id, Lot.item_id == item_id, Lot.lot_number == lot_number
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is not None:
+                existing.quantity_received += quantity
+                existing.quantity_remaining += quantity
+                if existing.status == "depleted":
+                    existing.status = "active"
+                return existing
+            if attempt == MAX_LOT_CREATE_ATTEMPTS - 1:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, f"Could not allocate lot {lot_number}, please retry"
+                ) from None
+    raise AssertionError("unreachable")
+
+
 @router.post("/{po_id}/receive", response_model=PurchaseOrderDetailResponse)
 async def receive_purchase_order(
     po_id: uuid.UUID,
@@ -294,8 +387,16 @@ async def receive_purchase_order(
     if not receipts_in:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide at least one line to receive")
 
-    all_lines_result = await db.execute(select(PurchaseOrderLine).where(PurchaseOrderLine.po_id == po.id))
-    lines_by_id = {line.id: line for line in all_lines_result.scalars().all()}
+    all_lines_result = await db.execute(
+        select(PurchaseOrderLine, Item)
+        .join(Item, Item.id == PurchaseOrderLine.item_id)
+        .where(PurchaseOrderLine.po_id == po.id)
+    )
+    lines_by_id: dict[uuid.UUID, PurchaseOrderLine] = {}
+    items_by_line_id: dict[uuid.UUID, Item] = {}
+    for line, item in all_lines_result.all():
+        lines_by_id[line.id] = line
+        items_by_line_id[line.id] = item
 
     # Validate every receipt before writing any of them, so a bad line in the
     # request can't leave a partial write applied.
@@ -314,18 +415,58 @@ async def receive_purchase_order(
                 status.HTTP_409_CONFLICT,
                 f"Receiving {receipt.quantity} on line {line_id} would exceed the ordered quantity",
             )
+        item = items_by_line_id[line_id]
+        if item.is_lot_tracked and not receipt.lot_number:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"lot_number is required for lot-tracked item {item.sku}"
+            )
+        if not item.is_lot_tracked and receipt.lot_number:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Item {item.sku} is not lot-tracked - remove lot_number"
+            )
 
     for receipt in receipts_in:
-        line = lines_by_id[uuid.UUID(receipt.po_line_id)]
+        line_id = uuid.UUID(receipt.po_line_id)
+        line = lines_by_id[line_id]
+        item = items_by_line_id[line_id]
         line.quantity_received += receipt.quantity
-        db.add(
-            PurchaseOrderReceiptLine(
-                org_id=current.org_id,
-                po_line_id=line.id,
-                quantity=receipt.quantity,
-                received_by=current.id,
-            )
+
+        receipt_line = PurchaseOrderReceiptLine(
+            id=uuid.uuid4(),
+            org_id=current.org_id,
+            po_line_id=line.id,
+            quantity=receipt.quantity,
+            received_by=current.id,
         )
+        db.add(receipt_line)
+
+        if item.is_lot_tracked:
+            lot_number = receipt.lot_number
+            if lot_number is None:
+                # Unreachable given the validation loop above already checked
+                # this, but a real guard rather than an assert (which
+                # vanishes under python -O) that also satisfies the type
+                # checker that lot_number is str, not str | None, below.
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "lot_number is required")
+            lot = await _find_or_create_lot(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                lot_number=lot_number,
+                quantity=receipt.quantity,
+                expiry_date=receipt.expiry_date,
+                created_by=current.id,
+            )
+            db.add(
+                LotTransaction(
+                    org_id=current.org_id,
+                    lot_id=lot.id,
+                    transaction_type="receipt",
+                    quantity=receipt.quantity,
+                    source_receipt_line_id=receipt_line.id,
+                    created_by=current.id,
+                )
+            )
 
     # Recompute status by scanning ALL lines, not just the ones just received -
     # a partial receipt on one line must not flip status to "received" while

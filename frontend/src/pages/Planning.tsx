@@ -42,6 +42,18 @@ interface MrpPlanResponse {
   lines: MrpPlanLine[];
 }
 
+interface SupplierResponse {
+  id: string;
+  name: string;
+}
+
+interface GeneratedPo {
+  po_id: string;
+  po_number: number;
+  supplier_name: string;
+  lines: { item_id: string }[];
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -65,6 +77,11 @@ export function Planning() {
   // MRP horizon
   const [horizonStart, setHorizonStart] = useState(today());
   const [horizonEnd, setHorizonEnd] = useState(plusDays(90));
+
+  // Draft-PO generation from the plan
+  const [poSupplierId, setPoSupplierId] = useState("");
+  const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
+  const [generatedPo, setGeneratedPo] = useState<GeneratedPo | null>(null);
 
   const items = useQuery<ItemResponse[]>({
     queryKey: ["items"],
@@ -97,6 +114,63 @@ export function Planning() {
       return res.json();
     },
   });
+
+  const suppliers = useQuery<SupplierResponse[]>({
+    queryKey: ["suppliers"],
+    queryFn: async () => {
+      const res = await apiFetch("/suppliers");
+      if (!res.ok) throw new Error("Failed to load suppliers");
+      return res.json();
+    },
+  });
+
+  // Only purchased items with a real shortfall can go on a PO.
+  const orderableItemIds = (plan.data?.lines ?? [])
+    .filter((line) => !line.is_manufactured && Number(line.net_requirement) > 0)
+    .map((line) => line.item_id);
+  const chosenItemIds = orderableItemIds.filter((id) => selectedItems[id]);
+
+  const generatePo = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/mrp/generate-po", {
+        method: "POST",
+        body: JSON.stringify({
+          supplier_id: poSupplierId,
+          item_ids: chosenItemIds,
+          horizon_start: horizonStart,
+          horizon_end: horizonEnd,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to create draft PO");
+      }
+      return (await res.json()) as GeneratedPo;
+    },
+    onSuccess: (po) => {
+      setGeneratedPo(po);
+      setSelectedItems({});
+      // The new draft counts as on-order once submitted; refresh so the plan
+      // and PO list stay in sync.
+      queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  function onGeneratePo() {
+    setError(null);
+    setGeneratedPo(null);
+    if (!poSupplierId) {
+      setError("Pick a supplier for the draft PO");
+      return;
+    }
+    if (chosenItemIds.length === 0) {
+      setError("Select at least one item to order");
+      return;
+    }
+    generatePo.mutate();
+  }
 
   function invalidatePlanning() {
     queryClient.invalidateQueries({ queryKey: ["forecasts"] });
@@ -262,44 +336,89 @@ export function Planning() {
           <p>No forecast demand in this horizon.</p>
         )}
         {plan.data && plan.data.lines.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Independent</th>
-                <th>Dependent</th>
-                <th>Gross demand</th>
-                <th>On hand</th>
-                <th>On order</th>
-                <th>Net requirement</th>
-                <th>Suggested action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plan.data.lines.map((line) => {
-                const qty = Number(line.suggested_order_quantity);
-                const action =
-                  qty > 0
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>Order?</th>
+                  <th>Item</th>
+                  <th>Independent</th>
+                  <th>Dependent</th>
+                  <th>Gross demand</th>
+                  <th>On hand</th>
+                  <th>On order</th>
+                  <th>Net requirement</th>
+                  <th>Suggested action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.data.lines.map((line) => {
+                  const qty = Number(line.suggested_order_quantity);
+                  const orderable = !line.is_manufactured && qty > 0;
+                  const action = qty > 0
                     ? `${line.is_manufactured ? "Build" : "Order"} ${line.suggested_order_quantity}`
                     : "-";
-                return (
-                  <tr key={line.item_id}>
-                    <td>
-                      {line.item_sku} - {line.item_name}
-                      {line.is_manufactured ? " (make)" : ""}
-                    </td>
-                    <td>{line.independent_demand}</td>
-                    <td>{line.dependent_demand}</td>
-                    <td>{line.gross_demand}</td>
-                    <td>{line.on_hand}</td>
-                    <td>{line.on_order}</td>
-                    <td>{line.net_requirement}</td>
-                    <td>{action}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  return (
+                    <tr key={line.item_id}>
+                      <td>
+                        {orderable && (
+                          <input
+                            type="checkbox"
+                            checked={!!selectedItems[line.item_id]}
+                            onChange={(e) =>
+                              setSelectedItems((prev) => ({
+                                ...prev,
+                                [line.item_id]: e.target.checked,
+                              }))
+                            }
+                          />
+                        )}
+                      </td>
+                      <td>
+                        {line.item_sku} - {line.item_name}
+                        {line.is_manufactured ? " (make)" : ""}
+                      </td>
+                      <td>{line.independent_demand}</td>
+                      <td>{line.dependent_demand}</td>
+                      <td>{line.gross_demand}</td>
+                      <td>{line.on_hand}</td>
+                      <td>{line.on_order}</td>
+                      <td>{line.net_requirement}</td>
+                      <td>{action}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <h3>Create a draft purchase order</h3>
+            <p>
+              Select the purchased shortfalls above, pick a supplier, and generate a draft PO at the
+              suggested quantities. Review and submit it under{" "}
+              <Link to="/purchase-orders">Purchase Orders</Link>.
+            </p>
+            <label>
+              Supplier
+              <select value={poSupplierId} onChange={(e) => setPoSupplierId(e.target.value)}>
+                <option value="">Select a supplier…</option>
+                {suppliers.data?.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={onGeneratePo} disabled={generatePo.isPending}>
+              Create draft PO from {chosenItemIds.length} item{chosenItemIds.length === 1 ? "" : "s"}
+            </button>
+            {generatedPo && (
+              <p>
+                Created draft PO #{generatedPo.po_number} for {generatedPo.supplier_name} with{" "}
+                {generatedPo.lines.length} line{generatedPo.lines.length === 1 ? "" : "s"}.{" "}
+                <Link to="/purchase-orders">Open Purchase Orders</Link>
+              </p>
+            )}
+          </>
         )}
       </section>
     </div>

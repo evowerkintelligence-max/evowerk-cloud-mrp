@@ -17,6 +17,7 @@ from app.models.bom import Item
 from app.models.lot import Lot, LotTransaction
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine, PurchaseOrderReceiptLine, Supplier
 from app.services.inventory import apply_inventory_delta
+from app.services.locations import resolve_location_id
 
 router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 
@@ -56,6 +57,9 @@ class ReceiveLineInput(BaseModel):
     # receive_purchase_order's validation loop.
     lot_number: str | None = None
     expiry_date: date | None = None
+    # Non-lot-tracked items only: which location the stock lands in. Defaults to
+    # the org's default location. (Lot-tracked items are not yet location-aware.)
+    location_id: str | None = None
 
 
 class PurchaseOrderCreateRequest(BaseModel):
@@ -491,13 +495,15 @@ async def receive_purchase_order(
             )
         else:
             # Non-lot-tracked: the received quantity lands in the general
-            # inventory on-hand ledger, so this item's stock is real for MRP
-            # netting instead of untracked (this is the whole point of the
-            # inventory ledger - see services.inventory).
+            # inventory on-hand ledger at the target location (default location
+            # if unspecified), so this item's stock is real for MRP netting
+            # instead of untracked - see services.inventory / services.locations.
+            location_id = await resolve_location_id(db, current.org_id, receipt.location_id)
             await apply_inventory_delta(
                 db,
                 org_id=current.org_id,
                 item_id=item.id,
+                location_id=location_id,
                 delta=receipt.quantity,
                 transaction_type="receipt",
                 created_by=current.id,

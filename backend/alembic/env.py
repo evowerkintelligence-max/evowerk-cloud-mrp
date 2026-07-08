@@ -14,6 +14,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     bom,
     forecast,
     inventory,
+    location,
     lot,
     procurement,
     tenant,

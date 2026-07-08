@@ -22,6 +22,7 @@ from app.models import (  # noqa: F401 - register models
     bom,
     forecast,
     inventory,
+    location,
     lot,
     procurement,
     tenant,

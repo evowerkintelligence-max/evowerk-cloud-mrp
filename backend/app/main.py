@@ -9,6 +9,7 @@ from app.api.routes import (
     forecasts,
     inventory,
     items,
+    locations,
     lots,
     orgs,
     purchase_orders,
@@ -39,6 +40,7 @@ app.include_router(boms.router)
 app.include_router(suppliers.router)
 app.include_router(purchase_orders.router)
 app.include_router(lots.router)
+app.include_router(locations.router)
 app.include_router(inventory.router)
 app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)

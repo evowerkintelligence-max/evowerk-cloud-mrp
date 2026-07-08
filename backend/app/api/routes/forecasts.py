@@ -519,11 +519,13 @@ async def _compute_mrp_plan(
         .where(Lot.org_id == org_id, Lot.status == "active")
         .group_by(Lot.item_id),
     )
+    # Sum a non-lot-tracked item's on-hand across all its locations - MRP plans
+    # against total org availability, not per location.
     inventory_on_hand = await _sum_by_item(
         db,
-        select(InventoryBalance.item_id, InventoryBalance.quantity_on_hand).where(
-            InventoryBalance.org_id == org_id
-        ),
+        select(InventoryBalance.item_id, func.sum(InventoryBalance.quantity_on_hand))
+        .where(InventoryBalance.org_id == org_id)
+        .group_by(InventoryBalance.item_id),
     )
     for item_id, qty in inventory_on_hand.items():
         on_hand[item_id] = on_hand.get(item_id, Decimal(0)) + qty

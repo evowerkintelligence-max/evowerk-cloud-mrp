@@ -27,6 +27,14 @@ class Item(Base):
     # Opt-in: only lot-tracked items require/get a Lot on PO receipt - see
     # app.api.routes.purchase_orders.receive_purchase_order.
     is_lot_tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Default source of supply, used to auto-group MRP shortfalls into supplier
+    # POs (see app.api.routes.forecasts.generate_pos). Nullable - an item may
+    # have no default supplier yet, in which case it's reported as "unassigned"
+    # rather than ordered. ondelete SET NULL so deleting a supplier just clears
+    # the preference instead of being blocked by / cascading through items.
+    preferred_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

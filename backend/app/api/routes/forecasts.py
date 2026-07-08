@@ -126,6 +126,34 @@ class GeneratePoResponse(BaseModel):
     lines: list[GeneratePoLine]
 
 
+class GeneratePosRequest(BaseModel):
+    horizon_start: date | None = None
+    horizon_end: date | None = None
+
+
+class GeneratedPoSummary(BaseModel):
+    po_id: str
+    po_number: int
+    supplier_id: str
+    supplier_name: str
+    line_count: int
+
+
+class UnassignedItem(BaseModel):
+    # A purchased shortfall with no preferred supplier - nothing to auto-order it
+    # against, so it's reported for the user to assign a supplier (or use the
+    # manual generate-po).
+    item_id: str
+    item_sku: str
+    item_name: str
+    net_requirement: Decimal
+
+
+class GeneratePosResponse(BaseModel):
+    created: list[GeneratedPoSummary]
+    unassigned: list[UnassignedItem]
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -622,6 +650,73 @@ async def _latest_unit_prices(
     return {item_id: price for item_id, (price, _) in latest.items()}
 
 
+async def _new_draft_po(
+    db: AsyncSession, org_id: uuid.UUID, supplier_id: uuid.UUID, created_by: uuid.UUID
+) -> PurchaseOrder:
+    """Allocate a po_number and create a draft PO, guarded against the max+1
+    read-then-insert race. Uses a per-attempt SAVEPOINT (not a plain rollback)
+    so it's safe to call repeatedly within one request - generate_pos creates a
+    PO per supplier, and a plain rollback on the 2nd would discard the 1st.
+    """
+    for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
+        max_number = await db.scalar(
+            select(func.max(PurchaseOrder.po_number)).where(PurchaseOrder.org_id == org_id)
+        )
+        po = PurchaseOrder(
+            org_id=org_id,
+            supplier_id=supplier_id,
+            po_number=(max_number or 0) + 1,
+            status="draft",
+            created_by=created_by,
+        )
+        try:
+            async with db.begin_nested():
+                db.add(po)
+                await db.flush()
+            return po
+        except IntegrityError:
+            if attempt == MAX_PO_NUMBER_ATTEMPTS - 1:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "Could not allocate a PO number, please retry"
+                ) from None
+    raise AssertionError("unreachable")
+
+
+async def _add_po_lines(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    po: PurchaseOrder,
+    chosen: list[MrpPlanLine],
+    prices: dict[uuid.UUID, Decimal],
+) -> list[GeneratePoLine]:
+    """Add one draft PO line per chosen plan line, at net-required quantity and
+    last-known price, and return the response view of them."""
+    response_lines: list[GeneratePoLine] = []
+    for seq, line in enumerate(chosen):
+        item_uuid = uuid.UUID(line.item_id)
+        unit_price = prices.get(item_uuid, Decimal(0))
+        db.add(
+            PurchaseOrderLine(
+                org_id=org_id,
+                po_id=po.id,
+                item_id=item_uuid,
+                quantity_ordered=line.net_requirement,
+                unit_price=unit_price,
+                sequence=seq,
+            )
+        )
+        response_lines.append(
+            GeneratePoLine(
+                item_id=line.item_id,
+                item_sku=line.item_sku,
+                item_name=line.item_name,
+                quantity_ordered=line.net_requirement,
+                unit_price=unit_price,
+            )
+        )
+    return response_lines
+
+
 @mrp_router.post("/generate-po", response_model=GeneratePoResponse)
 async def generate_po(
     body: GeneratePoRequest,
@@ -680,55 +775,8 @@ async def generate_po(
         chosen.append(line)
 
     prices = await _latest_unit_prices(db, org_id, {uuid.UUID(line.item_id) for line in chosen})
-
-    # Allocate a po_number the same guarded way as create_purchase_order: flush
-    # the PO alone in the retry loop so a collision rollback doesn't discard the
-    # lines we add afterwards.
-    for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
-        max_number = await db.scalar(
-            select(func.max(PurchaseOrder.po_number)).where(PurchaseOrder.org_id == org_id)
-        )
-        po = PurchaseOrder(
-            org_id=org_id,
-            supplier_id=supplier_id,
-            po_number=(max_number or 0) + 1,
-            status="draft",
-            created_by=current.id,
-        )
-        db.add(po)
-        try:
-            await db.flush()
-            break
-        except IntegrityError:
-            await db.rollback()
-            if attempt == MAX_PO_NUMBER_ATTEMPTS - 1:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT, "Could not allocate a PO number, please retry"
-                ) from None
-
-    response_lines: list[GeneratePoLine] = []
-    for seq, line in enumerate(chosen):
-        item_uuid = uuid.UUID(line.item_id)
-        unit_price = prices.get(item_uuid, Decimal(0))
-        db.add(
-            PurchaseOrderLine(
-                org_id=org_id,
-                po_id=po.id,
-                item_id=item_uuid,
-                quantity_ordered=line.net_requirement,
-                unit_price=unit_price,
-                sequence=seq,
-            )
-        )
-        response_lines.append(
-            GeneratePoLine(
-                item_id=line.item_id,
-                item_sku=line.item_sku,
-                item_name=line.item_name,
-                quantity_ordered=line.net_requirement,
-                unit_price=unit_price,
-            )
-        )
+    po = await _new_draft_po(db, org_id, supplier_id, current.id)
+    response_lines = await _add_po_lines(db, org_id, po, chosen, prices)
     await db.flush()
 
     await log_event(
@@ -747,3 +795,95 @@ async def generate_po(
         supplier_name=supplier.name,
         lines=response_lines,
     )
+
+
+@mrp_router.post("/generate-pos", response_model=GeneratePosResponse)
+async def generate_pos(
+    body: GeneratePosRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Automatic PO generation: take every purchased shortfall in the plan,
+    group it by the item's preferred supplier, and create one draft PO per
+    supplier. Purchased shortfalls with no preferred supplier can't be routed,
+    so they're returned as `unassigned` for the user to assign a supplier (or
+    order manually via generate-po). Manufactured items are a build action and
+    are never ordered. Like generate-po, the POs are drafts - review and submit
+    them in the PO editor.
+    """
+    hs, he = _resolve_horizon(body.horizon_start, body.horizon_end)
+    org_id = current.org_id
+
+    orderable = [
+        line
+        for line in await _compute_mrp_plan(db, org_id, hs, he)
+        if not line.is_manufactured and line.net_requirement > 0
+    ]
+    if not orderable:
+        return GeneratePosResponse(created=[], unassigned=[])
+
+    item_uuids = {uuid.UUID(line.item_id) for line in orderable}
+    preferred = {
+        item_id: supplier_id
+        for item_id, supplier_id in (
+            await db.execute(
+                select(Item.id, Item.preferred_supplier_id).where(
+                    Item.org_id == org_id, Item.id.in_(item_uuids)
+                )
+            )
+        ).all()
+    }
+
+    # Group shortfalls by preferred supplier; those without one are unassigned.
+    groups: dict[uuid.UUID, list[MrpPlanLine]] = defaultdict(list)
+    unassigned: list[UnassignedItem] = []
+    for line in orderable:
+        supplier_id = preferred.get(uuid.UUID(line.item_id))
+        if supplier_id is None:
+            unassigned.append(
+                UnassignedItem(
+                    item_id=line.item_id,
+                    item_sku=line.item_sku,
+                    item_name=line.item_name,
+                    net_requirement=line.net_requirement,
+                )
+            )
+        else:
+            groups[supplier_id].append(line)
+
+    prices = await _latest_unit_prices(db, org_id, item_uuids)
+    suppliers = {
+        s.id: s
+        for s in (
+            await db.execute(select(Supplier).where(Supplier.org_id == org_id, Supplier.id.in_(groups)))
+        )
+        .scalars()
+        .all()
+    }
+
+    created: list[GeneratedPoSummary] = []
+    # Deterministic order (by supplier name) so po_number allocation is stable.
+    for supplier_id in sorted(groups, key=lambda sid: suppliers[sid].name):
+        group_lines = groups[supplier_id]
+        po = await _new_draft_po(db, org_id, supplier_id, current.id)
+        await _add_po_lines(db, org_id, po, group_lines, prices)
+        created.append(
+            GeneratedPoSummary(
+                po_id=str(po.id),
+                po_number=po.po_number,
+                supplier_id=str(supplier_id),
+                supplier_name=suppliers[supplier_id].name,
+                line_count=len(group_lines),
+            )
+        )
+
+    if created:
+        await log_event(
+            db,
+            action="po.auto_generated_from_plan",
+            org_id=org_id,
+            actor_user_id=current.id,
+            metadata={"po_count": len(created), "unassigned_count": len(unassigned)},
+        )
+    await db.commit()
+    return GeneratePosResponse(created=created, unassigned=unassigned)

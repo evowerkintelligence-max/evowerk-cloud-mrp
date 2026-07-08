@@ -54,6 +54,11 @@ interface GeneratedPo {
   lines: { item_id: string }[];
 }
 
+interface AutoGenerateResult {
+  created: { po_id: string; po_number: number; supplier_name: string; line_count: number }[];
+  unassigned: { item_id: string; item_sku: string; item_name: string; net_requirement: string }[];
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -82,6 +87,7 @@ export function Planning() {
   const [poSupplierId, setPoSupplierId] = useState("");
   const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
   const [generatedPo, setGeneratedPo] = useState<GeneratedPo | null>(null);
+  const [autoResult, setAutoResult] = useState<AutoGenerateResult | null>(null);
 
   const items = useQuery<ItemResponse[]>({
     queryKey: ["items"],
@@ -170,6 +176,32 @@ export function Planning() {
       return;
     }
     generatePo.mutate();
+  }
+
+  const autoGeneratePos = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/mrp/generate-pos", {
+        method: "POST",
+        body: JSON.stringify({ horizon_start: horizonStart, horizon_end: horizonEnd }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to auto-generate POs");
+      }
+      return (await res.json()) as AutoGenerateResult;
+    },
+    onSuccess: (result) => {
+      setAutoResult(result);
+      queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  function onAutoGenerate() {
+    setError(null);
+    setAutoResult(null);
+    autoGeneratePos.mutate();
   }
 
   function invalidatePlanning() {
@@ -391,10 +423,46 @@ export function Planning() {
               </tbody>
             </table>
 
-            <h3>Create a draft purchase order</h3>
+            <h3>Auto-generate purchase orders</h3>
             <p>
-              Select the purchased shortfalls above, pick a supplier, and generate a draft PO at the
-              suggested quantities. Review and submit it under{" "}
+              Create a draft PO per supplier for every purchased shortfall, routed by each item's{" "}
+              <Link to="/items">preferred supplier</Link>. Items with no preferred supplier are listed
+              as unassigned for you to order manually below.
+            </p>
+            <button onClick={onAutoGenerate} disabled={autoGeneratePos.isPending}>
+              Auto-generate POs by preferred supplier
+            </button>
+            {autoResult && (
+              <div>
+                {autoResult.created.length > 0 ? (
+                  <ul>
+                    {autoResult.created.map((po) => (
+                      <li key={po.po_id}>
+                        Draft PO #{po.po_number} for {po.supplier_name} ({po.line_count} line
+                        {po.line_count === 1 ? "" : "s"})
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No POs created.</p>
+                )}
+                {autoResult.unassigned.length > 0 && (
+                  <p role="alert">
+                    No preferred supplier for:{" "}
+                    {autoResult.unassigned.map((u) => u.item_sku).join(", ")}. Assign one under Items,
+                    or order manually below.
+                  </p>
+                )}
+                <p>
+                  <Link to="/purchase-orders">Open Purchase Orders</Link>
+                </p>
+              </div>
+            )}
+
+            <h3>Create a draft purchase order manually</h3>
+            <p>
+              Or select the purchased shortfalls above, pick a supplier, and generate a single draft
+              PO at the suggested quantities. Review and submit it under{" "}
               <Link to="/purchase-orders">Purchase Orders</Link>.
             </p>
             <label>

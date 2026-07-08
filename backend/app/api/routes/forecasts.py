@@ -18,7 +18,7 @@ from app.models.bom import Bom, BomLine, Item
 from app.models.forecast import DemandForecast
 from app.models.inventory import InventoryBalance
 from app.models.lot import Lot
-from app.models.procurement import PurchaseOrder, PurchaseOrderLine
+from app.models.procurement import PurchaseOrder, PurchaseOrderLine, Supplier
 
 # A repeat import of the same period is an upsert, so the only real collision is
 # two *first* inserts of the same (item, period) racing. One retry after
@@ -30,6 +30,10 @@ MAX_FORECAST_UPSERT_ATTEMPTS = 3
 # cancelled outright), so counting it as on-order would let a never-submitted
 # draft silently suppress a real replenishment suggestion.
 OPEN_PO_STATUSES = ("submitted", "partially_received")
+
+# Same po_number max+1 read-then-insert race guard as create_purchase_order -
+# generate-po allocates a po_number the same way.
+MAX_PO_NUMBER_ATTEMPTS = 3
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
 mrp_router = APIRouter(prefix="/mrp", tags=["mrp"])
@@ -94,6 +98,32 @@ class MrpPlanResponse(BaseModel):
     horizon_start: date
     horizon_end: date
     lines: list[MrpPlanLine]
+
+
+class GeneratePoRequest(BaseModel):
+    supplier_id: str
+    # Which shortfall items to put on this supplier's PO. Since items have no
+    # stored source-of-supply yet, the caller chooses the supplier and the
+    # subset of items - one call makes one draft PO for one supplier.
+    item_ids: list[str]
+    horizon_start: date | None = None
+    horizon_end: date | None = None
+
+
+class GeneratePoLine(BaseModel):
+    item_id: str
+    item_sku: str
+    item_name: str
+    quantity_ordered: Decimal
+    unit_price: Decimal
+
+
+class GeneratePoResponse(BaseModel):
+    po_id: str
+    po_number: int
+    supplier_id: str
+    supplier_name: str
+    lines: list[GeneratePoLine]
 
 
 # --------------------------------------------------------------------------- #
@@ -383,13 +413,18 @@ async def _load_bom_children(
     return children
 
 
-@mrp_router.get("/plan", response_model=MrpPlanResponse)
-async def run_mrp_plan(
-    horizon_start: date | None = None,
-    horizon_end: date | None = None,
-    current: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
+def _resolve_horizon(horizon_start: date | None, horizon_end: date | None) -> tuple[date, date]:
+    today = datetime.now(timezone.utc).date()
+    hs = horizon_start if horizon_start is not None else today
+    he = horizon_end if horizon_end is not None else today + timedelta(days=90)
+    if he < hs:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_end must not be before horizon_start")
+    return hs, he
+
+
+async def _compute_mrp_plan(
+    db: AsyncSession, org_id: uuid.UUID, horizon_start: date, horizon_end: date
+) -> list[MrpPlanLine]:
     """Material Requirements Planning: net demand against supply, exploding
     forecasts through active BOMs so a forecast of a finished good becomes
     concrete requirements for the components it's built from.
@@ -416,21 +451,11 @@ async def run_mrp_plan(
     processed parents-before-components (topological order over the active-BOM
     DAG) so an assembly's net is final before it explodes downward.
 
-    Read-only and demand-driven: items reached by neither a forecast nor an
-    explosion aren't planning actions, so they're omitted. Lot sizing / MOQ /
-    lead-time offset / time-phasing per bucket are intentionally not modelled
-    yet - suggested order quantity is the raw net requirement.
+    Demand-driven: items reached by neither a forecast nor an explosion aren't
+    planning actions, so they're omitted. Lot sizing / MOQ / lead-time offset /
+    time-phasing per bucket are intentionally not modelled yet - suggested order
+    quantity is the raw net requirement.
     """
-    today = datetime.now(timezone.utc).date()
-    if horizon_start is None:
-        horizon_start = today
-    if horizon_end is None:
-        horizon_end = today + timedelta(days=90)
-    if horizon_end < horizon_start:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_end must not be before horizon_start")
-
-    org_id = current.org_id
-
     independent = await _sum_by_item(
         db,
         select(DemandForecast.item_id, func.sum(DemandForecast.quantity))
@@ -442,7 +467,7 @@ async def run_mrp_plan(
         .group_by(DemandForecast.item_id),
     )
     if not independent:
-        return MrpPlanResponse(horizon_start=horizon_start, horizon_end=horizon_end, lines=[])
+        return []
 
     # On-hand comes from two disjoint sources: active lots (lot-tracked items)
     # and inventory_balances (everything else). Merge into one item->qty map.
@@ -559,4 +584,166 @@ async def run_mrp_plan(
 
     # Most urgent first (biggest shortfall), then a stable sku tiebreak.
     lines.sort(key=lambda ln: (-ln.net_requirement, ln.item_sku))
-    return MrpPlanResponse(horizon_start=horizon_start, horizon_end=horizon_end, lines=lines)
+    return lines
+
+
+@mrp_router.get("/plan", response_model=MrpPlanResponse)
+async def run_mrp_plan(
+    horizon_start: date | None = None,
+    horizon_end: date | None = None,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only MRP plan over a demand horizon. See _compute_mrp_plan for the
+    netting/explosion model."""
+    hs, he = _resolve_horizon(horizon_start, horizon_end)
+    lines = await _compute_mrp_plan(db, current.org_id, hs, he)
+    return MrpPlanResponse(horizon_start=hs, horizon_end=he, lines=lines)
+
+
+async def _latest_unit_prices(
+    db: AsyncSession, org_id: uuid.UUID, item_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, Decimal]:
+    """Most recent negotiated unit_price per item across all its PO lines, to
+    prefill a suggested draft (the buyer edits before submitting). PO lines have
+    no timestamp of their own, so 'most recent' is by the parent PO's
+    created_at."""
+    if not item_ids:
+        return {}
+    rows = await db.execute(
+        select(PurchaseOrderLine.item_id, PurchaseOrderLine.unit_price, PurchaseOrder.created_at)
+        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
+        .where(PurchaseOrder.org_id == org_id, PurchaseOrderLine.item_id.in_(item_ids))
+    )
+    latest: dict[uuid.UUID, tuple[Decimal, datetime]] = {}
+    for item_id, price, created_at in rows.all():
+        if item_id not in latest or created_at > latest[item_id][1]:
+            latest[item_id] = (price, created_at)
+    return {item_id: price for item_id, (price, _) in latest.items()}
+
+
+@mrp_router.post("/generate-po", response_model=GeneratePoResponse)
+async def generate_po(
+    body: GeneratePoRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn selected plan shortfalls into a draft purchase order for one
+    supplier. Creates a *draft* (not submitted) PO so the buyer reviews
+    quantities and prices in the normal PO editor before committing - and so it
+    doesn't count as on-order supply until they do (a fresh generate-po run
+    would otherwise net itself away). Only purchased items with a real net
+    requirement are orderable; manufactured items are a build action, not a buy.
+    """
+    hs, he = _resolve_horizon(body.horizon_start, body.horizon_end)
+    org_id = current.org_id
+
+    try:
+        supplier_id = uuid.UUID(body.supplier_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid supplier_id") from None
+    supplier = (
+        await db.execute(select(Supplier).where(Supplier.id == supplier_id, Supplier.org_id == org_id))
+    ).scalar_one_or_none()
+    if supplier is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Supplier not found")
+
+    if not body.item_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Select at least one item to order")
+
+    plan_by_item = {line.item_id: line for line in await _compute_mrp_plan(db, org_id, hs, he)}
+
+    # Validate every requested item up front so a bad one rejects the whole
+    # request rather than leaving a half-built PO.
+    chosen: list[MrpPlanLine] = []
+    seen: set[str] = set()
+    for raw in body.item_ids:
+        try:
+            item_uuid = uuid.UUID(raw)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid item_id: {raw}") from None
+        key = str(item_uuid)
+        if key in seen:
+            continue
+        seen.add(key)
+        line = plan_by_item.get(key)
+        if line is None or line.net_requirement <= 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Item {raw} has no net requirement in this horizon - nothing to order",
+            )
+        if line.is_manufactured:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Item {line.item_sku} is manufactured (build it, don't order it)",
+            )
+        chosen.append(line)
+
+    prices = await _latest_unit_prices(db, org_id, {uuid.UUID(line.item_id) for line in chosen})
+
+    # Allocate a po_number the same guarded way as create_purchase_order: flush
+    # the PO alone in the retry loop so a collision rollback doesn't discard the
+    # lines we add afterwards.
+    for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
+        max_number = await db.scalar(
+            select(func.max(PurchaseOrder.po_number)).where(PurchaseOrder.org_id == org_id)
+        )
+        po = PurchaseOrder(
+            org_id=org_id,
+            supplier_id=supplier_id,
+            po_number=(max_number or 0) + 1,
+            status="draft",
+            created_by=current.id,
+        )
+        db.add(po)
+        try:
+            await db.flush()
+            break
+        except IntegrityError:
+            await db.rollback()
+            if attempt == MAX_PO_NUMBER_ATTEMPTS - 1:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "Could not allocate a PO number, please retry"
+                ) from None
+
+    response_lines: list[GeneratePoLine] = []
+    for seq, line in enumerate(chosen):
+        item_uuid = uuid.UUID(line.item_id)
+        unit_price = prices.get(item_uuid, Decimal(0))
+        db.add(
+            PurchaseOrderLine(
+                org_id=org_id,
+                po_id=po.id,
+                item_id=item_uuid,
+                quantity_ordered=line.net_requirement,
+                unit_price=unit_price,
+                sequence=seq,
+            )
+        )
+        response_lines.append(
+            GeneratePoLine(
+                item_id=line.item_id,
+                item_sku=line.item_sku,
+                item_name=line.item_name,
+                quantity_ordered=line.net_requirement,
+                unit_price=unit_price,
+            )
+        )
+    await db.flush()
+
+    await log_event(
+        db,
+        action="po.generated_from_plan",
+        org_id=org_id,
+        actor_user_id=current.id,
+        target=str(po.id),
+        metadata={"supplier_id": str(supplier_id), "po_number": po.po_number, "line_count": len(chosen)},
+    )
+    await db.commit()
+    return GeneratePoResponse(
+        po_id=str(po.id),
+        po_number=po.po_number,
+        supplier_id=str(supplier_id),
+        supplier_name=supplier.name,
+        lines=response_lines,
+    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.bom import Item
+from app.models.bom import Bom, BomLine, Item
 from app.models.forecast import DemandForecast
 from app.models.lot import Lot
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine
@@ -72,10 +73,19 @@ class MrpPlanLine(BaseModel):
     item_id: str
     item_sku: str
     item_name: str
+    # True if this item is produced by an active BOM: its net requirement is a
+    # *build* suggestion (make it), not a *buy* one (order it). The frontend
+    # labels the two differently.
+    is_manufactured: bool
     # False for non-lot-tracked items: on_hand is reported as 0 but that's
     # "not tracked", not "confirmed empty" - the frontend must not read a 0
     # here as real stock-out. See run_mrp_plan for why.
     on_hand_tracked: bool
+    # Demand this item was forecast for directly (independent demand).
+    independent_demand: Decimal
+    # Demand exploded onto this item from parent assemblies' net requirements
+    # (dependent demand). gross_demand = independent_demand + dependent_demand.
+    dependent_demand: Decimal
     gross_demand: Decimal
     on_hand: Decimal
     on_order: Decimal
@@ -357,6 +367,25 @@ async def _sum_by_item(db: AsyncSession, query) -> dict[uuid.UUID, Decimal]:
     return {item_id: (total or Decimal(0)) for item_id, total in result.all()}
 
 
+async def _load_bom_children(
+    db: AsyncSession, org_id: uuid.UUID
+) -> dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]]:
+    """Manufacturing graph over ACTIVE BOMs only: produced item_id -> list of
+    (component_item_id, quantity_per_unit). Draft/archived BOMs are ignored -
+    only the currently-active BOM defines how an item is really built, and
+    activation already enforces one-active-per-item and acyclicity.
+    """
+    rows = await db.execute(
+        select(Bom.item_id, BomLine.component_item_id, BomLine.quantity)
+        .join(BomLine, BomLine.bom_id == Bom.id)
+        .where(Bom.org_id == org_id, Bom.status == "active")
+    )
+    children: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] = defaultdict(list)
+    for parent_id, child_id, qty in rows.all():
+        children[parent_id].append((child_id, qty))
+    return children
+
+
 @mrp_router.get("/plan", response_model=MrpPlanResponse)
 async def run_mrp_plan(
     horizon_start: date | None = None,
@@ -364,26 +393,36 @@ async def run_mrp_plan(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Requirements netting over a demand horizon. For every item with forecast
-    demand in the window:
+    """Material Requirements Planning: net demand against supply, exploding
+    forecasts through active BOMs so a forecast of a finished good becomes
+    concrete requirements for the components it's built from.
 
         net_requirement = max(0, gross_demand - on_hand - on_order)
+        gross_demand    = independent_demand + dependent_demand
 
-    - gross_demand: sum of demand_forecasts buckets whose period_start is in
-      [horizon_start, horizon_end].
+    - independent_demand: the item's own forecast buckets whose period_start is
+      in [horizon_start, horizon_end].
+    - dependent_demand: quantity_per x parent net_requirement, summed over every
+      parent assembly that lists this item in its active BOM.
     - on_hand: sum of *active* lot quantity_remaining. on_hold lots (QA
-      hold/recall) are deliberately excluded - they can't be consumed, so
-      counting them as available would understate a real shortage. Non-lot-
-      tracked items have no on-hand ledger in the system yet, so their on_hand
-      is 0 with on_hand_tracked=False (a known gap, surfaced honestly rather
-      than faked).
+      hold/recall) are excluded - they can't be consumed, so counting them would
+      understate a real shortage. Non-lot-tracked items have no on-hand ledger
+      yet, so on_hand is 0 with on_hand_tracked=False (a known gap, surfaced
+      honestly rather than faked).
     - on_order: open PO supply, quantity_ordered - quantity_received across PO
       lines on submitted/partially_received POs.
 
-    Read-only and demand-driven: items with supply but no forecast demand in the
-    window aren't planning actions, so they're omitted. Lot sizing / MOQ /
-    supplier lead-time offset are intentionally not modelled yet - suggested
-    order quantity is the raw net requirement.
+    This is *netted* explosion, not gross: each assembly is netted against its
+    own on-hand/on-order first, and only the resulting net requirement explodes
+    to its components. Finished-good and sub-assembly stock therefore correctly
+    reduces how much of each raw component you actually need to buy. Items are
+    processed parents-before-components (topological order over the active-BOM
+    DAG) so an assembly's net is final before it explodes downward.
+
+    Read-only and demand-driven: items reached by neither a forecast nor an
+    explosion aren't planning actions, so they're omitted. Lot sizing / MOQ /
+    lead-time offset / time-phasing per bucket are intentionally not modelled
+    yet - suggested order quantity is the raw net requirement.
     """
     today = datetime.now(timezone.utc).date()
     if horizon_start is None:
@@ -395,7 +434,7 @@ async def run_mrp_plan(
 
     org_id = current.org_id
 
-    demand = await _sum_by_item(
+    independent = await _sum_by_item(
         db,
         select(DemandForecast.item_id, func.sum(DemandForecast.quantity))
         .where(
@@ -405,7 +444,7 @@ async def run_mrp_plan(
         )
         .group_by(DemandForecast.item_id),
     )
-    if not demand:
+    if not independent:
         return MrpPlanResponse(horizon_start=horizon_start, horizon_end=horizon_end, lines=[])
 
     on_hand = await _sum_by_item(
@@ -424,37 +463,89 @@ async def run_mrp_plan(
         .where(PurchaseOrder.org_id == org_id, PurchaseOrder.status.in_(OPEN_PO_STATUSES))
         .group_by(PurchaseOrderLine.item_id),
     )
+    children = await _load_bom_children(db, org_id)
+
+    # Every item touched by the plan: the forecast items plus everything
+    # reachable from them through the manufacturing graph.
+    relevant: set[uuid.UUID] = set()
+    stack = list(independent.keys())
+    while stack:
+        node = stack.pop()
+        if node in relevant:
+            continue
+        relevant.add(node)
+        for child_id, _ in children.get(node, []):
+            stack.append(child_id)
+
+    # Topological order, parents before components (Kahn). Active BOMs are
+    # acyclic (enforced at activation), so this consumes every relevant node.
+    indegree: dict[uuid.UUID, int] = dict.fromkeys(relevant, 0)
+    for parent_id in relevant:
+        for child_id, _ in children.get(parent_id, []):
+            if child_id in relevant:
+                indegree[child_id] += 1
+    queue = deque(node for node in relevant if indegree[node] == 0)
+    order: list[uuid.UUID] = []
+    while queue:
+        node = queue.popleft()
+        order.append(node)
+        for child_id, _ in children.get(node, []):
+            if child_id in relevant:
+                indegree[child_id] -= 1
+                if indegree[child_id] == 0:
+                    queue.append(child_id)
+    if len(order) != len(relevant):
+        # A cycle slipped past activation's guard (shouldn't happen). Surface
+        # the leftovers un-exploded rather than dropping them or looping.
+        order.extend(node for node in relevant if node not in set(order))
 
     items = {
         item.id: item
-        for item in (
-            await db.execute(select(Item).where(Item.org_id == org_id, Item.id.in_(demand.keys())))
-        )
+        for item in (await db.execute(select(Item).where(Item.org_id == org_id, Item.id.in_(relevant))))
         .scalars()
         .all()
     }
 
+    gross: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
+    for item_id, qty in independent.items():
+        gross[item_id] += qty
+
     lines: list[MrpPlanLine] = []
-    for item_id, gross in demand.items():
+    for item_id in order:
         item = items.get(item_id)
         if item is None:
-            # Forecast referencing a deleted item - skip rather than 500.
+            # BOM/forecast referencing a deleted item - skip rather than 500.
             continue
+        total_gross = gross[item_id]
         hand = on_hand.get(item_id, Decimal(0))
         # Clamp: a fully-received line contributes 0; the aggregate can't
-        # legitimately go negative, but guard against it rather than letting a
-        # data quirk manufacture phantom supply.
-        order = max(Decimal(0), on_order.get(item_id, Decimal(0)))
-        net = max(Decimal(0), gross - hand - order)
+        # legitimately go negative, but guard against a data quirk manufacturing
+        # phantom supply.
+        order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
+        net = max(Decimal(0), total_gross - hand - order_qty)
+
+        # Explode the NET (not gross) requirement onto components. Processing in
+        # topological order guarantees total_gross above is already final.
+        for child_id, qty_per in children.get(item_id, []):
+            gross[child_id] += net * qty_per
+
+        if total_gross <= 0:
+            # Reached but not actually required (e.g. a component of an assembly
+            # fully covered by stock) - nothing to plan.
+            continue
+        indep = independent.get(item_id, Decimal(0))
         lines.append(
             MrpPlanLine(
                 item_id=str(item_id),
                 item_sku=item.sku,
                 item_name=item.name,
+                is_manufactured=item_id in children,
                 on_hand_tracked=item.is_lot_tracked,
-                gross_demand=gross,
+                independent_demand=indep,
+                dependent_demand=total_gross - indep,
+                gross_demand=total_gross,
                 on_hand=hand,
-                on_order=order,
+                on_order=order_qty,
                 net_requirement=net,
                 suggested_order_quantity=net,
             )

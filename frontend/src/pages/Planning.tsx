@@ -26,7 +26,10 @@ interface MrpPlanLine {
   item_id: string;
   item_sku: string;
   item_name: string;
+  is_manufactured: boolean;
   on_hand_tracked: boolean;
+  independent_demand: string;
+  dependent_demand: string;
   gross_demand: string;
   on_hand: string;
   on_order: string;
@@ -155,8 +158,9 @@ export function Planning() {
       </p>
       <h1>Planning</h1>
       <p>
-        Enter demand forecasts per item and period, then net them against on-hand stock and open
-        purchase orders to see what needs ordering.
+        Enter demand forecasts per item and period. The plan explodes forecasts of manufactured
+        items through their active BOM into component requirements, then nets everything against
+        on-hand stock and open purchase orders to show what to build and what to order.
       </p>
 
       {error && <p role="alert">{error}</p>}
@@ -263,30 +267,38 @@ export function Planning() {
             <thead>
               <tr>
                 <th>Item</th>
+                <th>Independent</th>
+                <th>Dependent</th>
                 <th>Gross demand</th>
                 <th>On hand</th>
                 <th>On order</th>
                 <th>Net requirement</th>
-                <th>Suggested order</th>
+                <th>Suggested action</th>
               </tr>
             </thead>
             <tbody>
-              {plan.data.lines.map((line) => (
-                <tr key={line.item_id}>
-                  <td>
-                    {line.item_sku} - {line.item_name}
-                  </td>
-                  <td>{line.gross_demand}</td>
-                  <td>{line.on_hand_tracked ? line.on_hand : "not tracked"}</td>
-                  <td>{line.on_order}</td>
-                  <td>{line.net_requirement}</td>
-                  <td>
-                    {Number(line.suggested_order_quantity) > 0
-                      ? line.suggested_order_quantity
-                      : "-"}
-                  </td>
-                </tr>
-              ))}
+              {plan.data.lines.map((line) => {
+                const qty = Number(line.suggested_order_quantity);
+                const action =
+                  qty > 0
+                    ? `${line.is_manufactured ? "Build" : "Order"} ${line.suggested_order_quantity}`
+                    : "-";
+                return (
+                  <tr key={line.item_id}>
+                    <td>
+                      {line.item_sku} - {line.item_name}
+                      {line.is_manufactured ? " (make)" : ""}
+                    </td>
+                    <td>{line.independent_demand}</td>
+                    <td>{line.dependent_demand}</td>
+                    <td>{line.gross_demand}</td>
+                    <td>{line.on_hand_tracked ? line.on_hand : "not tracked"}</td>
+                    <td>{line.on_order}</td>
+                    <td>{line.net_requirement}</td>
+                    <td>{action}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

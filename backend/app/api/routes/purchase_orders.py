@@ -139,12 +139,18 @@ async def create_purchase_order(
             expected_delivery_date=body.expected_delivery_date,
             created_by=current.id,
         )
-        db.add(po)
+        # A per-attempt SAVEPOINT, not a full db.rollback(): two concurrent
+        # creates can collide on uq_pos_org_number, but a whole-transaction
+        # rollback here would also expire the already-loaded `supplier`, so the
+        # `supplier.name` read in _po_to_response below would trigger an async
+        # refresh mid-response (MissingGreenlet). The savepoint rolls back only
+        # the failed insert and leaves the outer transaction and supplier intact.
         try:
-            await db.flush()
+            async with db.begin_nested():
+                db.add(po)
+                await db.flush()
             break
         except IntegrityError:
-            await db.rollback()
             if attempt == MAX_PO_NUMBER_ATTEMPTS - 1:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, "Could not allocate a PO number, please retry"

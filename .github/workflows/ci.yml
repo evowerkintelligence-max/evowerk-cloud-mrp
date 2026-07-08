@@ -133,6 +133,42 @@ jobs:
       - name: Verify audit_logs is append-only
         run: python scripts/verify_audit_log_immutable.py
 
+  concurrency:
+    # The main `backend` job runs on single-connection in-memory SQLite, which
+    # can't interleave transactions - so the race guards (guarded UPDATEs,
+    # non-negative guards, SAVEPOINT allocation/create retries) are only
+    # exercised for real here, against a Postgres with an actual connection pool.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      CONCURRENCY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp
+      JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
+      MFA_ENCRYPTION_KEY: "nH7PbBN1oDWzZ8t0w9di2vDvxTFeOY1SOfYfnkIeXJo="
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: evowerk_cloud_mrp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - name: Run concurrency tests against real Postgres
+        run: pytest tests/test_concurrency.py -q
+
   terraform-lint:
     runs-on: ubuntu-latest
     strategy:

@@ -26,6 +26,16 @@ class Item(Base):
     unit_of_measure: Mapped[str] = mapped_column(String(20), nullable=False, default="ea")
     # Opt-in: only lot-tracked items require/get a Lot on PO receipt - see
     # app.api.routes.purchase_orders.receive_purchase_order.
+    #
+    # IMMUTABLE AFTER CREATION - load-bearing. On-hand for an item comes from
+    # exactly one source depending on this flag: lot-tracked items sum their
+    # active Lots, everything else uses inventory_balances (see
+    # forecasts._compute_mrp_plan). Those two are disjoint *because* this can't
+    # change: PATCH /items only edits preferred_supplier_id, inventory
+    # consume/adjust reject lot-tracked items, and receiving writes to lots XOR
+    # inventory by this flag. Making it mutable would strand one ledger and
+    # double-count on-hand - don't add it to ItemUpdateRequest without migrating
+    # the existing on-hand first. (Guarded by test_is_lot_tracked_immutable.)
     is_lot_tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Default source of supply, used to auto-group MRP shortfalls into supplier
     # POs (see app.api.routes.forecasts.generate_pos). Nullable - an item may

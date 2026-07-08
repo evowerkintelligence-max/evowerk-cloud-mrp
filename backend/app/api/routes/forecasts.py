@@ -96,6 +96,11 @@ class MrpPlanLine(BaseModel):
     # the item from the shortfall and a second generation can't double-order it.
     on_draft: Decimal
     net_requirement: Decimal
+    # The stable "how much to order/build" field for API consumers and PO
+    # generation. Currently always equal to net_requirement; it exists as a
+    # distinct field on purpose so that when lot-sizing / MOQ rounding lands it
+    # can diverge (e.g. rounded up to a pack size) without changing the meaning
+    # of net_requirement or the API shape.
     suggested_order_quantity: Decimal
 
 
@@ -887,6 +892,21 @@ async def generate_pos(
         .scalars()
         .all()
     }
+
+    # Defensive: a preferred_supplier_id always references a live org supplier
+    # (validated when set, FK with ondelete SET NULL on supplier deletion), so
+    # every group key should resolve. But if a supplier row is somehow missing,
+    # route its items to `unassigned` rather than KeyError into a 500.
+    for supplier_id in [sid for sid in groups if sid not in suppliers]:
+        for line in groups.pop(supplier_id):
+            unassigned.append(
+                UnassignedItem(
+                    item_id=line.item_id,
+                    item_sku=line.item_sku,
+                    item_name=line.item_name,
+                    net_requirement=line.net_requirement,
+                )
+            )
 
     created: list[GeneratedPoSummary] = []
     # Deterministic order (by supplier name) so po_number allocation is stable.

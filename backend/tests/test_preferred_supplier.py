@@ -102,6 +102,28 @@ async def test_preferred_supplier_must_belong_to_org(client):
     assert res.status_code == 404
 
 
+async def test_is_lot_tracked_immutable(client):
+    # is_lot_tracked is fixed at creation and load-bearing: the on-hand
+    # source-of-truth split (lots vs inventory_balances) depends on it never
+    # changing. PATCH /items only edits preferred_supplier_id, so even a client
+    # that sends is_lot_tracked must not be able to flip it. If someone wires
+    # is_lot_tracked into ItemUpdateRequest later, this test fails - a deliberate
+    # tripwire (see Item.is_lot_tracked).
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, "ROD")
+    assert item["is_lot_tracked"] is False
+
+    res = await client.patch(
+        f"/items/{item['id']}",
+        json={"preferred_supplier_id": None, "is_lot_tracked": True},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["is_lot_tracked"] is False
+    assert (await client.get("/items", headers=headers)).json()[0]["is_lot_tracked"] is False
+
+
 async def test_patch_item_requires_owner(client, test_engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 

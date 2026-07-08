@@ -9,6 +9,7 @@ import { Boms } from "./pages/Boms";
 import { Suppliers } from "./pages/Suppliers";
 import { PurchaseOrders } from "./pages/PurchaseOrders";
 import { Lots } from "./pages/Lots";
+import { Inventory } from "./pages/Inventory";
 import { Planning } from "./pages/Planning";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -75,6 +76,14 @@ export function App() {
         element={
           <RequireAuth>
             <Lots />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/inventory"
+        element={
+          <RequireAuth>
+            <Inventory />
           </RequireAuth>
         }
       />

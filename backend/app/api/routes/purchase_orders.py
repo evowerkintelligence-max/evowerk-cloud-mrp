@@ -16,6 +16,7 @@ from app.middleware.audit import log_event
 from app.models.bom import Item
 from app.models.lot import Lot, LotTransaction
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine, PurchaseOrderReceiptLine, Supplier
+from app.services.inventory import apply_inventory_delta
 
 router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 
@@ -481,6 +482,20 @@ async def receive_purchase_order(
                     source_receipt_line_id=receipt_line.id,
                     created_by=current.id,
                 )
+            )
+        else:
+            # Non-lot-tracked: the received quantity lands in the general
+            # inventory on-hand ledger, so this item's stock is real for MRP
+            # netting instead of untracked (this is the whole point of the
+            # inventory ledger - see services.inventory).
+            await apply_inventory_delta(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                delta=receipt.quantity,
+                transaction_type="receipt",
+                created_by=current.id,
+                source_receipt_line_id=receipt_line.id,
             )
 
     # Recompute status by scanning ALL lines, not just the ones just received -

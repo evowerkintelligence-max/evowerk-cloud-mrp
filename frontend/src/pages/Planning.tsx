@@ -27,7 +27,6 @@ interface MrpPlanLine {
   item_sku: string;
   item_name: string;
   is_manufactured: boolean;
-  on_hand_tracked: boolean;
   independent_demand: string;
   dependent_demand: string;
   gross_demand: string;
@@ -292,7 +291,7 @@ export function Planning() {
                     <td>{line.independent_demand}</td>
                     <td>{line.dependent_demand}</td>
                     <td>{line.gross_demand}</td>
-                    <td>{line.on_hand_tracked ? line.on_hand : "not tracked"}</td>
+                    <td>{line.on_hand}</td>
                     <td>{line.on_order}</td>
                     <td>{line.net_requirement}</td>
                     <td>{action}</td>

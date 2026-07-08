@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -290,6 +290,31 @@ async def submit_purchase_order(
     return await _po_to_response(db, po)
 
 
+async def _topup_lot(db: AsyncSession, lot: Lot, quantity: Decimal, expiry_date: date | None) -> Lot:
+    """Guarded UPDATE, not read-then-`+=`-then-write: two concurrent receipts
+    against the same existing lot_number (e.g. two shipments of one physical
+    batch landing close together) could otherwise both read the same starting
+    quantity_received/quantity_remaining, and whichever flush lands second
+    would silently overwrite the first's increment instead of adding to it.
+    Same rationale as consume_lot's guarded UPDATE.
+    """
+    values: dict[str, object] = {
+        "quantity_received": Lot.quantity_received + quantity,
+        "quantity_remaining": Lot.quantity_remaining + quantity,
+        "status": case((Lot.status == "depleted", "active"), else_=Lot.status),
+    }
+    if expiry_date is not None:
+        values["expiry_date"] = case((Lot.expiry_date.is_(None), expiry_date), else_=Lot.expiry_date)
+    result = await db.execute(
+        update(Lot)
+        .where(Lot.id == lot.id)
+        .values(**values)
+        .returning(Lot.quantity_received, Lot.quantity_remaining, Lot.status, Lot.expiry_date)
+    )
+    lot.quantity_received, lot.quantity_remaining, lot.status, lot.expiry_date = result.one()
+    return lot
+
+
 async def _find_or_create_lot(
     db: AsyncSession,
     *,
@@ -318,13 +343,7 @@ async def _find_or_create_lot(
                 f"Lot {lot_number} already has a different expiry date on file for this item - "
                 "check for a lot_number typo before retrying",
             )
-        lot.quantity_received += quantity
-        lot.quantity_remaining += quantity
-        if lot.status == "depleted":
-            lot.status = "active"
-        if expiry_date is not None and lot.expiry_date is None:
-            lot.expiry_date = expiry_date
-        return lot
+        return await _topup_lot(db, lot, quantity, expiry_date)
 
     # Two concurrent receipts could both try to create the same new
     # lot_number. Each attempt runs in its own SAVEPOINT (not the plain
@@ -360,11 +379,7 @@ async def _find_or_create_lot(
             )
             existing = result.scalar_one_or_none()
             if existing is not None:
-                existing.quantity_received += quantity
-                existing.quantity_remaining += quantity
-                if existing.status == "depleted":
-                    existing.status = "active"
-                return existing
+                return await _topup_lot(db, existing, quantity, None)
             if attempt == MAX_LOT_CREATE_ATTEMPTS - 1:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, f"Could not allocate lot {lot_number}, please retry"

@@ -32,6 +32,7 @@ interface MrpPlanLine {
   gross_demand: string;
   on_hand: string;
   on_order: string;
+  on_draft: string;
   net_requirement: string;
   suggested_order_quantity: string;
 }
@@ -379,6 +380,7 @@ export function Planning() {
                   <th>Gross demand</th>
                   <th>On hand</th>
                   <th>On order</th>
+                  <th>On draft</th>
                   <th>Net requirement</th>
                   <th>Suggested action</th>
                 </tr>
@@ -415,6 +417,7 @@ export function Planning() {
                       <td>{line.gross_demand}</td>
                       <td>{line.on_hand}</td>
                       <td>{line.on_order}</td>
+                      <td>{line.on_draft}</td>
                       <td>{line.net_requirement}</td>
                       <td>{action}</td>
                     </tr>

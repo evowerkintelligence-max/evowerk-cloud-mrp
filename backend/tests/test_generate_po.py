@@ -229,6 +229,62 @@ async def test_generate_po_requires_owner(client, test_engine):
     assert res.status_code == 403
 
 
+async def test_generating_a_draft_prevents_double_ordering(client):
+    """Regression: a generated draft counts as on_draft supply, so it offsets
+    the net requirement immediately - re-generating (manual or auto) can't
+    re-order the same shortfall while the draft sits open."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, "ROD", "Steel Rod")
+    supplier = await _create_supplier(client, token)
+    await _forecast(client, token, item, 100)
+
+    first = await _generate_po(client, token, supplier, [item["id"]])
+    assert first.status_code == 200
+    assert _dec(first.json()["lines"][0]["quantity_ordered"]) == Decimal("100")
+
+    # The draft now shows as on_draft and the requirement is covered.
+    plan = await client.get(
+        "/mrp/plan?horizon_start=2030-01-01&horizon_end=2030-12-31", headers=headers
+    )
+    line = plan.json()["lines"][0]
+    assert _dec(line["on_draft"]) == Decimal("100")
+    assert _dec(line["net_requirement"]) == Decimal("0")
+
+    # Re-ordering the same item is now rejected (no net requirement left).
+    second = await _generate_po(client, token, supplier, [item["id"]])
+    assert second.status_code == 400
+
+
+async def test_auto_generate_is_idempotent_while_draft_open(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, "ROD", "Steel Rod")
+    supplier = await _create_supplier(client, token)
+    # Give the item a preferred supplier so auto-generation routes it.
+    await client.patch(
+        f"/items/{item['id']}",
+        json={"preferred_supplier_id": supplier["id"]},
+        headers=headers,
+    )
+    await _forecast(client, token, item, 100)
+
+    first = await client.post(
+        "/mrp/generate-pos",
+        json={"horizon_start": "2030-01-01", "horizon_end": "2030-12-31"},
+        headers=headers,
+    )
+    assert len(first.json()["created"]) == 1
+
+    # Second auto-run creates nothing - the open draft already covers it.
+    second = await client.post(
+        "/mrp/generate-pos",
+        json={"horizon_start": "2030-01-01", "horizon_end": "2030-12-31"},
+        headers=headers,
+    )
+    assert second.json() == {"created": [], "unassigned": []}
+
+
 async def test_generated_po_becomes_on_order_after_submit(client):
     """Submitting the generated draft turns it into on-order supply, so the next
     plan run shows the requirement covered - the loop closes."""

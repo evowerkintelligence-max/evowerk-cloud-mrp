@@ -264,7 +264,9 @@ async def test_mrp_plan_ignores_draft_po_and_out_of_horizon_demand(client):
         json={"item_id": item["id"], "period_start": "2031-06-01", "quantity": "999"},
         headers=headers,
     )
-    # A draft (never submitted) PO is not committed supply.
+    # A draft (never submitted) PO is planned-but-uncommitted supply: it counts
+    # as on_draft (not on_order) and offsets the requirement, so a repeat
+    # generation can't double-order it.
     await _create_po(client, token, item, supplier, qty="40", submit=False)
 
     plan = await client.get(
@@ -272,8 +274,9 @@ async def test_mrp_plan_ignores_draft_po_and_out_of_horizon_demand(client):
     )
     line = plan.json()["lines"][0]
     assert _dec(line["gross_demand"]) == Decimal("50")  # 999 excluded
-    assert _dec(line["on_order"]) == Decimal("0")  # draft excluded
-    assert _dec(line["net_requirement"]) == Decimal("50")
+    assert _dec(line["on_order"]) == Decimal("0")  # draft is not on_order
+    assert _dec(line["on_draft"]) == Decimal("40")  # draft counted here
+    assert _dec(line["net_requirement"]) == Decimal("10")  # 50 - 40 drafted
 
 
 async def test_mrp_plan_non_lot_tracked_item_zero_onhand_when_never_received(client):

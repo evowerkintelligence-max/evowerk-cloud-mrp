@@ -90,6 +90,11 @@ class MrpPlanLine(BaseModel):
     gross_demand: Decimal
     on_hand: Decimal
     on_order: Decimal
+    # Outstanding quantity on open *draft* POs - planned but not yet committed
+    # supply. Kept separate from on_order (submitted+) so the two stay visible,
+    # but it offsets net_requirement the same way, so drafting an order removes
+    # the item from the shortfall and a second generation can't double-order it.
+    on_draft: Decimal
     net_requirement: Decimal
     suggested_order_quantity: Decimal
 
@@ -457,7 +462,7 @@ async def _compute_mrp_plan(
     forecasts through active BOMs so a forecast of a finished good becomes
     concrete requirements for the components it's built from.
 
-        net_requirement = max(0, gross_demand - on_hand - on_order)
+        net_requirement = max(0, gross_demand - on_hand - on_order - on_draft)
         gross_demand    = independent_demand + dependent_demand
 
     - independent_demand: the item's own forecast buckets whose period_start is
@@ -471,6 +476,10 @@ async def _compute_mrp_plan(
       item is one or the other), so summing them is just "whichever applies".
     - on_order: open PO supply, quantity_ordered - quantity_received across PO
       lines on submitted/partially_received POs.
+    - on_draft: outstanding quantity on open *draft* POs - planned but not yet
+      committed supply. Offsets the requirement like on_order (so drafting an
+      order removes the shortfall and a repeat generation can't double-order),
+      but reported separately so submitted vs still-a-draft stays visible.
 
     This is *netted* explosion, not gross: each assembly is netted against its
     own on-hand/on-order first, and only the resulting net requirement explodes
@@ -521,6 +530,21 @@ async def _compute_mrp_plan(
         )
         .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
         .where(PurchaseOrder.org_id == org_id, PurchaseOrder.status.in_(OPEN_PO_STATUSES))
+        .group_by(PurchaseOrderLine.item_id),
+    )
+    # Draft POs are planned-but-uncommitted supply: they offset the net
+    # requirement (so drafting an order, then re-planning or re-generating,
+    # doesn't double-count the shortfall) but stay a distinct bucket from
+    # submitted on_order. A draft's quantity_received is always 0, but the same
+    # outstanding expression is used for uniformity.
+    on_draft = await _sum_by_item(
+        db,
+        select(
+            PurchaseOrderLine.item_id,
+            func.sum(PurchaseOrderLine.quantity_ordered - PurchaseOrderLine.quantity_received),
+        )
+        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
+        .where(PurchaseOrder.org_id == org_id, PurchaseOrder.status == "draft")
         .group_by(PurchaseOrderLine.item_id),
     )
     children = await _load_bom_children(db, org_id)
@@ -582,7 +606,8 @@ async def _compute_mrp_plan(
         # legitimately go negative, but guard against a data quirk manufacturing
         # phantom supply.
         order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
-        net = max(Decimal(0), total_gross - hand - order_qty)
+        draft_qty = max(Decimal(0), on_draft.get(item_id, Decimal(0)))
+        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty)
 
         # Explode the NET (not gross) requirement onto components. Processing in
         # topological order guarantees total_gross above is already final.
@@ -605,6 +630,7 @@ async def _compute_mrp_plan(
                 gross_demand=total_gross,
                 on_hand=hand,
                 on_order=order_qty,
+                on_draft=draft_qty,
                 net_requirement=net,
                 suggested_order_quantity=net,
             )
@@ -725,10 +751,11 @@ async def generate_po(
 ):
     """Turn selected plan shortfalls into a draft purchase order for one
     supplier. Creates a *draft* (not submitted) PO so the buyer reviews
-    quantities and prices in the normal PO editor before committing - and so it
-    doesn't count as on-order supply until they do (a fresh generate-po run
-    would otherwise net itself away). Only purchased items with a real net
-    requirement are orderable; manufactured items are a build action, not a buy.
+    quantities and prices in the normal PO editor before committing. The draft's
+    outstanding quantity counts as on_draft supply in the plan, so it offsets
+    the net requirement immediately - re-running the plan or generation won't
+    re-order what's already sitting in a draft. Only purchased items with a real
+    net requirement are orderable; manufactured items are a build, not a buy.
     """
     hs, he = _resolve_horizon(body.horizon_start, body.horizon_end)
     org_id = current.org_id

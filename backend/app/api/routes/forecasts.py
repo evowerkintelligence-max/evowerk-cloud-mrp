@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Bom, BomLine, Item
 from app.models.forecast import DemandForecast
+from app.models.inventory import InventoryBalance
 from app.models.lot import Lot
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine
 
@@ -77,10 +78,6 @@ class MrpPlanLine(BaseModel):
     # *build* suggestion (make it), not a *buy* one (order it). The frontend
     # labels the two differently.
     is_manufactured: bool
-    # False for non-lot-tracked items: on_hand is reported as 0 but that's
-    # "not tracked", not "confirmed empty" - the frontend must not read a 0
-    # here as real stock-out. See run_mrp_plan for why.
-    on_hand_tracked: bool
     # Demand this item was forecast for directly (independent demand).
     independent_demand: Decimal
     # Demand exploded onto this item from parent assemblies' net requirements
@@ -404,11 +401,11 @@ async def run_mrp_plan(
       in [horizon_start, horizon_end].
     - dependent_demand: quantity_per x parent net_requirement, summed over every
       parent assembly that lists this item in its active BOM.
-    - on_hand: sum of *active* lot quantity_remaining. on_hold lots (QA
-      hold/recall) are excluded - they can't be consumed, so counting them would
-      understate a real shortage. Non-lot-tracked items have no on-hand ledger
-      yet, so on_hand is 0 with on_hand_tracked=False (a known gap, surfaced
-      honestly rather than faked).
+    - on_hand: for lot-tracked items, sum of *active* lot quantity_remaining
+      (on_hold lots - QA hold/recall - are excluded; they can't be consumed, so
+      counting them would understate a real shortage). For non-lot-tracked
+      items, the general inventory_balances on-hand. The two are disjoint (an
+      item is one or the other), so summing them is just "whichever applies".
     - on_order: open PO supply, quantity_ordered - quantity_received across PO
       lines on submitted/partially_received POs.
 
@@ -447,12 +444,22 @@ async def run_mrp_plan(
     if not independent:
         return MrpPlanResponse(horizon_start=horizon_start, horizon_end=horizon_end, lines=[])
 
+    # On-hand comes from two disjoint sources: active lots (lot-tracked items)
+    # and inventory_balances (everything else). Merge into one item->qty map.
     on_hand = await _sum_by_item(
         db,
         select(Lot.item_id, func.sum(Lot.quantity_remaining))
         .where(Lot.org_id == org_id, Lot.status == "active")
         .group_by(Lot.item_id),
     )
+    inventory_on_hand = await _sum_by_item(
+        db,
+        select(InventoryBalance.item_id, InventoryBalance.quantity_on_hand).where(
+            InventoryBalance.org_id == org_id
+        ),
+    )
+    for item_id, qty in inventory_on_hand.items():
+        on_hand[item_id] = on_hand.get(item_id, Decimal(0)) + qty
     on_order = await _sum_by_item(
         db,
         select(
@@ -540,7 +547,6 @@ async def run_mrp_plan(
                 item_sku=item.sku,
                 item_name=item.name,
                 is_manufactured=item_id in children,
-                on_hand_tracked=item.is_lot_tracked,
                 independent_demand=indep,
                 dependent_demand=total_gross - indep,
                 gross_demand=total_gross,

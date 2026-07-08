@@ -235,7 +235,6 @@ async def test_mrp_plan_nets_demand_against_onhand_and_onorder(client):
     assert _dec(line["on_order"]) == Decimal("20")
     assert _dec(line["net_requirement"]) == Decimal("50")
     assert _dec(line["suggested_order_quantity"]) == Decimal("50")
-    assert line["on_hand_tracked"] is True
 
     # Putting the lot on hold removes it from available on-hand -> shortfall grows.
     lot_id = (await client.get("/lots", headers=headers)).json()[0]["id"]
@@ -277,7 +276,9 @@ async def test_mrp_plan_ignores_draft_po_and_out_of_horizon_demand(client):
     assert _dec(line["net_requirement"]) == Decimal("50")
 
 
-async def test_mrp_plan_non_lot_tracked_item_reports_untracked_onhand(client):
+async def test_mrp_plan_non_lot_tracked_item_zero_onhand_when_never_received(client):
+    # A non-lot-tracked item with no inventory movements has a real on-hand of
+    # 0 (it's tracked now via the inventory ledger, not "unknown").
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
     item = await _create_item(client, token, is_lot_tracked=False)
@@ -291,7 +292,6 @@ async def test_mrp_plan_non_lot_tracked_item_reports_untracked_onhand(client):
         "/mrp/plan?horizon_start=2030-01-01&horizon_end=2030-12-31", headers=headers
     )
     line = plan.json()["lines"][0]
-    assert line["on_hand_tracked"] is False
     assert _dec(line["on_hand"]) == Decimal("0")
     assert _dec(line["net_requirement"]) == Decimal("70")
 

@@ -10,6 +10,12 @@ interface ItemResponse {
   item_type: string;
   unit_of_measure: string;
   is_lot_tracked: boolean;
+  preferred_supplier_id: string | null;
+}
+
+interface SupplierResponse {
+  id: string;
+  name: string;
 }
 
 export function Items() {
@@ -28,6 +34,31 @@ export function Items() {
       if (!res.ok) throw new Error("Failed to load items");
       return res.json();
     },
+  });
+
+  const suppliers = useQuery<SupplierResponse[]>({
+    queryKey: ["suppliers"],
+    queryFn: async () => {
+      const res = await apiFetch("/suppliers");
+      if (!res.ok) throw new Error("Failed to load suppliers");
+      return res.json();
+    },
+  });
+
+  const setPreferredSupplier = useMutation({
+    mutationFn: async ({ itemId, supplierId }: { itemId: string; supplierId: string | null }) => {
+      const res = await apiFetch(`/items/${itemId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ preferred_supplier_id: supplierId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to update preferred supplier");
+      }
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["items"] }),
+    onError: (e: Error) => setError(e.message),
   });
 
   const createItem = useMutation({
@@ -112,6 +143,7 @@ export function Items() {
             <th>Type</th>
             <th>UoM</th>
             <th>Lot tracked</th>
+            <th>Preferred supplier</th>
           </tr>
         </thead>
         <tbody>
@@ -122,6 +154,25 @@ export function Items() {
               <td>{item.item_type}</td>
               <td>{item.unit_of_measure}</td>
               <td>{item.is_lot_tracked ? "Yes" : "No"}</td>
+              <td>
+                <select
+                  value={item.preferred_supplier_id ?? ""}
+                  disabled={setPreferredSupplier.isPending}
+                  onChange={(e) =>
+                    setPreferredSupplier.mutate({
+                      itemId: item.id,
+                      supplierId: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">None</option>
+                  {suppliers.data?.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </td>
             </tr>
           ))}
         </tbody>

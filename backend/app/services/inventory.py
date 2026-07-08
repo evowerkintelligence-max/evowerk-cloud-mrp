@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inventory import InventoryBalance, InventoryTransaction
 
-# Two concurrent *first* movements for the same item can both try to create its
-# balance row and collide on uq_inventory_balances_org_item. One retry after
-# re-selecting is enough - by then the winner is committed and visible.
-MAX_BALANCE_CREATE_ATTEMPTS = 3
+# Several concurrent *first* movements for the same item can all try to create
+# its balance row and collide on uq_inventory_balances_org_item. Each loser
+# retries the guarded UPDATE (the row now exists); a few extra attempts absorb a
+# burst of concurrent first-creates before giving up with a retry-able 409.
+MAX_BALANCE_CREATE_ATTEMPTS = 5
 
 
 class InsufficientInventory(HTTPException):
@@ -80,38 +81,39 @@ async def _bump_balance(
     )
     if delta < 0:
         stmt = stmt.where(new_expr >= 0)
-    row = (await db.execute(stmt)).first()
-    if row is not None:
-        return row[0]
 
-    # No row was updated: either the balance doesn't exist yet, or it exists but
-    # the non-negative guard blocked the update. Disambiguate.
-    existing = (
-        await db.execute(
-            select(InventoryBalance.quantity_on_hand).where(
-                InventoryBalance.org_id == org_id, InventoryBalance.item_id == item_id
+    for _ in range(MAX_BALANCE_CREATE_ATTEMPTS):
+        # 1. Try to update an existing balance row atomically.
+        row = (await db.execute(stmt)).first()
+        if row is not None:
+            return row[0]
+
+        # 2. No row updated: either the balance doesn't exist yet, or it exists
+        # but the non-negative guard blocked the update. Disambiguate.
+        existing = (
+            await db.execute(
+                select(InventoryBalance.quantity_on_hand).where(
+                    InventoryBalance.org_id == org_id, InventoryBalance.item_id == item_id
+                )
             )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        raise InsufficientInventory(
-            f"On-hand is {existing}; that movement would drive it below zero"
-        )
-    if delta < 0:
-        raise InsufficientInventory("Nothing on hand to consume for this item")
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise InsufficientInventory(
+                f"On-hand is {existing}; that movement would drive it below zero"
+            )
+        if delta < 0:
+            raise InsufficientInventory("Nothing on hand to consume for this item")
 
-    # First movement for this item - create the balance (delta > 0 here).
-    for attempt in range(MAX_BALANCE_CREATE_ATTEMPTS):
+        # 3. First movement for this item (delta > 0): create the balance. If a
+        # concurrent request won the race, loop back and update instead - by
+        # then its row is committed and the guarded UPDATE in step 1 will find
+        # it.
         try:
             async with db.begin_nested():
                 db.add(InventoryBalance(org_id=org_id, item_id=item_id, quantity_on_hand=delta))
                 await db.flush()
             return delta
         except IntegrityError:
-            # Someone created it concurrently; retry as a plain guarded update.
-            row = (await db.execute(stmt)).first()
-            if row is not None:
-                return row[0]
-            if attempt == MAX_BALANCE_CREATE_ATTEMPTS - 1:
-                raise InsufficientInventory("Could not update on-hand, please retry") from None
-    raise AssertionError("unreachable")
+            continue
+
+    raise InsufficientInventory("Could not update on-hand, please retry")

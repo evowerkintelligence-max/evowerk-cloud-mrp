@@ -12,3 +12,4 @@ build/
 *.db
 frontend/.vite/
 frontend/*.tsbuildinfo
+backend/data/

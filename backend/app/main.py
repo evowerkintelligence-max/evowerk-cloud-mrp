@@ -6,14 +6,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     auth,
     boms,
+    datasets,
+    downtime,
     forecasts,
     inventory,
     items,
     locations,
     lots,
+    oee,
     orgs,
     purchase_orders,
+    scrap,
+    shifts,
+    spc,
     suppliers,
+    throughput,
 )
 from app.core.config import get_settings
 
@@ -44,6 +51,13 @@ app.include_router(locations.router)
 app.include_router(inventory.router)
 app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
+app.include_router(datasets.router)
+app.include_router(oee.router)
+app.include_router(downtime.router)
+app.include_router(throughput.router)
+app.include_router(scrap.router)
+app.include_router(shifts.router)
+app.include_router(spc.router)
 
 
 @app.get("/health")

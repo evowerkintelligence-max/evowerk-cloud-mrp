@@ -85,7 +85,7 @@ async def pg_client(pg_engine):
         return fake_redis
 
     app.dependency_overrides[db_session.get_db] = _get_db_override
-    app.dependency_overrides[redis_client.get_redis] = _get_redis_override
+    app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

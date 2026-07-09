@@ -1,7 +1,20 @@
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Package } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { humanize, itemTypeVariant } from "@/lib/status";
 
 interface ItemResponse {
   id: string;
@@ -95,88 +108,120 @@ export function Items() {
 
   return (
     <div>
-      <p>
-        <Link to="/">Back to dashboard</Link>
-      </p>
-      <h1>Items</h1>
+      <PageHeader title="Items" description="Raw materials, components, and finished goods in your catalog." />
 
-      <form onSubmit={onSubmit}>
-        <label>
-          SKU
-          <input value={sku} onChange={(e) => setSku(e.target.value)} required />
-        </label>
-        <label>
-          Name
-          <input value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <label>
-          Type
-          <select value={itemType} onChange={(e) => setItemType(e.target.value)}>
-            <option value="raw_material">Raw material</option>
-            <option value="component">Component</option>
-            <option value="finished_good">Finished good</option>
-          </select>
-        </label>
-        <label>
-          Unit of measure
-          <input value={unitOfMeasure} onChange={(e) => setUnitOfMeasure(e.target.value)} required />
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={isLotTracked}
-            onChange={(e) => setIsLotTracked(e.target.checked)}
-          />
-          Lot tracked
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={createItem.isPending}>
-          Add item
-        </button>
-      </form>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
-      <table>
-        <thead>
-          <tr>
-            <th>SKU</th>
-            <th>Name</th>
-            <th>Type</th>
-            <th>UoM</th>
-            <th>Lot tracked</th>
-            <th>Preferred supplier</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.data?.map((item) => (
-            <tr key={item.id}>
-              <td>{item.sku}</td>
-              <td>{item.name}</td>
-              <td>{item.item_type}</td>
-              <td>{item.unit_of_measure}</td>
-              <td>{item.is_lot_tracked ? "Yes" : "No"}</td>
-              <td>
-                <select
-                  value={item.preferred_supplier_id ?? ""}
-                  disabled={setPreferredSupplier.isPending}
-                  onChange={(e) =>
-                    setPreferredSupplier.mutate({
-                      itemId: item.id,
-                      supplierId: e.target.value || null,
-                    })
-                  }
-                >
-                  <option value="">None</option>
-                  {suppliers.data?.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Add an item</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="SKU" htmlFor="sku">
+              <Input id="sku" value={sku} onChange={(e) => setSku(e.target.value)} required />
+            </Field>
+            <Field label="Name" htmlFor="name">
+              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
+            </Field>
+            <Field label="Type" htmlFor="type">
+              <Select id="type" value={itemType} onChange={(e) => setItemType(e.target.value)}>
+                <option value="raw_material">Raw material</option>
+                <option value="component">Component</option>
+                <option value="finished_good">Finished good</option>
+              </Select>
+            </Field>
+            <Field label="Unit of measure" htmlFor="uom">
+              <Input
+                id="uom"
+                value={unitOfMeasure}
+                onChange={(e) => setUnitOfMeasure(e.target.value)}
+                required
+              />
+            </Field>
+            <label className="flex items-center gap-2 self-end pb-2.5 text-sm">
+              <Checkbox
+                checked={isLotTracked}
+                onChange={(e) => setIsLotTracked(e.target.checked)}
+              />
+              Lot tracked
+            </label>
+            <div className="flex items-end sm:col-span-2 lg:col-span-1 lg:col-start-4">
+              <Button type="submit" className="w-full" loading={createItem.isPending}>
+                Add item
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      {items.data && items.data.length === 0 ? (
+        <EmptyState
+          icon={<Package />}
+          title="No items yet"
+          description="Add your first SKU using the form above."
+        />
+      ) : (
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>SKU</TH>
+                <TH>Name</TH>
+                <TH>Type</TH>
+                <TH>UoM</TH>
+                <TH>Lot tracked</TH>
+                <TH>Preferred supplier</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {items.data?.map((item) => (
+                <TR key={item.id}>
+                  <TD className="font-medium">{item.sku}</TD>
+                  <TD>{item.name}</TD>
+                  <TD>
+                    <Badge variant={itemTypeVariant(item.item_type)}>{humanize(item.item_type)}</Badge>
+                  </TD>
+                  <TD className="text-muted-foreground">{item.unit_of_measure}</TD>
+                  <TD>
+                    {item.is_lot_tracked ? (
+                      <Badge variant="primary">Yes</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">No</span>
+                    )}
+                  </TD>
+                  <TD>
+                    <div className="max-w-[220px]">
+                      <Label className="sr-only">Preferred supplier</Label>
+                      <Select
+                        value={item.preferred_supplier_id ?? ""}
+                        disabled={setPreferredSupplier.isPending}
+                        onChange={(e) =>
+                          setPreferredSupplier.mutate({
+                            itemId: item.id,
+                            supplierId: e.target.value || null,
+                          })
+                        }
+                      >
+                        <option value="">None</option>
+                        {suppliers.data?.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
     </div>
   );
 }

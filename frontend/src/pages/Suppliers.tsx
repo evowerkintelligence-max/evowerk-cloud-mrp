@@ -1,7 +1,15 @@
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Truck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 
 interface SupplierResponse {
   id: string;
@@ -55,48 +63,71 @@ export function Suppliers() {
 
   return (
     <div>
-      <p>
-        <Link to="/">Back to dashboard</Link>
-      </p>
-      <h1>Suppliers</h1>
+      <PageHeader title="Suppliers" description="Your vendor directory — the sources behind purchase orders." />
 
-      <form onSubmit={onSubmit}>
-        <label>
-          Name
-          <input value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <label>
-          Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <label>
-          Phone
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={createSupplier.isPending}>
-          Add supplier
-        </button>
-      </form>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Phone</th>
-          </tr>
-        </thead>
-        <tbody>
-          {suppliers.data?.map((supplier) => (
-            <tr key={supplier.id}>
-              <td>{supplier.name}</td>
-              <td>{supplier.email}</td>
-              <td>{supplier.phone}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Add a supplier</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Name" htmlFor="name">
+              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
+            </Field>
+            <Field label="Email" htmlFor="email">
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </Field>
+            <Field label="Phone" htmlFor="phone">
+              <Input id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </Field>
+            <div className="flex items-end">
+              <Button type="submit" className="w-full" loading={createSupplier.isPending}>
+                Add supplier
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      {suppliers.data && suppliers.data.length === 0 ? (
+        <EmptyState
+          icon={<Truck />}
+          title="No suppliers yet"
+          description="Add a vendor to start creating purchase orders."
+        />
+      ) : (
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Name</TH>
+                <TH>Email</TH>
+                <TH>Phone</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {suppliers.data?.map((supplier) => (
+                <TR key={supplier.id}>
+                  <TD className="font-medium">{supplier.name}</TD>
+                  <TD className="text-muted-foreground">{supplier.email ?? "—"}</TD>
+                  <TD className="text-muted-foreground">{supplier.phone ?? "—"}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
     </div>
   );
 }

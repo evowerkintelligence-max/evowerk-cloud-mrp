@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-that-is-long-enough-for-hs256")
 os.environ.setdefault("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Keep uploaded analytics datasets out of the repo during tests.
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="evowerk-test-data-"))
 
 import fakeredis.aioredis as fakeredis
 import pytest_asyncio
@@ -20,6 +23,7 @@ from app.main import app
 from app.models import (  # noqa: F401 - register models
     audit,
     bom,
+    dataset,
     forecast,
     inventory,
     location,
@@ -57,7 +61,7 @@ async def client(test_engine, monkeypatch):
         return fake_redis
 
     app.dependency_overrides[db_session.get_db] = _get_db_override
-    app.dependency_overrides[redis_client.get_redis] = _get_redis_override
+    app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

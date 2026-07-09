@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { AuthLayout } from "@/components/AuthLayout";
+import { Field } from "@/components/Field";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 
 interface EnrollResponse {
   secret: string;
@@ -41,40 +46,75 @@ export function MfaChallenge() {
 
   if (needsPassword && !password) {
     return (
-      <div>
-        <h1>Confirm your password</h1>
-        <p>MFA is already enabled on this account. Re-enter your password to replace it.</p>
-        <label>
-          Password
-          <input
-            type="password"
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && enroll.refetch()}
-          />
-        </label>
-        <button onClick={() => enroll.refetch()}>Continue</button>
-      </div>
+      <AuthLayout
+        title="Confirm your password"
+        subtitle="MFA is already enabled — re-enter your password to replace it."
+      >
+        <div className="space-y-4">
+          <Field label="Password" htmlFor="mfa-pw">
+            <Input
+              id="mfa-pw"
+              type="password"
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && enroll.refetch()}
+            />
+          </Field>
+          <Button className="w-full" onClick={() => enroll.refetch()}>
+            Continue
+          </Button>
+        </div>
+      </AuthLayout>
     );
   }
 
-  if (enroll.isLoading) return <p>Loading...</p>;
-  if (enroll.isError || !enroll.data) return <p>Could not start MFA enrollment.</p>;
+  if (enroll.isLoading) {
+    return (
+      <AuthLayout title="Two-factor authentication" subtitle="Starting enrollment…">
+        <p className="text-center text-sm text-muted-foreground">Loading…</p>
+      </AuthLayout>
+    );
+  }
+
+  if (enroll.isError || !enroll.data) {
+    return (
+      <AuthLayout title="Two-factor authentication">
+        <Alert variant="destructive">Could not start MFA enrollment.</Alert>
+      </AuthLayout>
+    );
+  }
 
   return (
-    <div>
-      <h1>Enable two-factor authentication</h1>
-      <p>Scan this in your authenticator app, or enter the secret manually:</p>
-      <code>{enroll.data.secret}</code>
-      <p>
-        <a href={enroll.data.provisioning_uri}>{enroll.data.provisioning_uri}</a>
-      </p>
-      <label>
-        Enter the 6-digit code to confirm
-        <input value={code} onChange={(e) => setCode(e.target.value)} />
-      </label>
-      <button onClick={verify}>Confirm</button>
-      {status === "ok" && <p>MFA enabled.</p>}
-      {status === "error" && <p role="alert">Invalid code, try again.</p>}
-    </div>
+    <AuthLayout
+      title="Enable two-factor authentication"
+      subtitle="Scan the secret in your authenticator app, then confirm with a code."
+    >
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">Secret key</p>
+          <code className="block break-all rounded-md border border-border bg-background/60 px-3 py-2 font-mono text-sm text-primary">
+            {enroll.data.secret}
+          </code>
+          <a
+            href={enroll.data.provisioning_uri}
+            className="block break-all text-xs text-muted-foreground hover:text-primary"
+          >
+            {enroll.data.provisioning_uri}
+          </a>
+        </div>
+        <Field label="6-digit code" htmlFor="mfa-code">
+          <Input
+            id="mfa-code"
+            inputMode="numeric"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+        </Field>
+        <Button className="w-full" onClick={verify}>
+          Confirm
+        </Button>
+        {status === "ok" && <Alert variant="success">MFA enabled.</Alert>}
+        {status === "error" && <Alert variant="destructive">Invalid code, try again.</Alert>}
+      </div>
+    </AuthLayout>
   );
 }

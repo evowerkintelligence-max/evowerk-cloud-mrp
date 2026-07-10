@@ -7,6 +7,7 @@ import {
   Database,
   FileText,
   Layers,
+  LayoutGrid,
   MapPin,
   Package,
   ShieldCheck,
@@ -49,6 +50,7 @@ const LINKS = [
   { to: "/planning", label: "Planning", description: "Forecasts, MRP, and auto-POs", icon: CalendarRange },
   { to: "/analytics", label: "Analytics", description: "OEE, downtime, throughput, scrap, shifts, SPC", icon: BarChart3 },
   { to: "/datasets", label: "Datasets", description: "Upload, clean, and query production data", icon: Database },
+  { to: "/bi", label: "BI Dashboards", description: "Build charts and save them to dashboards", icon: LayoutGrid },
   { to: "/ask", label: "Ask", description: "Natural-language Q&A over your data", icon: Sparkles },
   { to: "/reports", label: "Reports", description: "Export PDF/CSV reports", icon: FileText },
 ];

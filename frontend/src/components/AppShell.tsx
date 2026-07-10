@@ -8,6 +8,7 @@ import {
   Database,
   Gauge,
   LayoutDashboard,
+  LayoutGrid,
   Layers,
   LogOut,
   MapPin,
@@ -50,6 +51,7 @@ const ANALYTICS_NAV = [
   { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX, end: false },
   { to: "/analytics/shifts", label: "Shifts", icon: Users, end: false },
   { to: "/analytics/spc", label: "SPC", icon: Activity, end: false },
+  { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, end: false },
 ];
 
 function Brand() {

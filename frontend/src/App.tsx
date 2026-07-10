@@ -23,6 +23,9 @@ import { Shifts } from "./pages/analytics/Shifts";
 import { Spc } from "./pages/analytics/Spc";
 import { Ask } from "./pages/Ask";
 import { Reports } from "./pages/Reports";
+import { Dashboards as BiDashboards } from "./pages/bi/Dashboards";
+import { ChartBuilder } from "./pages/bi/ChartBuilder";
+import { DashboardDetail as BiDashboardDetail } from "./pages/bi/DashboardDetail";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -70,6 +73,9 @@ export function App() {
         <Route path="/datasets/:id" element={<DatasetDetail />} />
         <Route path="/ask" element={<Ask />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/bi" element={<BiDashboards />} />
+        <Route path="/bi/new" element={<ChartBuilder />} />
+        <Route path="/bi/:id" element={<BiDashboardDetail />} />
       </Route>
     </Routes>
   );

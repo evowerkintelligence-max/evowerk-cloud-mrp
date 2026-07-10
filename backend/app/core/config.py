@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     rate_limit_login_per_5min: int = 60
     rate_limit_refresh_per_5min: int = 120
     rate_limit_mfa_verify_per_5min: int = 30
+    # Free-text SQL is materially more expensive than the allow-listed query
+    # builder (full dataset load + arbitrary joins/aggregates per call), so
+    # unlike /datasets/{id}/query it gets its own limit.
+    rate_limit_sql_query_per_5min: int = 30
+    sql_query_timeout_seconds: float = 10.0
 
     cors_origins: list[str] = ["http://localhost:5173"]
 

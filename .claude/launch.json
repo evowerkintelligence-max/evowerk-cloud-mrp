@@ -11,13 +11,15 @@
       "name": "backend-dev",
       "runtimeExecutable": "backend/.venv/Scripts/python.exe",
       "runtimeArgs": ["backend/dev_server.py"],
-      "port": 8000
+      "port": 8010,
+      "env": { "PORT": "8010" }
     },
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
-      "port": 5173
+      "port": 5173,
+      "env": { "BACKEND_PORT": "8010" }
     }
   ]
 }

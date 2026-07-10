@@ -24,6 +24,7 @@ from app.main import app
 from app.models import (  # noqa: F401 - register models
     audit,
     bom,
+    dashboard,
     dataset,
     forecast,
     inventory,

@@ -25,6 +25,7 @@ from app.main import app
 from app.models import (  # noqa: F401 - register models on the metadata
     audit,
     bom,
+    dashboard,
     dataset,
     forecast,
     inventory,
@@ -64,4 +65,4 @@ async def _init_tables():
 
 if __name__ == "__main__":
     asyncio.run(_init_tables())
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8000)), log_level="warning")

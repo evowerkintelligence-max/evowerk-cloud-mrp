@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     ai_insights,
     auth,
+    bi,
     boms,
     datasets,
     downtime,
@@ -73,6 +74,7 @@ app.include_router(quality.router)
 app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
 app.include_router(reports.router)
+app.include_router(bi.router)
 
 
 @app.get("/health")

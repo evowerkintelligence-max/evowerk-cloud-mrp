@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.dataset import Dataset
@@ -275,7 +275,7 @@ async def pivot_dataset(
 @router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dataset(
     dataset_id: uuid.UUID,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)

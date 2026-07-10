@@ -45,6 +45,11 @@ class Item(Base):
     preferred_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Supplier lead time in days, for reorder-point calculation (see
+    # app.services.inventory_analytics). Nullable and NOT defaulted to 0 - no
+    # lead time recorded is a real "insufficient data" state, not a same-day
+    # lead time, and a 0 would silently understate the reorder point.
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

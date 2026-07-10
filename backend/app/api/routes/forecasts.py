@@ -19,6 +19,8 @@ from app.models.forecast import DemandForecast
 from app.models.inventory import InventoryBalance
 from app.models.lot import Lot
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine, Supplier
+from app.services.demand_forecasting import DEFAULT_HORIZON_DAYS, compute_demand_forecast
+from app.services.pricing import latest_unit_prices
 
 # A repeat import of the same period is an upsert, so the only real collision is
 # two *first* inserts of the same (item, period) racing. One retry after
@@ -72,6 +74,25 @@ class ForecastImportResponse(BaseModel):
     created: int
     updated: int
     total: int
+
+
+class SuggestedForecastPoint(BaseModel):
+    period_start: date
+    quantity: Decimal
+    lower: Decimal | None
+    upper: Decimal | None
+
+
+class SuggestedForecastResponse(BaseModel):
+    item_id: str
+    item_sku: str
+    item_name: str
+    # moving_avg | exp_smoothing | no_data - see services.demand_forecasting.
+    method_used: str
+    # Non-zero consumption days found in the lookback window - a rough
+    # confidence signal for how much this projection should be trusted.
+    history_points: int
+    points: list[SuggestedForecastPoint]
 
 
 class MrpPlanLine(BaseModel):
@@ -424,6 +445,39 @@ async def delete_forecast(
     await db.commit()
 
 
+@router.get("/suggested/{item_id}", response_model=SuggestedForecastResponse)
+async def get_suggested_forecast(
+    item_id: uuid.UUID,
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only, data-driven demand projection for one item (moving average
+    or exponential smoothing over its consumption history - see
+    services.demand_forecasting), for review before turning it into an actual
+    forecast via POST /forecasts. Never written anywhere itself."""
+    if horizon_days <= 0 or horizon_days > 365:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_days must be between 1 and 365")
+    item = await _get_item_or_404(db, current.org_id, item_id)
+    result = await compute_demand_forecast(db, current.org_id, item_id, horizon_days=horizon_days)
+    return SuggestedForecastResponse(
+        item_id=str(item.id),
+        item_sku=item.sku,
+        item_name=item.name,
+        method_used=result.method_used,
+        history_points=result.history_points,
+        points=[
+            SuggestedForecastPoint(
+                period_start=p.period_start,
+                quantity=Decimal(str(round(p.yhat, 4))),
+                lower=Decimal(str(round(p.lower, 4))) if p.lower is not None else None,
+                upper=Decimal(str(round(p.upper, 4))) if p.upper is not None else None,
+            )
+            for p in result.points
+        ],
+    )
+
+
 # --------------------------------------------------------------------------- #
 # MRP netting
 # --------------------------------------------------------------------------- #
@@ -662,27 +716,6 @@ async def run_mrp_plan(
     return MrpPlanResponse(horizon_start=hs, horizon_end=he, lines=lines)
 
 
-async def _latest_unit_prices(
-    db: AsyncSession, org_id: uuid.UUID, item_ids: set[uuid.UUID]
-) -> dict[uuid.UUID, Decimal]:
-    """Most recent negotiated unit_price per item across all its PO lines, to
-    prefill a suggested draft (the buyer edits before submitting). PO lines have
-    no timestamp of their own, so 'most recent' is by the parent PO's
-    created_at."""
-    if not item_ids:
-        return {}
-    rows = await db.execute(
-        select(PurchaseOrderLine.item_id, PurchaseOrderLine.unit_price, PurchaseOrder.created_at)
-        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
-        .where(PurchaseOrder.org_id == org_id, PurchaseOrderLine.item_id.in_(item_ids))
-    )
-    latest: dict[uuid.UUID, tuple[Decimal, datetime]] = {}
-    for item_id, price, created_at in rows.all():
-        if item_id not in latest or created_at > latest[item_id][1]:
-            latest[item_id] = (price, created_at)
-    return {item_id: price for item_id, (price, _) in latest.items()}
-
-
 async def _new_draft_po(
     db: AsyncSession, org_id: uuid.UUID, supplier_id: uuid.UUID, created_by: uuid.UUID
 ) -> PurchaseOrder:
@@ -808,7 +841,7 @@ async def generate_po(
             )
         chosen.append(line)
 
-    prices = await _latest_unit_prices(db, org_id, {uuid.UUID(line.item_id) for line in chosen})
+    prices = await latest_unit_prices(db, org_id, {uuid.UUID(line.item_id) for line in chosen})
     po = await _new_draft_po(db, org_id, supplier_id, current.id)
     response_lines = await _add_po_lines(db, org_id, po, chosen, prices)
     await db.flush()
@@ -885,7 +918,7 @@ async def generate_pos(
         else:
             groups[supplier_id].append(line)
 
-    prices = await _latest_unit_prices(db, org_id, item_uuids)
+    prices = await latest_unit_prices(db, org_id, item_uuids)
     suppliers = {
         s.id: s
         for s in (

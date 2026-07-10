@@ -84,3 +84,139 @@ async def test_tenant_isolation(client):
         f"/datasets/{dataset_id}", headers={"Authorization": f"Bearer {token_b}"}
     )
     assert res.status_code == 404
+
+
+async def test_clean_trims_dedupes_and_fills(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dirty = b"sku,qty,region\n A-1 ,10,east\nA-2,,west\nA-1,10,east\n"
+    dataset_id = (await _upload(client, token, filename="dirty.csv", content=dirty)).json()["id"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/clean",
+        headers=headers,
+        json={
+            "trim_strings": True,
+            "drop_duplicates": True,
+            "fill_missing": True,
+            "fill_strategy": "custom",
+            "fill_value": "0",
+        },
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert set(body["ops"]) == {"Fill missing with custom", "Trim strings", "Drop duplicates"}
+    cleaned_id = body["dataset"]["id"]
+    assert body["dataset"]["row_count"] == 2  # the duplicate "A-1,10,east" row is dropped
+
+    preview = (await client.get(f"/datasets/{cleaned_id}", headers=headers)).json()["preview"]
+    row_a1 = next(r for r in preview if r["sku"] == "A-1")
+    assert row_a1["qty"] == "10"
+    row_a2 = next(r for r in preview if r["sku"] == "A-2")
+    assert row_a2["qty"] == "0"
+
+
+async def test_clean_removes_outliers(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    rows = "sku,qty\n" + "".join(f"A-{i},{10 + i}\n" for i in range(9)) + "A-9,1000\n"
+    dataset_id = (await _upload(client, token, filename="outliers.csv", content=rows.encode())).json()["id"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/clean",
+        headers=headers,
+        json={
+            "trim_strings": False,
+            "drop_duplicates": False,
+            "remove_outliers": True,
+            "outlier_columns": ["qty"],
+            "outlier_strategy": "remove",
+        },
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert "Remove outliers (IQR 1.5)" in body["ops"]
+    assert body["dataset"]["row_count"] == 9
+
+
+async def test_clean_rejects_cross_tenant_dataset(client):
+    token_a = await _register_and_login(client, email="a@example.com", org_name="A Co")
+    token_b = await _register_and_login(client, email="b@example.com", org_name="B Co")
+    dataset_id = (await _upload(client, token_a)).json()["id"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/clean",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={},
+    )
+    assert res.status_code == 404
+
+
+async def test_select_columns_drops_and_reports_the_rest(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = (await _upload(client, token)).json()["id"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/transform/select-columns",
+        headers=headers,
+        json={"columns": ["sku", "qty"]},
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert body["dropped_columns"] == ["region"]
+    assert {c["name"] for c in body["dataset"]["columns"]} == {"sku", "qty"}
+
+
+async def test_select_columns_rejects_when_none_exist(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = (await _upload(client, token)).json()["id"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/transform/select-columns",
+        headers=headers,
+        json={"columns": ["nonexistent"]},
+    )
+    assert res.status_code == 400
+
+
+async def test_pivot_wide_to_tall_and_back(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    wide = b"timestamp,temp,pressure\n2024-01-01,20,100\n2024-01-02,21,101\n"
+    dataset_id = (await _upload(client, token, filename="wide.csv", content=wide)).json()["id"]
+
+    tall_res = await client.post(
+        f"/datasets/{dataset_id}/transform/pivot",
+        headers=headers,
+        json={"direction": "wide_to_tall", "timestamp_col": "timestamp"},
+    )
+    assert tall_res.status_code == 201
+    tall = tall_res.json()
+    assert {c["name"] for c in tall["columns"]} == {"timestamp", "tag", "value"}
+    assert tall["row_count"] == 4  # 2 rows x 2 tag columns
+
+    wide_res = await client.post(
+        f"/datasets/{tall['id']}/transform/pivot",
+        headers=headers,
+        json={"direction": "tall_to_wide", "timestamp_col": "timestamp"},
+    )
+    assert wide_res.status_code == 201
+    wide_back = wide_res.json()
+    assert {c["name"] for c in wide_back["columns"]} == {"timestamp", "temp", "pressure"}
+    assert wide_back["row_count"] == 2
+
+
+async def test_pivot_requires_timestamp_column(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    no_ts = b"a,b,c\n1,2,3\n"
+    dataset_id = (await _upload(client, token, filename="no_ts.csv", content=no_ts)).json()["id"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/transform/pivot",
+        headers=headers,
+        json={"direction": "tall_to_wide", "timestamp_col": "nonexistent"},
+    )
+    assert res.status_code == 400

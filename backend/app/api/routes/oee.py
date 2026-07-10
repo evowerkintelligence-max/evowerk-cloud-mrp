@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.services import datasets as ds_service
-from app.services.oee_calc import (
+from app.analytics.oee_calc import (
     compute_components_ideal,
     oee_grouped,
     oee_overall,

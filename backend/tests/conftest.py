@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-that-is-long-enough-for-hs256")
 os.environ.setdefault("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Dataset uploads hit the real filesystem (only the DB is in-memory sqlite) -
+# without this, every test run leaves orphaned files under ./data.
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="evowerk-test-data-"))
 
 import fakeredis.aioredis as fakeredis
 import pytest_asyncio
@@ -20,6 +24,7 @@ from app.main import app
 from app.models import (  # noqa: F401 - register models
     audit,
     bom,
+    dataset,
     forecast,
     inventory,
     inventory_snapshot,

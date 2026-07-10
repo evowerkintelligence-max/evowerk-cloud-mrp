@@ -42,7 +42,8 @@ export function Dashboard() {
         <Link to="/items">Items</Link> · <Link to="/boms">Bills of Materials</Link> ·{" "}
         <Link to="/suppliers">Suppliers</Link> · <Link to="/purchase-orders">Purchase Orders</Link> ·{" "}
         <Link to="/lots">Lots</Link> · <Link to="/inventory">Inventory</Link> ·{" "}
-        <Link to="/locations">Locations</Link> · <Link to="/planning">Planning</Link>
+        <Link to="/locations">Locations</Link> · <Link to="/planning">Planning</Link> ·{" "}
+        <Link to="/datasets">Datasets</Link>
       </p>
       <button onClick={logout}>Log out</button>
     </div>

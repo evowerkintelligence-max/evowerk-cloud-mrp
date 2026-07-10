@@ -12,6 +12,8 @@ import { Lots } from "./pages/Lots";
 import { Inventory } from "./pages/Inventory";
 import { Locations } from "./pages/Locations";
 import { Planning } from "./pages/Planning";
+import { Datasets } from "./pages/Datasets";
+import { DatasetDetail } from "./pages/DatasetDetail";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -101,6 +103,22 @@ export function App() {
         element={
           <RequireAuth>
             <Planning />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/datasets"
+        element={
+          <RequireAuth>
+            <Datasets />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/datasets/:id"
+        element={
+          <RequireAuth>
+            <DatasetDetail />
           </RequireAuth>
         }
       />

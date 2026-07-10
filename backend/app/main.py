@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     auth,
     boms,
+    datasets,
     forecasts,
     inventory,
     inventory_analytics,
@@ -49,6 +50,7 @@ app.include_router(inventory_analytics.router)
 app.include_router(inventory.router)
 app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
+app.include_router(datasets.router)
 
 
 @app.get("/health")

@@ -13,6 +13,7 @@ export default defineConfig({
       "/suppliers": "http://localhost:8000",
       "/purchase-orders": "http://localhost:8000",
       "/lots": "http://localhost:8000",
+      "/datasets": "http://localhost:8000",
     },
   },
 });

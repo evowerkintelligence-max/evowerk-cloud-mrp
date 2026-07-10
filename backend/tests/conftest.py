@@ -31,6 +31,7 @@ from app.models import (  # noqa: F401 - register models
     location,
     lot,
     procurement,
+    telemetry,
     tenant,
     user,
 )
@@ -64,6 +65,9 @@ async def client(test_engine, monkeypatch):
 
     app.dependency_overrides[db_session.get_db] = _get_db_override
     app.dependency_overrides[redis_client.get_redis] = _get_redis_override
+    # TelemetryMiddleware opens its own session outside the DI chain, so it needs
+    # its own patch of the factory to land in the test DB instead of the real one.
+    monkeypatch.setattr(db_session, "async_session_factory", session_factory)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

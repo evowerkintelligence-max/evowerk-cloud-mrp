@@ -19,6 +19,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     location,
     lot,
     procurement,
+    telemetry,
     tenant,
     user,
 )

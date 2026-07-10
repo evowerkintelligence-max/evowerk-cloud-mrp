@@ -21,6 +21,7 @@ from app.api.routes import (
     suppliers,
 )
 from app.core.config import get_settings
+from app.middleware.telemetry import TelemetryMiddleware
 
 settings = get_settings()
 
@@ -30,6 +31,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(TelemetryMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

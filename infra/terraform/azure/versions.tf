@@ -20,7 +20,10 @@ terraform {
 provider "azurerm" {
   features {
     key_vault {
-      purge_soft_delete_on_destroy    = true
+      # false on purpose: a destroy/replace only soft-deletes the vault, leaving
+      # it recoverable for its retention window instead of permanently wiping
+      # the JWT secret, DB password, and MFA key with no way back.
+      purge_soft_delete_on_destroy    = false
       recover_soft_deleted_key_vaults = true
     }
   }

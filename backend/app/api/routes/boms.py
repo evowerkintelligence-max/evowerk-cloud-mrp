@@ -121,7 +121,13 @@ async def _would_create_cycle(
         )
         frontier = {row[0] for row in lines_result.all()}
 
-    return False
+    # Budget exhausted with frontier still non-empty: we can't prove there's no
+    # cycle beyond this depth. Silently returning False here would let a
+    # genuine deep cycle through and corrupt MRP netting - fail closed instead.
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"Can't verify this BOM graph is acyclic within {MAX_CYCLE_CHECK_DEPTH} levels - refusing to activate",
+    )
 
 
 @router.post("", response_model=BomResponse, status_code=status.HTTP_201_CREATED)

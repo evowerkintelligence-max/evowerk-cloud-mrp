@@ -352,7 +352,7 @@ export function Planning() {
                         variant="ghost"
                         size="sm"
                         onClick={() => deleteForecast.mutate(fc.id)}
-                        loading={deleteForecast.isPending}
+                        loading={deleteForecast.isPending && deleteForecast.variables === fc.id}
                       >
                         Delete
                       </Button>

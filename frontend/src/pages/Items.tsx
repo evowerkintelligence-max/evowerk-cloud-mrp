@@ -199,7 +199,7 @@ export function Items() {
                       <Label className="sr-only">Preferred supplier</Label>
                       <Select
                         value={item.preferred_supplier_id ?? ""}
-                        disabled={setPreferredSupplier.isPending}
+                        disabled={setPreferredSupplier.isPending && setPreferredSupplier.variables?.itemId === item.id}
                         onChange={(e) =>
                           setPreferredSupplier.mutate({
                             itemId: item.id,

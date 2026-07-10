@@ -156,6 +156,41 @@ async def test_activate_rejects_multilevel_cycle(client):
     assert activate_b.status_code == 409
 
 
+async def test_activate_fails_closed_on_cycle_deeper_than_budget(client):
+    """A cycle spanning more levels than MAX_CYCLE_CHECK_DEPTH must still be
+    rejected, not silently treated as acyclic just because the walk ran out
+    of budget before reaching back around to the target item."""
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 25 items, each (but the last) with an active BOM whose sole component is
+    # the next item: I0 -> I1 -> ... -> I23 -> I24. 25 > MAX_CYCLE_CHECK_DEPTH
+    # (20), so the closing edge below isn't reachable within the walk's budget.
+    n = 25
+    items = [await _create_item(client, token, sku=f"CYC-{i}", name=f"Item {i}") for i in range(n)]
+    for i in range(n - 1):
+        bom = await client.post("/boms", json={"item_id": items[i]["id"]}, headers=headers)
+        bom_id = bom.json()["id"]
+        await client.patch(
+            f"/boms/{bom_id}",
+            json=[{"component_item_id": items[i + 1]["id"], "quantity": "1", "sequence": 0}],
+            headers=headers,
+        )
+        activated = await client.post(f"/boms/{bom_id}/activate", headers=headers)
+        assert activated.status_code == 200
+
+    # Close the loop: I24 -> I0.
+    closing_bom = await client.post("/boms", json={"item_id": items[n - 1]["id"]}, headers=headers)
+    closing_bom_id = closing_bom.json()["id"]
+    await client.patch(
+        f"/boms/{closing_bom_id}",
+        json=[{"component_item_id": items[0]["id"], "quantity": "1", "sequence": 0}],
+        headers=headers,
+    )
+    res = await client.post(f"/boms/{closing_bom_id}/activate", headers=headers)
+    assert res.status_code == 409
+
+
 async def test_bom_cross_tenant_isolation(client):
     token_a, _ = await _register_and_login(client, email="orga@example.com", org_name="OrgA")
     token_b, _ = await _register_and_login(client, email="orgb@example.com", org_name="OrgB")

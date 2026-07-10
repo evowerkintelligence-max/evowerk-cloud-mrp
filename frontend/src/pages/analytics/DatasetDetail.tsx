@@ -55,6 +55,9 @@ type Tab = (typeof TABS)[number];
 const AGG_OPTIONS = ["", "sum", "avg", "min", "max", "count"] as const;
 const FILTER_OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"] as const;
 const ITEM_JOIN_COLUMNS = ["sku", "name", "item_type", "lead_time_days", "on_hand"];
+// Matches ITEM_JOIN_COLUMNS' backend types (see _items_relation_sql's col_types) -
+// the rest of ITEM_JOIN_COLUMNS is VARCHAR.
+const ITEM_JOIN_NUMERIC_COLUMNS = new Set(["lead_time_days", "on_hand"]);
 
 interface SelectFieldRow {
   column: string;
@@ -595,6 +598,25 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
   const [joinItemsOn, setJoinItemsOn] = useState("");
   const allColumns = joinItemsOn ? [...names, ...ITEM_JOIN_COLUMNS.map((c) => `items.${c}`)] : names;
 
+  // CSV/TSV datasets are sniffed with ALL_VARCHAR=1 (see relation_for), so
+  // d.columns[].dtype is always "VARCHAR" and can't tell a numeric column from
+  // a text one - the health endpoint's inferred_dtype (based on actual cell
+  // content) is the real source of truth for that. Same query key as
+  // HealthPanel, so this is a no-op fetch if that tab was already visited.
+  const health = useQuery<Health>({
+    queryKey: ["dataset-health", d.id],
+    queryFn: async () => {
+      const res = await apiFetch(`/datasets/${d.id}/health`);
+      if (!res.ok) throw new Error("Failed to compute health");
+      return res.json();
+    },
+  });
+  const dtypeByColumn = new Map(health.data?.columns.map((c) => [c.name, c.inferred_dtype]));
+  function isNumericColumn(column: string): boolean {
+    if (column.startsWith("items.")) return ITEM_JOIN_NUMERIC_COLUMNS.has(column.slice("items.".length));
+    return dtypeByColumn.get(column) === "numeric";
+  }
+
   const [fields, setFields] = useState<SelectFieldRow[]>([{ column: names[0] ?? "", agg: "", alias: "" }]);
   const [groupBy, setGroupBy] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState<FilterRow[]>([]);
@@ -622,7 +644,7 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
           const value =
             f.op === "in"
               ? f.value.split(",").map((v) => v.trim()).filter(Boolean)
-              : f.op !== "contains" && f.value !== "" && !Number.isNaN(Number(f.value))
+              : f.op !== "contains" && f.value !== "" && isNumericColumn(f.column)
                 ? Number(f.value)
                 : f.value;
           return { column: f.column, op: f.op, value };

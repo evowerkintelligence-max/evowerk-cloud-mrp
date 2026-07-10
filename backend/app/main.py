@@ -4,17 +4,26 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
+    ai_insights,
     auth,
     boms,
+    datasets,
     forecasts,
     inventory,
+    inventory_analytics,
     items,
+    locations,
     lots,
+    oee,
     orgs,
+    process_mining,
     purchase_orders,
+    quality,
+    reports,
     suppliers,
 )
 from app.core.config import get_settings
+from app.middleware.telemetry import TelemetryMiddleware
 
 settings = get_settings()
 
@@ -24,6 +33,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(TelemetryMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -39,9 +49,20 @@ app.include_router(boms.router)
 app.include_router(suppliers.router)
 app.include_router(purchase_orders.router)
 app.include_router(lots.router)
+app.include_router(locations.router)
+# Must be registered before inventory.router: /inventory/analytics is a
+# static path that would otherwise be shadowed by inventory.router's
+# /inventory/{item_id} (Starlette matches path shape before UUID validation).
+app.include_router(inventory_analytics.router)
 app.include_router(inventory.router)
 app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
+app.include_router(datasets.router)
+app.include_router(oee.router)
+app.include_router(quality.router)
+app.include_router(process_mining.router)
+app.include_router(ai_insights.router)
+app.include_router(reports.router)
 
 
 @app.get("/health")

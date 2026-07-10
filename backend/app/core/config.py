@@ -38,6 +38,15 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Ad-hoc dataset import layer: uploaded files are stored under this root,
+    # partitioned per org. Local filesystem for now; an object-storage backend
+    # slots in behind app/services/storage.py later.
+    data_dir: str = "./data"
+    max_upload_mb: int = 100
+    allowed_dataset_exts: list[str] = [
+        "csv", "tsv", "xlsx", "xls", "json", "jsonl", "ndjson", "parquet",
+    ]
+
 
 @lru_cache
 def get_settings() -> Settings:

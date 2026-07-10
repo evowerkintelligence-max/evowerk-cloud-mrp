@@ -29,10 +29,14 @@ class ItemCreateRequest(BaseModel):
 
 
 class ItemUpdateRequest(BaseModel):
-    # Always explicit: null clears the preference. This is the only mutable
-    # field for now (sku/type/lot-tracking are load-bearing for history and
-    # deliberately fixed after creation).
+    # Always explicit: null clears the preference. This is the only
+    # required-every-call field (sku/type/lot-tracking are load-bearing for
+    # history and deliberately fixed after creation).
     preferred_supplier_id: str | None
+    # Optional/omittable, unlike preferred_supplier_id above: existing callers
+    # that only ever sent preferred_supplier_id shouldn't have this silently
+    # reset to null. Checked via model_fields_set in update_item.
+    lead_time_days: int | None = None
 
 
 class ItemResponse(BaseModel):
@@ -43,6 +47,7 @@ class ItemResponse(BaseModel):
     unit_of_measure: str
     is_lot_tracked: bool
     preferred_supplier_id: str | None
+    lead_time_days: int | None
 
 
 def _to_response(item: Item) -> ItemResponse:
@@ -56,6 +61,7 @@ def _to_response(item: Item) -> ItemResponse:
         preferred_supplier_id=(
             str(item.preferred_supplier_id) if item.preferred_supplier_id else None
         ),
+        lead_time_days=item.lead_time_days,
     )
 
 
@@ -146,6 +152,10 @@ async def update_item(
     item.preferred_supplier_id = await _resolve_supplier_id(
         db, current.org_id, body.preferred_supplier_id
     )
+    if "lead_time_days" in body.model_fields_set:
+        if body.lead_time_days is not None and body.lead_time_days < 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "lead_time_days must be non-negative")
+        item.lead_time_days = body.lead_time_days
     await db.flush()
 
     await log_event(

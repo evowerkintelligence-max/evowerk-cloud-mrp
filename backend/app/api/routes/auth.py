@@ -28,6 +28,7 @@ from app.core.security import (
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.middleware.rate_limit import rate_limit
+from app.models.location import Location
 from app.models.tenant import Org
 from app.models.user import RefreshToken, User
 
@@ -129,6 +130,11 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
     org = Org(name=body.org_name)
     db.add(org)
     await db.flush()
+
+    # Every org starts with one default location so the location dimension is
+    # optional: receive/consume/adjust fall back to it until the user creates
+    # more (see app.services.inventory / app.api.routes.inventory).
+    db.add(Location(org_id=org.id, code="MAIN", name="Main", is_default=True))
 
     user = User(
         org_id=org.id,

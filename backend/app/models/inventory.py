@@ -25,13 +25,20 @@ class InventoryBalance(Base):
     """
 
     __tablename__ = "inventory_balances"
-    __table_args__ = (UniqueConstraint("org_id", "item_id", name="uq_inventory_balances_org_item"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "item_id", "location_id", name="uq_inventory_balances_org_item_loc"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     item_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("items.id"), nullable=False, index=True)
+    # On-hand is per location: one balance row per (org, item, location). Total
+    # on-hand for an item is the sum across its locations (see MRP netting).
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     quantity_on_hand: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal(0))
 
     created_at: Mapped[datetime] = mapped_column(
@@ -63,7 +70,12 @@ class InventoryTransaction(Base):
         Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     item_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("items.id"), nullable=False, index=True)
-    # receipt | consumption | adjustment
+    # Which location this movement hit. A transfer records two rows: a
+    # transfer_out at the source and a transfer_in at the destination.
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # receipt | consumption | adjustment | transfer_out | transfer_in
     transaction_type: Mapped[str] = mapped_column(String(20), nullable=False)
     quantity_delta: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     # e.g. "production" | "scrap" | "shipment" | "cycle count" - free text.

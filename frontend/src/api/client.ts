@@ -36,14 +36,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const { accessToken } = useAuthStore.getState();
   const headers = new Headers(init.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-  if (init.body) headers.set("Content-Type", "application/json");
+  if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
 
   let res = await fetch(path, { ...init, headers });
 
   if (res.status === 401 && (await refreshTokens())) {
     const retryHeaders = new Headers(init.headers);
     retryHeaders.set("Authorization", `Bearer ${useAuthStore.getState().accessToken}`);
-    if (init.body) retryHeaders.set("Content-Type", "application/json");
+    if (init.body && !(init.body instanceof FormData)) retryHeaders.set("Content-Type", "application/json");
     res = await fetch(path, { ...init, headers: retryHeaders });
   }
 

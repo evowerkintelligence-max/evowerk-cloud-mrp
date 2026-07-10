@@ -36,6 +36,14 @@ resource "azurerm_postgresql_flexible_server" "main" {
   backup_retention_days = 7
 
   depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
+
+  # azurerm_postgresql_flexible_server has no native deletion_protection
+  # argument like aws_db_instance does - this is the Terraform-level
+  # equivalent so both deploy targets require the same deliberate step
+  # (removing this block) before the DB can be destroyed.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_database" "main" {

@@ -107,7 +107,6 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp
       JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
-      MFA_ENCRYPTION_KEY: "nH7PbBN1oDWzZ8t0w9di2vDvxTFeOY1SOfYfnkIeXJo="
     services:
       postgres:
         image: postgres:16-alpine
@@ -128,6 +127,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - name: Generate MFA encryption key
+        run: echo "MFA_ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
       - name: Run migrations against real Postgres
         run: alembic upgrade head
       - name: Verify audit_logs is append-only
@@ -145,7 +146,6 @@ jobs:
     env:
       CONCURRENCY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp
       JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
-      MFA_ENCRYPTION_KEY: "nH7PbBN1oDWzZ8t0w9di2vDvxTFeOY1SOfYfnkIeXJo="
     services:
       postgres:
         image: postgres:16-alpine
@@ -166,6 +166,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      - name: Generate MFA encryption key
+        run: echo "MFA_ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
       - name: Run concurrency tests against real Postgres
         run: pytest tests/test_concurrency.py -q
 

@@ -96,7 +96,7 @@ def _demand_stats(daily: dict[date, Decimal], lookback_days: int, as_of: date) -
 async def _on_hand_by_item(
     db: AsyncSession, org_id: uuid.UUID, item_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, Decimal]:
-    """Same two-disjoint-source-sum pattern as forecasts._compute_mrp_plan:
+    """Same two-disjoint-source-sum pattern as services.mrp.compute_mrp_plan:
     active Lot.quantity_remaining for lot-tracked items, InventoryBalance for
     everything else, summed across all locations."""
     on_hand: dict[uuid.UUID, Decimal] = {}

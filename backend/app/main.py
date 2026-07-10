@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
+    ai_insights,
     auth,
     boms,
     datasets,
@@ -18,6 +19,7 @@ from app.api.routes import (
     process_mining,
     purchase_orders,
     quality,
+    reports,
     suppliers,
 )
 from app.core.config import get_settings
@@ -59,6 +61,8 @@ app.include_router(datasets.router)
 app.include_router(oee.router)
 app.include_router(quality.router)
 app.include_router(process_mining.router)
+app.include_router(ai_insights.router)
+app.include_router(reports.router)
 
 
 @app.get("/health")

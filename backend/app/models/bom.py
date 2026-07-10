@@ -30,7 +30,7 @@ class Item(Base):
     # IMMUTABLE AFTER CREATION - load-bearing. On-hand for an item comes from
     # exactly one source depending on this flag: lot-tracked items sum their
     # active Lots, everything else uses inventory_balances (see
-    # forecasts._compute_mrp_plan). Those two are disjoint *because* this can't
+    # services.mrp.compute_mrp_plan). Those two are disjoint *because* this can't
     # change: PATCH /items only edits preferred_supplier_id, inventory
     # consume/adjust reject lot-tracked items, and receiving writes to lots XOR
     # inventory by this flag. Making it mutable would strand one ledger and

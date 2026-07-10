@@ -6,14 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/auth": "http://localhost:8000",
-      "/orgs": "http://localhost:8000",
-      "/items": "http://localhost:8000",
-      "/boms": "http://localhost:8000",
-      "/suppliers": "http://localhost:8000",
-      "/purchase-orders": "http://localhost:8000",
-      "/lots": "http://localhost:8000",
-      "/datasets": "http://localhost:8000",
+      // One regex over every backend router prefix (see app/main.py). The old
+      // entry-per-route allowlist silently dropped any router added later:
+      // /forecasts, /mrp, /inventory, /locations and /ai were all missing, so
+      // Planning, Inventory and Ask never reached the API in dev.
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|ai|reports|health)(/|$|\\?)":
+        "http://localhost:8000",
     },
   },
 });

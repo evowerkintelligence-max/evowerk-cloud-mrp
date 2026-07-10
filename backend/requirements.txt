@@ -27,3 +27,6 @@ python-multipart>=0.0.9
 
 # Quality analytics: KMeans clustering of defect-driving process parameters
 scikit-learn>=1.4.0
+
+# Report exports. PDF only - the HTML and CSV renderers are stdlib.
+reportlab>=4.0.0

@@ -131,7 +131,9 @@ async def _items_relation_sql(db: AsyncSession, con: duckdb.DuckDBPyConnection, 
         )
         for i in items
     )
-    con.execute(f"CREATE TEMP VIEW items AS SELECT * FROM (VALUES {rows}) AS t({', '.join(col_names)})")
+    # nosec B608 - col_names is the fixed ITEM_JOIN_COLUMNS tuple above, rows is
+    # built from _sql_literal (typed, quote-escaped literals) - no external input here.
+    con.execute(f"CREATE TEMP VIEW items AS SELECT * FROM (VALUES {rows}) AS t({', '.join(col_names)})")  # nosec B608
 
 
 async def run_query(db: AsyncSession, dataset: Dataset, org_id: uuid.UUID, req: DatasetQueryRequest) -> dict:
@@ -180,7 +182,7 @@ async def run_query(db: AsyncSession, dataset: Dataset, org_id: uuid.UUID, req: 
             # and an exact-match join would silently drop those rows to NULL.
             from_sql += f' LEFT JOIN items i ON TRIM(CAST({join_col_sql} AS VARCHAR)) = TRIM(i."sku")'
 
-        sql = f"SELECT {', '.join(select_sql)} FROM {from_sql}"
+        sql = f"SELECT {', '.join(select_sql)} FROM {from_sql}"  # nosec B608 - select_sql/from_sql built entirely from qi()-quoted, allow-listed columns above
         if where_sql:
             sql += f" WHERE {' AND '.join(where_sql)}"
         if group_by_sql:

@@ -228,7 +228,7 @@ def _date_span_days(con, rel: str, date_col: str) -> Optional[int]:
     """Inclusive calendar-day span (min → max) of the date column, for TEEP."""
     c = ds_service.qi(date_col)
     sql = (
-        f"SELECT MIN(ts), MAX(ts) FROM (SELECT "
+        f"SELECT MIN(ts), MAX(ts) FROM (SELECT "  # nosec B608 - date_col is qi()-quoted and validate_columns-checked above
         f"COALESCE(TRY_CAST(CAST({c} AS VARCHAR) AS TIMESTAMP), "
         f"CAST(TRY_CAST(CAST({c} AS VARCHAR) AS DATE) AS TIMESTAMP)) AS ts "
         f"FROM {rel})"

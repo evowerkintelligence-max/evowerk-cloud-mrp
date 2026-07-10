@@ -85,7 +85,7 @@ async def pg_client(pg_engine, monkeypatch):
         return fake_redis
 
     app.dependency_overrides[db_session.get_db] = _get_db_override
-    app.dependency_overrides[redis_client.get_redis] = _get_redis_override
+    app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
     # TelemetryMiddleware opens its own session outside the DI chain via the
     # module-level async_session_factory, which is bound to the default engine
     # created once at import time in whatever event loop was running then.

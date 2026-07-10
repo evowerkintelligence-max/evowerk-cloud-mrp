@@ -1,7 +1,18 @@
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Boxes } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { humanize } from "@/lib/status";
 
 interface LocationResponse {
   id: string;
@@ -35,6 +46,12 @@ interface LotTransactionResponse {
 
 interface LotDetailResponse extends LotResponse {
   transactions: LotTransactionResponse[];
+}
+
+function lotStatusVariant(status: string) {
+  if (status === "on_hold") return "warning" as const;
+  if (status === "depleted") return "neutral" as const;
+  return "success" as const;
 }
 
 export function Lots() {
@@ -163,142 +180,186 @@ export function Lots() {
 
   return (
     <div>
-      <p>
-        <Link to="/">Back to dashboard</Link> · <Link to="/items">Manage items</Link> ·{" "}
-        <Link to="/locations">Locations</Link>
-      </p>
-      <h1>Lots</h1>
+      <PageHeader
+        title="Lots"
+        description="Lot-tracked stock from received purchase orders. Select a lot to consume, hold, transfer, or release it."
+      />
 
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Lot #</th>
-            <th>Location</th>
-            <th>Received</th>
-            <th>Remaining</th>
-            <th>Status</th>
-            <th>Expiry</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lots.data?.map((lot) => (
-            <tr key={lot.id} onClick={() => setSelectedLotId(lot.id)} style={{ cursor: "pointer" }}>
-              <td>
-                {lot.item_sku} - {lot.item_name}
-              </td>
-              <td>{lot.lot_number}</td>
-              <td>{lot.location_code}</td>
-              <td>{lot.quantity_received}</td>
-              <td>{lot.quantity_remaining}</td>
-              <td>{lot.status}</td>
-              <td>{lot.expiry_date ?? "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {lots.data && lots.data.length === 0 ? (
+        <EmptyState
+          icon={<Boxes />}
+          title="No lots yet"
+          description="Lots appear here when you receive a lot-tracked item on a purchase order."
+        />
+      ) : (
+        <TableWrap className="mb-8">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Item</TH>
+                <TH>Lot #</TH>
+                <TH>Location</TH>
+                <TH>Received</TH>
+                <TH>Remaining</TH>
+                <TH>Status</TH>
+                <TH>Expiry</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {lots.data?.map((lot) => (
+                <TR
+                  key={lot.id}
+                  onClick={() => setSelectedLotId(lot.id)}
+                  className={`cursor-pointer ${selectedLotId === lot.id ? "bg-primary/5" : ""}`}
+                >
+                  <TD className="font-medium">
+                    {lot.item_sku} - {lot.item_name}
+                  </TD>
+                  <TD className="font-mono text-xs">{lot.lot_number}</TD>
+                  <TD className="text-muted-foreground">{lot.location_code}</TD>
+                  <TD className="text-muted-foreground">{lot.quantity_received}</TD>
+                  <TD>{lot.quantity_remaining}</TD>
+                  <TD>
+                    <Badge variant={lotStatusVariant(lot.status)}>{humanize(lot.status)}</Badge>
+                  </TD>
+                  <TD className="text-muted-foreground">{lot.expiry_date ?? "—"}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
 
       {lotDetail.data && (
-        <section>
-          <h2>
-            {lotDetail.data.item_sku} - Lot {lotDetail.data.lot_number} at {lotDetail.data.location_code} (
-            {lotDetail.data.status})
-          </h2>
-          <p>
-            {lotDetail.data.quantity_remaining} / {lotDetail.data.quantity_received} remaining
-          </p>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                {lotDetail.data.item_sku} · Lot {lotDetail.data.lot_number} · {lotDetail.data.location_code}
+                <Badge variant={lotStatusVariant(lotDetail.data.status)}>
+                  {humanize(lotDetail.data.status)}
+                </Badge>
+              </CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {lotDetail.data.quantity_remaining} / {lotDetail.data.quantity_received} remaining
+              </p>
+            </div>
+            {lotDetail.data.status === "on_hold" ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => releaseLot.mutate()}
+                loading={releaseLot.isPending}
+              >
+                Release hold
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => holdLot.mutate()}
+                loading={holdLot.isPending}
+              >
+                Hold
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {lotDetail.data.status !== "on_hold" && (
+              <div className="grid gap-4 md:grid-cols-2">
+                <form onSubmit={onConsume} className="space-y-3 rounded-lg border border-border p-4">
+                  <p className="text-sm font-semibold">Consume</p>
+                  <Field label="Quantity" htmlFor="consume-qty">
+                    <Input
+                      id="consume-qty"
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      value={consumeQuantity}
+                      onChange={(e) => setConsumeQuantity(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="Reason (optional)" htmlFor="consume-reason">
+                    <Input
+                      id="consume-reason"
+                      value={consumeReason}
+                      onChange={(e) => setConsumeReason(e.target.value)}
+                    />
+                  </Field>
+                  <Button type="submit" variant="secondary" className="w-full" loading={consumeLot.isPending}>
+                    Consume
+                  </Button>
+                </form>
 
-          {lotDetail.data.status !== "on_hold" && (
-            <form onSubmit={onConsume}>
-              <label>
-                Quantity
-                <input
-                  type="number"
-                  step="0.0001"
-                  min="0.0001"
-                  value={consumeQuantity}
-                  onChange={(e) => setConsumeQuantity(e.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                Reason (optional)
-                <input value={consumeReason} onChange={(e) => setConsumeReason(e.target.value)} />
-              </label>
-              <button type="submit" disabled={consumeLot.isPending}>
-                Consume
-              </button>
-            </form>
-          )}
+                <form onSubmit={onTransfer} className="space-y-3 rounded-lg border border-border p-4">
+                  <p className="text-sm font-semibold">Transfer</p>
+                  <Field label="Quantity" htmlFor="transfer-qty">
+                    <Input
+                      id="transfer-qty"
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      value={transferQuantity}
+                      onChange={(e) => setTransferQuantity(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="To location" htmlFor="transfer-loc">
+                    <Select
+                      id="transfer-loc"
+                      value={transferToLocation}
+                      onChange={(e) => setTransferToLocation(e.target.value)}
+                    >
+                      <option value="">Select…</option>
+                      {locations.data
+                        ?.filter((l) => l.id !== lotDetail.data?.location_id)
+                        .map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.code}
+                          </option>
+                        ))}
+                    </Select>
+                  </Field>
+                  <Button type="submit" variant="secondary" className="w-full" loading={transferLot.isPending}>
+                    Transfer
+                  </Button>
+                </form>
+              </div>
+            )}
 
-          {lotDetail.data.status === "on_hold" ? (
-            <button onClick={() => releaseLot.mutate()} disabled={releaseLot.isPending}>
-              Release hold
-            </button>
-          ) : (
-            <button onClick={() => holdLot.mutate()} disabled={holdLot.isPending}>
-              Hold
-            </button>
-          )}
-
-          {lotDetail.data.status !== "on_hold" && (
-            <form onSubmit={onTransfer}>
-              <label>
-                Transfer
-                <input
-                  type="number"
-                  step="0.0001"
-                  min="0.0001"
-                  value={transferQuantity}
-                  onChange={(e) => setTransferQuantity(e.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                to
-                <select
-                  value={transferToLocation}
-                  onChange={(e) => setTransferToLocation(e.target.value)}
-                >
-                  <option value="">Select…</option>
-                  {locations.data
-                    ?.filter((l) => l.id !== lotDetail.data?.location_id)
-                    .map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.code}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <button type="submit" disabled={transferLot.isPending}>
-                Transfer
-              </button>
-            </form>
-          )}
-
-          <table>
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Quantity</th>
-                <th>Reason</th>
-                <th>When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lotDetail.data.transactions.map((tx) => (
-                <tr key={tx.id}>
-                  <td>{tx.transaction_type}</td>
-                  <td>{tx.quantity}</td>
-                  <td>{tx.reason ?? "-"}</td>
-                  <td>{new Date(tx.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Type</TH>
+                    <TH>Quantity</TH>
+                    <TH>Reason</TH>
+                    <TH>When</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {lotDetail.data.transactions.map((tx) => (
+                    <TR key={tx.id}>
+                      <TD>{humanize(tx.transaction_type)}</TD>
+                      <TD>{tx.quantity}</TD>
+                      <TD className="text-muted-foreground">{tx.reason ?? "—"}</TD>
+                      <TD className="text-muted-foreground">
+                        {new Date(tx.created_at).toLocaleString()}
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

@@ -2,6 +2,16 @@ import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 
 interface ItemResponse {
   id: string;
@@ -258,240 +268,289 @@ export function Planning() {
   }
 
   return (
-    <div>
-      <p>
-        <Link to="/">Back to dashboard</Link> · <Link to="/items">Manage items</Link>
-      </p>
-      <h1>Planning</h1>
-      <p>
-        Enter demand forecasts per item and period. The plan explodes forecasts of manufactured
-        items through their active BOM into component requirements, then nets everything against
-        on-hand stock and open purchase orders to show what to build and what to order.
-      </p>
+    <div className="space-y-8">
+      <PageHeader
+        title="Planning"
+        description="Enter demand forecasts per item and period. The plan explodes manufactured-item forecasts through their active BOM into component requirements, then nets against on-hand stock and open POs to show what to build and what to order."
+      />
 
-      {error && <p role="alert">{error}</p>}
+      {error && <Alert variant="destructive">{error}</Alert>}
 
-      <section>
-        <h2>Add / update a demand forecast</h2>
-        <form onSubmit={onAddForecast}>
-          <label>
-            Item
-            <select value={itemId} onChange={(e) => setItemId(e.target.value)} required>
-              <option value="">Select an item…</option>
-              {items.data?.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.sku} - {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Period start
-            <input
-              type="date"
-              value={periodStart}
-              onChange={(e) => setPeriodStart(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Quantity
-            <input
-              type="number"
-              step="0.0001"
-              min="0"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Notes (optional)
-            <input value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </label>
-          <button type="submit" disabled={upsertForecast.isPending}>
-            Save forecast
-          </button>
-        </form>
-
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>Period start</th>
-              <th>Quantity</th>
-              <th>Source</th>
-              <th>Notes</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {forecasts.data?.map((fc) => (
-              <tr key={fc.id}>
-                <td>
-                  {fc.item_sku} - {fc.item_name}
-                </td>
-                <td>{fc.period_start}</td>
-                <td>{fc.quantity}</td>
-                <td>{fc.source}</td>
-                <td>{fc.notes ?? "-"}</td>
-                <td>
-                  <button
-                    onClick={() => deleteForecast.mutate(fc.id)}
-                    disabled={deleteForecast.isPending}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      <section>
-        <h2>MRP plan</h2>
-        <label>
-          Horizon start
-          <input
-            type="date"
-            value={horizonStart}
-            onChange={(e) => setHorizonStart(e.target.value)}
-          />
-        </label>
-        <label>
-          Horizon end
-          <input type="date" value={horizonEnd} onChange={(e) => setHorizonEnd(e.target.value)} />
-        </label>
-
-        {plan.isError && <p role="alert">{(plan.error as Error).message}</p>}
-        {plan.data && plan.data.lines.length === 0 && (
-          <p>No forecast demand in this horizon.</p>
-        )}
-        {plan.data && plan.data.lines.length > 0 && (
-          <>
-            <table>
-              <thead>
-                <tr>
-                  <th>Order?</th>
-                  <th>Item</th>
-                  <th>Independent</th>
-                  <th>Dependent</th>
-                  <th>Gross demand</th>
-                  <th>On hand</th>
-                  <th>On order</th>
-                  <th>On draft</th>
-                  <th>Net requirement</th>
-                  <th>Suggested action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plan.data.lines.map((line) => {
-                  const qty = Number(line.suggested_order_quantity);
-                  const orderable = !line.is_manufactured && qty > 0;
-                  const action = qty > 0
-                    ? `${line.is_manufactured ? "Build" : "Order"} ${line.suggested_order_quantity}`
-                    : "-";
-                  return (
-                    <tr key={line.item_id}>
-                      <td>
-                        {orderable && (
-                          <input
-                            type="checkbox"
-                            checked={!!selectedItems[line.item_id]}
-                            onChange={(e) =>
-                              setSelectedItems((prev) => ({
-                                ...prev,
-                                [line.item_id]: e.target.checked,
-                              }))
-                            }
-                          />
-                        )}
-                      </td>
-                      <td>
-                        {line.item_sku} - {line.item_name}
-                        {line.is_manufactured ? " (make)" : ""}
-                      </td>
-                      <td>{line.independent_demand}</td>
-                      <td>{line.dependent_demand}</td>
-                      <td>{line.gross_demand}</td>
-                      <td>{line.on_hand}</td>
-                      <td>{line.on_order}</td>
-                      <td>{line.on_draft}</td>
-                      <td>{line.net_requirement}</td>
-                      <td>{action}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-
-            <h3>Auto-generate purchase orders</h3>
-            <p>
-              Create a draft PO per supplier for every purchased shortfall, routed by each item's{" "}
-              <Link to="/items">preferred supplier</Link>. Items with no preferred supplier are listed
-              as unassigned for you to order manually below.
-            </p>
-            <button onClick={onAutoGenerate} disabled={autoGeneratePos.isPending}>
-              Auto-generate POs by preferred supplier
-            </button>
-            {autoResult && (
-              <div>
-                {autoResult.created.length > 0 ? (
-                  <ul>
-                    {autoResult.created.map((po) => (
-                      <li key={po.po_id}>
-                        Draft PO #{po.po_number} for {po.supplier_name} ({po.line_count} line
-                        {po.line_count === 1 ? "" : "s"})
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>No POs created.</p>
-                )}
-                {autoResult.unassigned.length > 0 && (
-                  <p role="alert">
-                    No preferred supplier for:{" "}
-                    {autoResult.unassigned.map((u) => u.item_sku).join(", ")}. Assign one under Items,
-                    or order manually below.
-                  </p>
-                )}
-                <p>
-                  <Link to="/purchase-orders">Open Purchase Orders</Link>
-                </p>
-              </div>
-            )}
-
-            <h3>Create a draft purchase order manually</h3>
-            <p>
-              Or select the purchased shortfalls above, pick a supplier, and generate a single draft
-              PO at the suggested quantities. Review and submit it under{" "}
-              <Link to="/purchase-orders">Purchase Orders</Link>.
-            </p>
-            <label>
-              Supplier
-              <select value={poSupplierId} onChange={(e) => setPoSupplierId(e.target.value)}>
-                <option value="">Select a supplier…</option>
-                {suppliers.data?.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
+      <Card>
+        <CardHeader>
+          <CardTitle>Demand forecasts</CardTitle>
+          <CardDescription>Add or update a forecast for an item and period.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <form onSubmit={onAddForecast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Item" htmlFor="fc-item">
+              <Select id="fc-item" value={itemId} onChange={(e) => setItemId(e.target.value)} required>
+                <option value="">Select an item…</option>
+                {items.data?.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.sku} - {item.name}
                   </option>
                 ))}
-              </select>
-            </label>
-            <button onClick={onGeneratePo} disabled={generatePo.isPending}>
-              Create draft PO from {chosenItemIds.length} item{chosenItemIds.length === 1 ? "" : "s"}
-            </button>
-            {generatedPo && (
-              <p>
-                Created draft PO #{generatedPo.po_number} for {generatedPo.supplier_name} with{" "}
-                {generatedPo.lines.length} line{generatedPo.lines.length === 1 ? "" : "s"}.{" "}
-                <Link to="/purchase-orders">Open Purchase Orders</Link>
+              </Select>
+            </Field>
+            <Field label="Period start" htmlFor="fc-period">
+              <Input
+                id="fc-period"
+                type="date"
+                value={periodStart}
+                onChange={(e) => setPeriodStart(e.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Quantity" htmlFor="fc-qty">
+              <Input
+                id="fc-qty"
+                type="number"
+                step="0.0001"
+                min="0"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Notes (optional)" htmlFor="fc-notes">
+              <Input id="fc-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </Field>
+            <div className="flex items-end">
+              <Button type="submit" loading={upsertForecast.isPending}>
+                Save forecast
+              </Button>
+            </div>
+          </form>
+
+          <TableWrap>
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item</TH>
+                  <TH>Period start</TH>
+                  <TH>Quantity</TH>
+                  <TH>Source</TH>
+                  <TH>Notes</TH>
+                  <TH className="text-right">Actions</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {forecasts.data?.map((fc) => (
+                  <TR key={fc.id}>
+                    <TD className="font-medium">
+                      {fc.item_sku} - {fc.item_name}
+                    </TD>
+                    <TD>{fc.period_start}</TD>
+                    <TD>{fc.quantity}</TD>
+                    <TD>
+                      <Badge variant="neutral">{fc.source}</Badge>
+                    </TD>
+                    <TD className="text-muted-foreground">{fc.notes ?? "—"}</TD>
+                    <TD className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => deleteForecast.mutate(fc.id)}
+                        loading={deleteForecast.isPending}
+                      >
+                        Delete
+                      </Button>
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </TableWrap>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>MRP plan</CardTitle>
+          <CardDescription>Net requirements across the planning horizon.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:max-w-md">
+            <Field label="Horizon start" htmlFor="h-start">
+              <Input
+                id="h-start"
+                type="date"
+                value={horizonStart}
+                onChange={(e) => setHorizonStart(e.target.value)}
+              />
+            </Field>
+            <Field label="Horizon end" htmlFor="h-end">
+              <Input
+                id="h-end"
+                type="date"
+                value={horizonEnd}
+                onChange={(e) => setHorizonEnd(e.target.value)}
+              />
+            </Field>
+          </div>
+
+          {plan.isError && <Alert variant="destructive">{(plan.error as Error).message}</Alert>}
+          {plan.data && plan.data.lines.length === 0 && (
+            <p className="text-sm text-muted-foreground">No forecast demand in this horizon.</p>
+          )}
+          {plan.data && plan.data.lines.length > 0 && (
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Order?</TH>
+                    <TH>Item</TH>
+                    <TH>Independent</TH>
+                    <TH>Dependent</TH>
+                    <TH>Gross</TH>
+                    <TH>On hand</TH>
+                    <TH>On order</TH>
+                    <TH>On draft</TH>
+                    <TH>Net req.</TH>
+                    <TH>Suggested action</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {plan.data.lines.map((line) => {
+                    const qty = Number(line.suggested_order_quantity);
+                    const orderable = !line.is_manufactured && qty > 0;
+                    return (
+                      <TR key={line.item_id}>
+                        <TD>
+                          {orderable && (
+                            <Checkbox
+                              checked={!!selectedItems[line.item_id]}
+                              onChange={(e) =>
+                                setSelectedItems((prev) => ({
+                                  ...prev,
+                                  [line.item_id]: e.target.checked,
+                                }))
+                              }
+                            />
+                          )}
+                        </TD>
+                        <TD className="font-medium">
+                          {line.item_sku} - {line.item_name}
+                          {line.is_manufactured && (
+                            <Badge variant="accent" className="ml-2">
+                              make
+                            </Badge>
+                          )}
+                        </TD>
+                        <TD>{line.independent_demand}</TD>
+                        <TD>{line.dependent_demand}</TD>
+                        <TD>{line.gross_demand}</TD>
+                        <TD>{line.on_hand}</TD>
+                        <TD>{line.on_order}</TD>
+                        <TD>{line.on_draft}</TD>
+                        <TD className="font-semibold">{line.net_requirement}</TD>
+                        <TD>
+                          {qty > 0 ? (
+                            <Badge variant={line.is_manufactured ? "accent" : "info"}>
+                              {line.is_manufactured ? "Build" : "Order"} {line.suggested_order_quantity}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TD>
+                      </TR>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableWrap>
+          )}
+        </CardContent>
+      </Card>
+
+      {plan.data && plan.data.lines.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Generate purchase orders</CardTitle>
+            <CardDescription>
+              Turn purchased shortfalls into draft POs — automatically by preferred supplier, or manually.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-8">
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold">Auto-generate by preferred supplier</h3>
+              <p className="text-sm text-muted-foreground">
+                Create a draft PO per supplier for every purchased shortfall, routed by each item's{" "}
+                <Link to="/items" className="text-primary hover:underline">
+                  preferred supplier
+                </Link>
+                . Items with no preferred supplier are listed as unassigned.
               </p>
-            )}
-          </>
-        )}
-      </section>
+              <Button onClick={onAutoGenerate} loading={autoGeneratePos.isPending}>
+                Auto-generate POs
+              </Button>
+              {autoResult && (
+                <div className="space-y-2 rounded-lg border border-border p-4">
+                  {autoResult.created.length > 0 ? (
+                    <ul className="space-y-1 text-sm">
+                      {autoResult.created.map((po) => (
+                        <li key={po.po_id} className="flex items-center gap-2">
+                          <Badge variant="success">Draft PO #{po.po_number}</Badge>
+                          {po.supplier_name} · {po.line_count} line
+                          {po.line_count === 1 ? "" : "s"}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No POs created.</p>
+                  )}
+                  {autoResult.unassigned.length > 0 && (
+                    <Alert variant="warning">
+                      No preferred supplier for: {autoResult.unassigned.map((u) => u.item_sku).join(", ")}.
+                      Assign one under Items, or order manually below.
+                    </Alert>
+                  )}
+                  <Link to="/purchase-orders" className="inline-block text-sm text-primary hover:underline">
+                    Open Purchase Orders →
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3 border-t border-border pt-6">
+              <h3 className="text-sm font-semibold">Create a draft PO manually</h3>
+              <p className="text-sm text-muted-foreground">
+                Select the purchased shortfalls above, pick a supplier, and generate a single draft PO at
+                the suggested quantities.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end sm:max-w-lg">
+                <Field label="Supplier" htmlFor="gen-supplier">
+                  <Select
+                    id="gen-supplier"
+                    value={poSupplierId}
+                    onChange={(e) => setPoSupplierId(e.target.value)}
+                  >
+                    <option value="">Select a supplier…</option>
+                    {suppliers.data?.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Button variant="secondary" onClick={onGeneratePo} loading={generatePo.isPending}>
+                  Create from {chosenItemIds.length} item{chosenItemIds.length === 1 ? "" : "s"}
+                </Button>
+              </div>
+              {generatedPo && (
+                <Alert variant="success">
+                  Created draft PO #{generatedPo.po_number} for {generatedPo.supplier_name} with{" "}
+                  {generatedPo.lines.length} line{generatedPo.lines.length === 1 ? "" : "s"}.{" "}
+                  <Link to="/purchase-orders" className="font-medium underline">
+                    Open Purchase Orders
+                  </Link>
+                </Alert>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

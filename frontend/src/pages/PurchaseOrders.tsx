@@ -1,7 +1,18 @@
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { ShoppingCart } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { humanize, poStatusVariant } from "@/lib/status";
 
 interface ItemResponse {
   id: string;
@@ -231,86 +242,148 @@ export function PurchaseOrders() {
 
   return (
     <div>
-      <p>
-        <Link to="/">Back to dashboard</Link> · <Link to="/suppliers">Manage suppliers</Link>
-      </p>
-      <h1>Purchase Orders</h1>
+      <PageHeader
+        title="Purchase Orders"
+        description="Create drafts, submit them to suppliers, and receive stock as it arrives."
+      />
 
-      <form onSubmit={onCreatePo}>
-        <label>
-          New PO for supplier
-          <select value={newPoSupplierId} onChange={(e) => setNewPoSupplierId(e.target.value)} required>
-            <option value="" disabled>
-              Select a supplier
-            </option>
-            {suppliers.data?.map((supplier) => (
-              <option key={supplier.id} value={supplier.id}>
-                {supplier.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={createPo.isPending}>
-          Create draft
-        </button>
-      </form>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
-      {error && <p role="alert">{error}</p>}
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Create a draft PO</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onCreatePo} className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+            <Field label="For supplier" htmlFor="po-supplier">
+              <Select
+                id="po-supplier"
+                value={newPoSupplierId}
+                onChange={(e) => setNewPoSupplierId(e.target.value)}
+                required
+              >
+                <option value="" disabled>
+                  Select a supplier
+                </option>
+                {suppliers.data?.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>
+                    {supplier.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Button type="submit" loading={createPo.isPending}>
+              Create draft
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
-      <table>
-        <thead>
-          <tr>
-            <th>PO #</th>
-            <th>Supplier</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {purchaseOrders.data?.map((po) => (
-            <tr key={po.id} onClick={() => setSelectedPoId(po.id)} style={{ cursor: "pointer" }}>
-              <td>PO-{po.po_number}</td>
-              <td>{po.supplier_name}</td>
-              <td>{po.status}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {purchaseOrders.data && purchaseOrders.data.length === 0 ? (
+        <EmptyState icon={<ShoppingCart />} title="No purchase orders yet" />
+      ) : (
+        <TableWrap className="mb-8">
+          <Table>
+            <THead>
+              <TR>
+                <TH>PO #</TH>
+                <TH>Supplier</TH>
+                <TH>Status</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {purchaseOrders.data?.map((po) => (
+                <TR
+                  key={po.id}
+                  onClick={() => setSelectedPoId(po.id)}
+                  className={`cursor-pointer ${selectedPoId === po.id ? "bg-primary/5" : ""}`}
+                >
+                  <TD className="font-medium">PO-{po.po_number}</TD>
+                  <TD>{po.supplier_name}</TD>
+                  <TD>
+                    <Badge variant={poStatusVariant(po.status)}>{humanize(po.status)}</Badge>
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
 
       {poDetail.data && (
-        <section>
-          <h2>
-            PO-{poDetail.data.po_number} - {poDetail.data.supplier_name} ({poDetail.data.status})
-          </h2>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              PO-{poDetail.data.po_number} · {poDetail.data.supplier_name}
+              <Badge variant={poStatusVariant(poDetail.data.status)}>
+                {humanize(poDetail.data.status)}
+              </Badge>
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {poDetail.data.status === "draft" && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => submitPo.mutate()}
+                  loading={submitPo.isPending}
+                >
+                  Submit
+                </Button>
+              )}
+              {CANCELLABLE_STATUSES.includes(poDetail.data.status) && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => cancelPo.mutate()}
+                  loading={cancelPo.isPending}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Item</TH>
+                    <TH>Ordered</TH>
+                    <TH>Received</TH>
+                    <TH>Unit price</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {poDetail.data.lines.map((line) => (
+                    <TR key={line.id}>
+                      <TD className="font-medium">
+                        {line.item_sku} - {line.item_name}
+                      </TD>
+                      <TD>{line.quantity_ordered}</TD>
+                      <TD>{line.quantity_received}</TD>
+                      <TD className="text-muted-foreground">{line.unit_price}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
 
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Ordered</th>
-                <th>Received</th>
-                <th>Unit price</th>
-              </tr>
-            </thead>
-            <tbody>
-              {poDetail.data.lines.map((line) => (
-                <tr key={line.id}>
-                  <td>
-                    {line.item_sku} - {line.item_name}
-                  </td>
-                  <td>{line.quantity_ordered}</td>
-                  <td>{line.quantity_received}</td>
-                  <td>{line.unit_price}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {poDetail.data.status === "draft" && (
-            <>
-              <form onSubmit={onAddLine}>
-                <label>
-                  Item
-                  <select value={lineItemId} onChange={(e) => setLineItemId(e.target.value)} required>
+            {poDetail.data.status === "draft" && (
+              <form
+                onSubmit={onAddLine}
+                className="grid gap-4 sm:grid-cols-[1fr_140px_140px_auto] sm:items-end"
+              >
+                <Field label="Item" htmlFor="po-item">
+                  <Select
+                    id="po-item"
+                    value={lineItemId}
+                    onChange={(e) => setLineItemId(e.target.value)}
+                    required
+                  >
                     <option value="" disabled>
                       Select an item
                     </option>
@@ -319,11 +392,11 @@ export function PurchaseOrders() {
                         {item.sku} - {item.name}
                       </option>
                     ))}
-                  </select>
-                </label>
-                <label>
-                  Quantity
-                  <input
+                  </Select>
+                </Field>
+                <Field label="Quantity" htmlFor="po-qty">
+                  <Input
+                    id="po-qty"
                     type="number"
                     step="0.0001"
                     min="0.0001"
@@ -331,10 +404,10 @@ export function PurchaseOrders() {
                     onChange={(e) => setLineQuantity(e.target.value)}
                     required
                   />
-                </label>
-                <label>
-                  Unit price
-                  <input
+                </Field>
+                <Field label="Unit price" htmlFor="po-price">
+                  <Input
+                    id="po-price"
                     type="number"
                     step="0.0001"
                     min="0"
@@ -342,76 +415,76 @@ export function PurchaseOrders() {
                     onChange={(e) => setLineUnitPrice(e.target.value)}
                     required
                   />
-                </label>
-                <button type="submit" disabled={addLine.isPending}>
+                </Field>
+                <Button type="submit" variant="secondary" loading={addLine.isPending}>
                   Add line
-                </button>
+                </Button>
               </form>
+            )}
 
-              <button onClick={() => submitPo.mutate()} disabled={submitPo.isPending}>
-                Submit
-              </button>
-            </>
-          )}
-
-          {RECEIVABLE_STATUSES.includes(poDetail.data.status) && (
-            <form onSubmit={onReceive}>
-              <label>
-                Line
-                <select value={receiveLineId} onChange={(e) => setReceiveLineId(e.target.value)} required>
-                  <option value="" disabled>
-                    Select a line
-                  </option>
-                  {poDetail.data.lines.map((line) => (
-                    <option key={line.id} value={line.id}>
-                      {line.item_sku} ({line.quantity_received}/{line.quantity_ordered})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Quantity received
-                <input
-                  type="number"
-                  step="0.0001"
-                  min="0.0001"
-                  value={receiveQuantity}
-                  onChange={(e) => setReceiveQuantity(e.target.value)}
-                  required
-                />
-              </label>
-              {receivingLineIsLotTracked && (
-                <>
-                  <label>
-                    Lot number
-                    <input
-                      value={receiveLotNumber}
-                      onChange={(e) => setReceiveLotNumber(e.target.value)}
+            {RECEIVABLE_STATUSES.includes(poDetail.data.status) && (
+              <form
+                onSubmit={onReceive}
+                className="space-y-4 rounded-lg border border-border p-4"
+              >
+                <p className="text-sm font-semibold">Receive stock</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Line" htmlFor="rcv-line">
+                    <Select
+                      id="rcv-line"
+                      value={receiveLineId}
+                      onChange={(e) => setReceiveLineId(e.target.value)}
+                      required
+                    >
+                      <option value="" disabled>
+                        Select a line
+                      </option>
+                      {poDetail.data.lines.map((line) => (
+                        <option key={line.id} value={line.id}>
+                          {line.item_sku} ({line.quantity_received}/{line.quantity_ordered})
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Quantity received" htmlFor="rcv-qty">
+                    <Input
+                      id="rcv-qty"
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      value={receiveQuantity}
+                      onChange={(e) => setReceiveQuantity(e.target.value)}
                       required
                     />
-                  </label>
-                  <label>
-                    Expiry date (optional)
-                    <input
-                      type="date"
-                      value={receiveExpiryDate}
-                      onChange={(e) => setReceiveExpiryDate(e.target.value)}
-                    />
-                  </label>
-                </>
-              )}
-              <button type="submit" disabled={receiveLine.isPending}>
-                Receive
-              </button>
-            </form>
-          )}
-
-          {CANCELLABLE_STATUSES.includes(poDetail.data.status) && (
-            <button onClick={() => cancelPo.mutate()} disabled={cancelPo.isPending}>
-              Cancel
-            </button>
-          )}
-        </section>
+                  </Field>
+                  {receivingLineIsLotTracked && (
+                    <>
+                      <Field label="Lot number" htmlFor="rcv-lot">
+                        <Input
+                          id="rcv-lot"
+                          value={receiveLotNumber}
+                          onChange={(e) => setReceiveLotNumber(e.target.value)}
+                          required
+                        />
+                      </Field>
+                      <Field label="Expiry date (optional)" htmlFor="rcv-exp">
+                        <Input
+                          id="rcv-exp"
+                          type="date"
+                          value={receiveExpiryDate}
+                          onChange={(e) => setReceiveExpiryDate(e.target.value)}
+                        />
+                      </Field>
+                    </>
+                  )}
+                </div>
+                <Button type="submit" loading={receiveLine.isPending}>
+                  Receive
+                </Button>
+              </form>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

@@ -64,7 +64,7 @@ async def client(test_engine, monkeypatch):
         return fake_redis
 
     app.dependency_overrides[db_session.get_db] = _get_db_override
-    app.dependency_overrides[redis_client.get_redis] = _get_redis_override
+    app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
     # TelemetryMiddleware opens its own session outside the DI chain, so it needs
     # its own patch of the factory to land in the test DB instead of the real one.
     monkeypatch.setattr(db_session, "async_session_factory", session_factory)

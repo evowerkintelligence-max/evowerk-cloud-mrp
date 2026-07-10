@@ -1,7 +1,18 @@
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { humanize } from "@/lib/status";
 
 interface LocationResponse {
   id: string;
@@ -149,197 +160,221 @@ export function Inventory() {
 
   return (
     <div>
-      <p>
-        <Link to="/">Back to dashboard</Link> · <Link to="/items">Manage items</Link> ·{" "}
-        <Link to="/locations">Locations</Link> · <Link to="/purchase-orders">Purchase Orders</Link>
-      </p>
-      <h1>Inventory</h1>
-      <p>
-        On-hand stock for non-lot-tracked items, per location. Receiving a purchase order adds stock;
-        consume, adjust, or transfer between locations to move it. (Lot-tracked items track on-hand
-        through their lots instead.)
-      </p>
+      <PageHeader
+        title="Inventory"
+        description="On-hand stock for non-lot-tracked items, per location. Receiving a PO adds stock; consume, adjust, or transfer to move it. (Lot-tracked items track on-hand through their lots.)"
+      />
 
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Total on hand</th>
-            <th>By location</th>
-            <th>UoM</th>
-          </tr>
-        </thead>
-        <tbody>
-          {balances.data?.map((bal) => (
-            <tr
-              key={bal.item_id}
-              onClick={() => setSelectedItemId(bal.item_id)}
-              style={{ cursor: "pointer" }}
-            >
-              <td>
-                {bal.item_sku} - {bal.item_name}
-              </td>
-              <td>{bal.quantity_on_hand}</td>
-              <td>
-                {bal.by_location
-                  .map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`)
-                  .join(", ")}
-              </td>
-              <td>{bal.unit_of_measure}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {balances.data && balances.data.length === 0 ? (
+        <EmptyState
+          icon={<Warehouse />}
+          title="No stock yet"
+          description="On-hand balances appear here once you receive purchase orders."
+        />
+      ) : (
+        <TableWrap className="mb-8">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Item</TH>
+                <TH>Total on hand</TH>
+                <TH>By location</TH>
+                <TH>UoM</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {balances.data?.map((bal) => (
+                <TR
+                  key={bal.item_id}
+                  onClick={() => setSelectedItemId(bal.item_id)}
+                  className={`cursor-pointer ${selectedItemId === bal.item_id ? "bg-primary/5" : ""}`}
+                >
+                  <TD className="font-medium">
+                    {bal.item_sku} - {bal.item_name}
+                  </TD>
+                  <TD>{bal.quantity_on_hand}</TD>
+                  <TD className="text-muted-foreground">
+                    {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
+                  </TD>
+                  <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
 
       {detail.data && (
-        <section>
-          <h2>
-            {detail.data.item_sku} - {detail.data.item_name}
-          </h2>
-          <p>
-            Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}
-          </p>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {detail.data.item_sku} - {detail.data.item_name}
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Location</TH>
+                    <TH>On hand</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {detail.data.by_location.map((lq) => (
+                    <TR key={lq.location_id}>
+                      <TD className="font-medium">
+                        {lq.location_code} - {lq.location_name}
+                      </TD>
+                      <TD>{lq.quantity_on_hand}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
 
-          <table>
-            <thead>
-              <tr>
-                <th>Location</th>
-                <th>On hand</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.data.by_location.map((lq) => (
-                <tr key={lq.location_id}>
-                  <td>
-                    {lq.location_code} - {lq.location_name}
-                  </td>
-                  <td>{lq.quantity_on_hand}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            <div className="grid gap-4 md:grid-cols-3">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setError(null);
+                  consume.mutate();
+                }}
+                className="space-y-3 rounded-lg border border-border p-4"
+              >
+                <p className="text-sm font-semibold">Consume</p>
+                <Field label="Quantity" htmlFor="c-qty">
+                  <Input
+                    id="c-qty"
+                    type="number"
+                    step="0.0001"
+                    min="0.0001"
+                    value={consumeQty}
+                    onChange={(e) => setConsumeQty(e.target.value)}
+                    required
+                  />
+                </Field>
+                <Field label="At location" htmlFor="c-loc">
+                  <Select id="c-loc" value={consumeLoc} onChange={(e) => setConsumeLoc(e.target.value)}>
+                    {locationOptions}
+                  </Select>
+                </Field>
+                <Button type="submit" variant="secondary" className="w-full" loading={consume.isPending}>
+                  Consume
+                </Button>
+              </form>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setError(null);
-              consume.mutate();
-            }}
-          >
-            <label>
-              Consume
-              <input
-                type="number"
-                step="0.0001"
-                min="0.0001"
-                value={consumeQty}
-                onChange={(e) => setConsumeQty(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              at
-              <select value={consumeLoc} onChange={(e) => setConsumeLoc(e.target.value)}>
-                {locationOptions}
-              </select>
-            </label>
-            <button type="submit" disabled={consume.isPending}>
-              Consume
-            </button>
-          </form>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setError(null);
+                  adjust.mutate();
+                }}
+                className="space-y-3 rounded-lg border border-border p-4"
+              >
+                <p className="text-sm font-semibold">Adjust</p>
+                <Field label="Delta (+/-)" htmlFor="a-qty">
+                  <Input
+                    id="a-qty"
+                    type="number"
+                    step="0.0001"
+                    value={adjustDelta}
+                    onChange={(e) => setAdjustDelta(e.target.value)}
+                    required
+                  />
+                </Field>
+                <Field label="At location" htmlFor="a-loc">
+                  <Select id="a-loc" value={adjustLoc} onChange={(e) => setAdjustLoc(e.target.value)}>
+                    {locationOptions}
+                  </Select>
+                </Field>
+                <Button type="submit" variant="secondary" className="w-full" loading={adjust.isPending}>
+                  Adjust
+                </Button>
+              </form>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setError(null);
-              adjust.mutate();
-            }}
-          >
-            <label>
-              Adjust by (+/-)
-              <input
-                type="number"
-                step="0.0001"
-                value={adjustDelta}
-                onChange={(e) => setAdjustDelta(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              at
-              <select value={adjustLoc} onChange={(e) => setAdjustLoc(e.target.value)}>
-                {locationOptions}
-              </select>
-            </label>
-            <button type="submit" disabled={adjust.isPending}>
-              Adjust
-            </button>
-          </form>
+              <form onSubmit={onTransfer} className="space-y-3 rounded-lg border border-border p-4">
+                <p className="text-sm font-semibold">Transfer</p>
+                <Field label="Quantity" htmlFor="t-qty">
+                  <Input
+                    id="t-qty"
+                    type="number"
+                    step="0.0001"
+                    min="0.0001"
+                    value={transferQty}
+                    onChange={(e) => setTransferQty(e.target.value)}
+                    required
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="From" htmlFor="t-from">
+                    <Select id="t-from" value={fromLoc} onChange={(e) => setFromLoc(e.target.value)}>
+                      <option value="">Select…</option>
+                      {locations.data?.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.code}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="To" htmlFor="t-to">
+                    <Select id="t-to" value={toLoc} onChange={(e) => setToLoc(e.target.value)}>
+                      <option value="">Select…</option>
+                      {locations.data?.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.code}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+                <Button type="submit" variant="secondary" className="w-full" loading={transfer.isPending}>
+                  Transfer
+                </Button>
+              </form>
+            </div>
 
-          <form onSubmit={onTransfer}>
-            <label>
-              Transfer
-              <input
-                type="number"
-                step="0.0001"
-                min="0.0001"
-                value={transferQty}
-                onChange={(e) => setTransferQty(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              from
-              <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)}>
-                <option value="">Select…</option>
-                {locations.data?.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              to
-              <select value={toLoc} onChange={(e) => setToLoc(e.target.value)}>
-                <option value="">Select…</option>
-                {locations.data?.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="submit" disabled={transfer.isPending}>
-              Transfer
-            </button>
-          </form>
-
-          <table>
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Location</th>
-                <th>Change</th>
-                <th>Reason</th>
-                <th>When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.data.transactions.map((tx) => (
-                <tr key={tx.id}>
-                  <td>{tx.transaction_type}</td>
-                  <td>{tx.location_code}</td>
-                  <td>{tx.quantity_delta}</td>
-                  <td>{tx.reason ?? "-"}</td>
-                  <td>{new Date(tx.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Type</TH>
+                    <TH>Location</TH>
+                    <TH>Change</TH>
+                    <TH>Reason</TH>
+                    <TH>When</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {detail.data.transactions.map((tx) => (
+                    <TR key={tx.id}>
+                      <TD>{humanize(tx.transaction_type)}</TD>
+                      <TD className="text-muted-foreground">{tx.location_code}</TD>
+                      <TD>
+                        <Badge variant={Number(tx.quantity_delta) < 0 ? "danger" : "success"}>
+                          {tx.quantity_delta}
+                        </Badge>
+                      </TD>
+                      <TD className="text-muted-foreground">{tx.reason ?? "—"}</TD>
+                      <TD className="text-muted-foreground">
+                        {new Date(tx.created_at).toLocaleString()}
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

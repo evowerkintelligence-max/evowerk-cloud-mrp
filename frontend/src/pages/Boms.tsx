@@ -1,7 +1,18 @@
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Layers } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { PageHeader } from "@/components/PageHeader";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { humanize } from "@/lib/status";
 
 interface ItemResponse {
   id: string;
@@ -32,6 +43,12 @@ interface BomLineResponse {
 
 interface BomDetailResponse extends BomResponse {
   lines: BomLineResponse[];
+}
+
+function bomStatusVariant(status: string) {
+  if (status === "active") return "success" as const;
+  if (status === "archived") return "neutral" as const;
+  return "warning" as const; // draft
 }
 
 export function Boms() {
@@ -148,86 +165,129 @@ export function Boms() {
 
   return (
     <div>
-      <p>
-        <Link to="/">Back to dashboard</Link> · <Link to="/items">Manage items</Link>
-      </p>
-      <h1>Bills of Materials</h1>
+      <PageHeader
+        title="Bills of Materials"
+        description="Define the components that go into a manufactured item, then activate a version to use it in planning."
+      />
 
-      <form onSubmit={onCreateBom}>
-        <label>
-          New BOM for item
-          <select value={newBomItemId} onChange={(e) => setNewBomItemId(e.target.value)} required>
-            <option value="" disabled>
-              Select an item
-            </option>
-            {items.data?.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.sku} - {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={createBom.isPending}>
-          Create draft
-        </button>
-      </form>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
-      {error && <p role="alert">{error}</p>}
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Create a draft BOM</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onCreateBom} className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+            <Field label="For item" htmlFor="bom-item">
+              <Select
+                id="bom-item"
+                value={newBomItemId}
+                onChange={(e) => setNewBomItemId(e.target.value)}
+                required
+              >
+                <option value="" disabled>
+                  Select an item
+                </option>
+                {items.data?.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.sku} - {item.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Button type="submit" loading={createBom.isPending}>
+              Create draft
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Version</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {boms.data?.map((bom) => (
-            <tr key={bom.id} onClick={() => setSelectedBomId(bom.id)} style={{ cursor: "pointer" }}>
-              <td>
-                {bom.item_sku} - {bom.item_name}
-              </td>
-              <td>v{bom.version}</td>
-              <td>{bom.status}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {boms.data && boms.data.length === 0 ? (
+        <EmptyState icon={<Layers />} title="No BOMs yet" description="Create a draft to get started." />
+      ) : (
+        <TableWrap className="mb-8">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Item</TH>
+                <TH>Version</TH>
+                <TH>Status</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {boms.data?.map((bom) => (
+                <TR
+                  key={bom.id}
+                  onClick={() => setSelectedBomId(bom.id)}
+                  className={`cursor-pointer ${selectedBomId === bom.id ? "bg-primary/5" : ""}`}
+                >
+                  <TD className="font-medium">
+                    {bom.item_sku} - {bom.item_name}
+                  </TD>
+                  <TD className="text-muted-foreground">v{bom.version}</TD>
+                  <TD>
+                    <Badge variant={bomStatusVariant(bom.status)}>{humanize(bom.status)}</Badge>
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
 
       {bomDetail.data && (
-        <section>
-          <h2>
-            {bomDetail.data.item_sku} v{bomDetail.data.version} ({bomDetail.data.status})
-          </h2>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              {bomDetail.data.item_sku} · v{bomDetail.data.version}
+              <Badge variant={bomStatusVariant(bomDetail.data.status)}>
+                {humanize(bomDetail.data.status)}
+              </Badge>
+            </CardTitle>
+            {bomDetail.data.status === "draft" && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => activateBom.mutate()}
+                loading={activateBom.isPending}
+              >
+                Activate
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Component</TH>
+                    <TH>Quantity</TH>
+                    <TH>UoM</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {bomDetail.data.lines.map((line) => (
+                    <TR key={line.id}>
+                      <TD className="font-medium">
+                        {line.component_sku} - {line.component_name}
+                      </TD>
+                      <TD>{line.quantity}</TD>
+                      <TD className="text-muted-foreground">{line.unit_of_measure}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
 
-          <table>
-            <thead>
-              <tr>
-                <th>Component</th>
-                <th>Quantity</th>
-                <th>UoM</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bomDetail.data.lines.map((line) => (
-                <tr key={line.id}>
-                  <td>
-                    {line.component_sku} - {line.component_name}
-                  </td>
-                  <td>{line.quantity}</td>
-                  <td>{line.unit_of_measure}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {bomDetail.data.status === "draft" && (
-            <>
-              <form onSubmit={onAddLine}>
-                <label>
-                  Component
-                  <select
+            {bomDetail.data.status === "draft" && (
+              <form onSubmit={onAddLine} className="grid gap-4 sm:grid-cols-[1fr_160px_auto] sm:items-end">
+                <Field label="Component" htmlFor="component">
+                  <Select
+                    id="component"
                     value={lineComponentId}
                     onChange={(e) => setLineComponentId(e.target.value)}
                     required
@@ -242,11 +302,11 @@ export function Boms() {
                           {item.sku} - {item.name}
                         </option>
                       ))}
-                  </select>
-                </label>
-                <label>
-                  Quantity
-                  <input
+                  </Select>
+                </Field>
+                <Field label="Quantity" htmlFor="qty">
+                  <Input
+                    id="qty"
                     type="number"
                     step="0.0001"
                     min="0.0001"
@@ -254,18 +314,14 @@ export function Boms() {
                     onChange={(e) => setLineQuantity(e.target.value)}
                     required
                   />
-                </label>
-                <button type="submit" disabled={addLine.isPending}>
+                </Field>
+                <Button type="submit" variant="secondary" loading={addLine.isPending}>
                   Add line
-                </button>
+                </Button>
               </form>
-
-              <button onClick={() => activateBom.mutate()} disabled={activateBom.isPending}>
-                Activate
-              </button>
-            </>
-          )}
-        </section>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

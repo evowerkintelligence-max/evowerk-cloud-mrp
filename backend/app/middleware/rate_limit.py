@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.core.redis_client import get_redis
+from app.core.redis_client import get_redis_pool
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def rate_limit(scope: str, limit: int, window_seconds: int):
     request. Fails open (allows the request, logs a warning) if Redis is
     unreachable - an infra blip here shouldn't take down login for everyone."""
 
-    async def _dependency(request: Request, redis_conn: Redis = Depends(get_redis)) -> None:
+    async def _dependency(request: Request, redis_conn: Redis = Depends(get_redis_pool)) -> None:
         key = f"ratelimit:{scope}:{_client_ip(request)}"
         try:
             count = await redis_conn.incr(key)

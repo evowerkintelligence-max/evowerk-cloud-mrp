@@ -36,6 +36,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const { accessToken } = useAuthStore.getState();
   const headers = new Headers(init.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  // FormData sets its own multipart boundary — don't override it.
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
 
   let res = await fetch(path, { ...init, headers });

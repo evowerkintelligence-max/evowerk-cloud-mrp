@@ -1,4 +1,4 @@
-"""Dataset ingestion + access for the ad-hoc query layer.
+"""Dataset ingestion + access for the ad-hoc query layer and the analytics engines.
 
 Uploads land as DuckDB-native files (xlsx/xls are converted to CSV on ingest);
 schema + row count are sniffed with DuckDB. Every read is tenant-scoped, and
@@ -38,7 +38,7 @@ def open_con() -> duckdb.DuckDBPyConnection:
 
 def relation_for(path: Path) -> str:
     """DuckDB table-function for a stored dataset file. CSV is read ALL_VARCHAR so
-    numeric coercion in the query layer applies uniformly."""
+    numeric coercion in the query/analytics layers applies uniformly."""
     ext = path.suffix.lower()
     p = str(path).replace("'", "''")
     if ext == ".parquet":
@@ -156,7 +156,7 @@ async def list_datasets(db: AsyncSession, org_id: uuid.UUID) -> list[Dataset]:
 
 async def resolve_dataset(db: AsyncSession, org_id: uuid.UUID, dataset_id: str) -> Dataset:
     """Parse a client-supplied dataset id string and load the tenant-scoped row.
-    Shared by every dataset route (400 on a malformed id, 404 if not found)."""
+    Shared by every dataset/analytics route (400 on a malformed id, 404 if not found)."""
     try:
         did = uuid.UUID(dataset_id)
     except ValueError:
@@ -338,3 +338,237 @@ def compute_health(dataset: Dataset) -> dict:
         "columns": columns,
         "warnings": warnings,
     }
+
+
+# ─── Clean & Transform ────────────────────────────────────────────────────────
+# Both create a new dataset rather than mutating in place (datasets are
+# read-only after upload, see Dataset's docstring) — mirrors the desktop app's
+# "clean/transform always produces a new version" behavior.
+
+def _materialize(db: AsyncSession, con: duckdb.DuckDBPyConnection, select_sql: str, *, org_id, created_by, name: str) -> Dataset:
+    new_id = uuid.uuid4()
+    out_path = storage.dataset_path(org_id, new_id, "csv")
+    p = str(out_path).replace("'", "''")
+    con.execute(f"COPY ({select_sql}) TO '{p}' (HEADER, FORMAT CSV)")
+    columns, row_count = _sniff(out_path)
+    dataset = Dataset(
+        id=new_id,
+        org_id=org_id,
+        name=name,
+        original_filename=f"{name}.csv",
+        fmt="csv",
+        storage_ext="csv",
+        columns=columns,
+        row_count=row_count,
+        size_bytes=out_path.stat().st_size,
+        created_by=created_by,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(dataset)
+    return dataset
+
+
+async def clean_dataset(
+    db: AsyncSession, dataset: Dataset, *, org_id, created_by, req: Any, output_name: str
+) -> tuple[Dataset, list[str]]:
+    headers = [c["name"] for c in dataset.columns]
+    rel = dataset_relation(dataset)
+    con = open_con()
+    try:
+        ops: list[str] = []
+        fill_map: dict[str, str] = {}
+        if req.fill_missing:
+            strategy = (req.fill_strategy or "custom").lower()
+            for c in headers:
+                blank = _blank_expr(c)
+                if strategy in ("mean", "median"):
+                    fn = "AVG" if strategy == "mean" else "MEDIAN"
+                    # nosec B608 - c/blank are qi()-quoted headers (from dataset.columns)
+                    val = con.execute(f"SELECT {fn}(TRY_CAST({blank} AS DOUBLE)) FROM {rel}").fetchone()[0]  # nosec B608
+                    fill_map[c] = qs(str(val)) if val is not None else "''"
+                elif strategy == "mode":
+                    row = con.execute(
+                        f"SELECT {blank} AS v FROM {rel} WHERE {blank} IS NOT NULL "  # nosec B608
+                        f"GROUP BY v ORDER BY COUNT(*) DESC LIMIT 1"
+                    ).fetchone()
+                    fill_map[c] = qs(row[0]) if row else "''"
+                else:
+                    strategy = "custom"
+                    fill_map[c] = qs(req.fill_value or "")
+            ops.append(f"Fill missing with {strategy}")
+
+        if req.trim_strings:
+            ops.append("Trim strings")
+
+        def step1_expr(c: str) -> str:
+            ident = qi(c)
+            base = f"TRIM(CAST({ident} AS VARCHAR))" if req.trim_strings else f"CAST({ident} AS VARCHAR)"
+            if req.fill_missing:
+                return f"CASE WHEN {_blank_expr(c)} IS NULL THEN {fill_map[c]} ELSE {base} END AS {ident}"
+            return f"{base} AS {ident}"
+
+        # nosec B608 - step1_expr/headers are qi()-quoted dataset column names
+        # (from dataset.columns, the sniffed schema), not free-text input.
+        con.execute(
+            f"CREATE OR REPLACE TEMP VIEW _clean1 AS SELECT {', '.join(step1_expr(c) for c in headers)} FROM {rel}"  # nosec B608
+        )
+        cur = "_clean1"
+
+        if req.remove_outliers:
+            factor = req.outlier_iqr_factor or 1.5
+            target = [c for c in (req.outlier_columns or headers) if c in headers]
+            fences: dict[str, tuple[float, float]] = {}
+            for c in target:
+                q1, q3, n = con.execute(
+                    f"SELECT quantile_cont(v, 0.25), quantile_cont(v, 0.75), COUNT(v) FROM "  # nosec B608
+                    f"(SELECT TRY_CAST({qi(c)} AS DOUBLE) AS v FROM {cur}) WHERE v IS NOT NULL"
+                ).fetchone()
+                if n and n >= 8 and q1 is not None and q3 is not None and (q3 - q1) > 0:
+                    iqr = q3 - q1
+                    fences[c] = (q1 - factor * iqr, q3 + factor * iqr)
+
+            if fences:
+                action = (req.outlier_strategy or "remove").lower()
+                if action == "cap":
+                    exprs = []
+                    for c in headers:
+                        ident = qi(c)
+                        if c in fences:
+                            low, high = fences[c]
+                            exprs.append(
+                                f"CASE WHEN TRY_CAST({ident} AS DOUBLE) < {low} THEN '{low}' "
+                                f"WHEN TRY_CAST({ident} AS DOUBLE) > {high} THEN '{high}' "
+                                f"ELSE {ident} END AS {ident}"
+                            )
+                        else:
+                            exprs.append(ident)
+                    con.execute(f"CREATE OR REPLACE TEMP VIEW _clean2 AS SELECT {', '.join(exprs)} FROM {cur}")  # nosec B608
+                    ops.append(f"Cap outliers (IQR {factor})")
+                else:
+                    where = " AND ".join(
+                        f"(TRY_CAST({qi(c)} AS DOUBLE) IS NULL OR TRY_CAST({qi(c)} AS DOUBLE) BETWEEN {low} AND {high})"
+                        for c, (low, high) in fences.items()
+                    )
+                    con.execute(f"CREATE OR REPLACE TEMP VIEW _clean2 AS SELECT * FROM {cur} WHERE {where}")  # nosec B608
+                    ops.append(f"Remove outliers (IQR {factor})")
+                cur = "_clean2"
+
+        if req.standardize_numeric:
+            stats: dict[str, tuple[float, float]] = {}
+            for c in headers:
+                mean, std, n = con.execute(
+                    f"SELECT AVG(v), STDDEV_POP(v), COUNT(v) FROM "  # nosec B608
+                    f"(SELECT TRY_CAST({qi(c)} AS DOUBLE) AS v FROM {cur}) WHERE v IS NOT NULL"
+                ).fetchone()
+                if n and n >= 2 and std:
+                    stats[c] = (mean, std)
+            if stats:
+                exprs = [
+                    (
+                        f"CAST((TRY_CAST({qi(c)} AS DOUBLE) - {stats[c][0]}) / {stats[c][1]} AS VARCHAR) AS {qi(c)}"
+                        if c in stats
+                        else qi(c)
+                    )
+                    for c in headers
+                ]
+                con.execute(f"CREATE OR REPLACE TEMP VIEW _clean3 AS SELECT {', '.join(exprs)} FROM {cur}")  # nosec B608
+                cur = "_clean3"
+                ops.append("Standardize numeric columns (z-score)")
+
+        if req.drop_duplicates:
+            ops.append("Drop duplicates")
+        select_sql = f"SELECT {'DISTINCT ' if req.drop_duplicates else ''}* FROM {cur}"  # nosec B608 - cur is an internal temp-view name, not user input
+
+        dataset_out = _materialize(db, con, select_sql, org_id=org_id, created_by=created_by, name=output_name)
+    finally:
+        con.close()
+    await db.flush()
+    return dataset_out, ops
+
+
+async def select_columns_dataset(
+    db: AsyncSession, dataset: Dataset, *, org_id, created_by, columns: list[str], output_name: str
+) -> tuple[Dataset, list[str]]:
+    headers = [c["name"] for c in dataset.columns]
+    keep = [c for c in columns if c in headers]
+    if not keep:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "None of the requested columns exist in this dataset")
+    dropped = [h for h in headers if h not in keep]
+    rel = dataset_relation(dataset)
+    con = open_con()
+    try:
+        select_sql = f"SELECT {', '.join(qi(c) for c in keep)} FROM {rel}"  # nosec B608 - keep is filtered to `c in headers`, the sniffed schema
+        dataset_out = _materialize(db, con, select_sql, org_id=org_id, created_by=created_by, name=output_name)
+    finally:
+        con.close()
+    await db.flush()
+    return dataset_out, dropped
+
+
+def _detect_timestamp_col(headers: list[str]) -> str | None:
+    for pattern in ("timestamp", "time", "datetime", "date", "ts", "t"):
+        for h in headers:
+            if h.lower() == pattern:
+                return h
+    for h in headers:
+        if any(p in h.lower() for p in ("time", "date", "ts")):
+            return h
+    return headers[0] if headers else None
+
+
+async def pivot_dataset(
+    db: AsyncSession, dataset: Dataset, *, org_id, created_by, req: Any, output_name: str
+) -> Dataset:
+    headers = [c["name"] for c in dataset.columns]
+    rel = dataset_relation(dataset)
+    con = open_con()
+    try:
+        direction = (req.direction or "wide_to_tall").lower()
+        if direction == "wide_to_tall":
+            ts_col = req.timestamp_col if req.timestamp_col in headers else _detect_timestamp_col(headers)
+            if not ts_col:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not detect a timestamp column — map one explicitly")
+            requested = req.tag_cols or [h for h in headers if h != ts_col]
+            pivot_cols = [c for c in requested if c in headers and c != ts_col]
+            if not pivot_cols:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "No tag columns to pivot")
+            passthrough = [h for h in headers if h != ts_col and h not in pivot_cols]
+            out_ts = req.output_timestamp_col or "timestamp"
+            out_tag = req.output_tag_col or "tag"
+            out_val = req.output_value_col or "value"
+            keep = [ts_col] + passthrough + pivot_cols
+            inner = ", ".join(
+                f"CAST({qi(c)} AS VARCHAR) AS {qi(c)}" if c in pivot_cols else qi(c) for c in keep
+            )
+            con.execute(f"CREATE OR REPLACE TEMP VIEW _pivot_src AS SELECT {inner} FROM {rel}")  # nosec B608 - inner is built from qi()-quoted, `in headers`-checked columns
+            on_list = ", ".join(qi(c) for c in pivot_cols)
+            sel = (
+                [f"{qi(ts_col)} AS {qi(out_ts)}"]
+                + [qi(pc) for pc in passthrough]
+                + [f"tag AS {qi(out_tag)}", f"value AS {qi(out_val)}"]
+            )
+            select_sql = (
+                f"SELECT {', '.join(sel)} FROM (UNPIVOT _pivot_src ON {on_list} INTO NAME tag VALUE value) "  # nosec B608
+                f"WHERE value IS NOT NULL AND trim(CAST(value AS VARCHAR)) <> ''"
+            )
+        else:
+            ts_col = req.timestamp_col if req.timestamp_col in headers else _detect_timestamp_col(headers)
+            tag_col = req.tag_col or "tag"
+            value_col = req.value_col or "value"
+            if not ts_col:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not detect a timestamp column — map one explicitly")
+            if tag_col not in headers:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Tag column '{tag_col}' not found")
+            if value_col not in headers:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Value column '{value_col}' not found")
+            passthrough = [h for h in headers if h not in (ts_col, tag_col, value_col)]
+            group_cols = ", ".join(qi(c) for c in ([ts_col] + passthrough))
+            select_sql = (
+                f"SELECT * FROM (PIVOT {rel} ON {qi(tag_col)} USING first({qi(value_col)}) "  # nosec B608 - tag_col/value_col are checked against headers above
+                f"GROUP BY {group_cols})"
+            )
+        dataset_out = _materialize(db, con, select_sql, org_id=org_id, created_by=created_by, name=output_name)
+    finally:
+        con.close()
+    await db.flush()
+    return dataset_out

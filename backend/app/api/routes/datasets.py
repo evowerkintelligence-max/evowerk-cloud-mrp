@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user
 from app.db.session import get_db
@@ -11,7 +12,6 @@ from app.middleware.audit import log_event
 from app.models.dataset import Dataset
 from app.services import dataset_query as query_service
 from app.services import datasets as ds_service
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -67,6 +67,47 @@ class DatasetHealthResponse(BaseModel):
 class DatasetQueryResponse(BaseModel):
     columns: list[str]
     rows: list[dict]
+
+
+class CleanRequest(BaseModel):
+    trim_strings: bool = True
+    drop_duplicates: bool = True
+    fill_missing: bool = False
+    fill_strategy: str | None = None  # custom | mean | median | mode
+    fill_value: str | None = None
+    remove_outliers: bool = False
+    outlier_iqr_factor: float = 1.5
+    outlier_columns: list[str] | None = None
+    outlier_strategy: str = "remove"  # remove | cap
+    standardize_numeric: bool = False
+    output_name: str | None = None
+
+
+class CleanResponse(BaseModel):
+    dataset: DatasetResponse
+    ops: list[str]
+
+
+class SelectColumnsRequest(BaseModel):
+    columns: list[str]
+    output_name: str | None = None
+
+
+class SelectColumnsResponse(BaseModel):
+    dataset: DatasetResponse
+    dropped_columns: list[str]
+
+
+class PivotRequest(BaseModel):
+    direction: str = "wide_to_tall"  # wide_to_tall | tall_to_wide
+    timestamp_col: str | None = None
+    tag_cols: list[str] | None = None
+    output_timestamp_col: str = "timestamp"
+    output_tag_col: str = "tag"
+    output_value_col: str = "value"
+    tag_col: str | None = "tag"
+    value_col: str | None = "value"
+    output_name: str | None = None
 
 
 def _to_response(ds: Dataset) -> DatasetResponse:
@@ -150,6 +191,85 @@ async def query_dataset(
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
     return await query_service.run_query(db, dataset, current.org_id, req)
+
+
+@router.post("/{dataset_id}/clean", response_model=CleanResponse, status_code=status.HTTP_201_CREATED)
+async def clean_dataset(
+    dataset_id: uuid.UUID,
+    req: CleanRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
+    output_name = req.output_name or f"{dataset.name} (cleaned)"
+    new_ds, ops = await ds_service.clean_dataset(
+        db, dataset, org_id=current.org_id, created_by=current.id, req=req, output_name=output_name
+    )
+    await log_event(
+        db,
+        action="dataset.cleaned",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(new_ds.id),
+        metadata={"source": str(dataset.id), "ops": ops},
+    )
+    await db.commit()
+    await db.refresh(new_ds)
+    return CleanResponse(dataset=_to_response(new_ds), ops=ops)
+
+
+@router.post(
+    "/{dataset_id}/transform/select-columns",
+    response_model=SelectColumnsResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def select_columns(
+    dataset_id: uuid.UUID,
+    req: SelectColumnsRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
+    output_name = req.output_name or f"{dataset.name} (subset)"
+    new_ds, dropped = await ds_service.select_columns_dataset(
+        db, dataset, org_id=current.org_id, created_by=current.id, columns=req.columns, output_name=output_name
+    )
+    await log_event(
+        db,
+        action="dataset.transformed",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(new_ds.id),
+        metadata={"source": str(dataset.id), "op": "select-columns"},
+    )
+    await db.commit()
+    await db.refresh(new_ds)
+    return SelectColumnsResponse(dataset=_to_response(new_ds), dropped_columns=dropped)
+
+
+@router.post("/{dataset_id}/transform/pivot", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+async def pivot_dataset(
+    dataset_id: uuid.UUID,
+    req: PivotRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
+    output_name = req.output_name or f"{dataset.name} ({req.direction})"
+    new_ds = await ds_service.pivot_dataset(
+        db, dataset, org_id=current.org_id, created_by=current.id, req=req, output_name=output_name
+    )
+    await log_event(
+        db,
+        action="dataset.transformed",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(new_ds.id),
+        metadata={"source": str(dataset.id), "op": f"pivot:{req.direction}"},
+    )
+    await db.commit()
+    await db.refresh(new_ds)
+    return _to_response(new_ds)
 
 
 @router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)

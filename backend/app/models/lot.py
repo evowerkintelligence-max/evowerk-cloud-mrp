@@ -12,13 +12,25 @@ from app.db.base import Base
 
 class Lot(Base):
     __tablename__ = "lots"
-    __table_args__ = (UniqueConstraint("org_id", "item_id", "lot_number", name="uq_lots_org_item_number"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "item_id", "lot_number", "location_id", name="uq_lots_org_item_number_location"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     item_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("items.id"), nullable=False, index=True)
+    # A lot_number identifies a physical batch, but on-hand is tracked per
+    # location: the same batch split across two warehouses is two Lot rows
+    # (same lot_number, different location_id), each with its own
+    # quantity_remaining - same modelling as InventoryBalance for non-lot-tracked
+    # items. Falls back to the org's default location when unspecified.
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     lot_number: Mapped[str] = mapped_column(String(100), nullable=False)
     # Cumulative across every receiving event for this lot (a single physical
     # batch is often delivered across multiple partial shipments/POs - see
@@ -58,7 +70,7 @@ class LotTransaction(Base):
     lot_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("lots.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # receipt | consumption
+    # receipt | consumption | transfer_out | transfer_in
     transaction_type: Mapped[str] = mapped_column(String(20), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     # e.g. "production" | "scrap" | "shipment" | "adjustment" - consumption only.

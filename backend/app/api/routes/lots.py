@@ -6,14 +6,17 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import case, select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
+from app.models.location import Location
 from app.models.lot import Lot, LotTransaction
+from app.services.locations import resolve_location_id
+from app.services.lots import consume_lot_guarded, find_or_create_lot
 
 router = APIRouter(prefix="/lots", tags=["lots"])
 
@@ -23,11 +26,19 @@ class ConsumeRequest(BaseModel):
     reason: str | None = None
 
 
+class TransferRequest(BaseModel):
+    to_location_id: str
+    quantity: Decimal
+    reason: str | None = None
+
+
 class LotResponse(BaseModel):
     id: str
     item_id: str
     item_sku: str
     item_name: str
+    location_id: str
+    location_code: str
     lot_number: str
     quantity_received: Decimal
     quantity_remaining: Decimal
@@ -48,12 +59,14 @@ class LotDetailResponse(LotResponse):
     transactions: list[LotTransactionResponse]
 
 
-def _to_response(lot: Lot, item: Item) -> LotResponse:
+def _to_response(lot: Lot, item: Item, location: Location) -> LotResponse:
     return LotResponse(
         id=str(lot.id),
         item_id=str(lot.item_id),
         item_sku=item.sku,
         item_name=item.name,
+        location_id=str(lot.location_id),
+        location_code=location.code,
         lot_number=lot.lot_number,
         quantity_received=lot.quantity_received,
         quantity_remaining=lot.quantity_remaining,
@@ -70,6 +83,14 @@ async def _get_lot_or_404(db: AsyncSession, org_id: uuid.UUID, lot_id: uuid.UUID
     return lot
 
 
+async def _get_location(db: AsyncSession, org_id: uuid.UUID, location_id: uuid.UUID) -> Location:
+    result = await db.execute(select(Location).where(Location.id == location_id, Location.org_id == org_id))
+    location = result.scalar_one_or_none()
+    if location is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Location not found")
+    return location
+
+
 async def _get_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
     result = await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
     item = result.scalar_one_or_none()
@@ -84,14 +105,19 @@ async def list_lots(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Lot, Item).join(Item, Item.id == Lot.item_id).where(Lot.org_id == current.org_id)
+    query = (
+        select(Lot, Item, Location)
+        .join(Item, Item.id == Lot.item_id)
+        .join(Location, Location.id == Lot.location_id)
+        .where(Lot.org_id == current.org_id)
+    )
     if item_id:
         try:
             query = query.where(Lot.item_id == uuid.UUID(item_id))
         except ValueError:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid item_id") from None
-    result = await db.execute(query.order_by(Item.sku, Lot.lot_number))
-    return [_to_response(lot, item) for lot, item in result.all()]
+    result = await db.execute(query.order_by(Item.sku, Lot.lot_number, Location.code))
+    return [_to_response(lot, item, location) for lot, item, location in result.all()]
 
 
 @router.get("/{lot_id}", response_model=LotDetailResponse)
@@ -102,6 +128,7 @@ async def get_lot(
 ):
     lot = await _get_lot_or_404(db, current.org_id, lot_id)
     item = await _get_item(db, current.org_id, lot.item_id)
+    location = await _get_location(db, current.org_id, lot.location_id)
 
     tx_result = await db.execute(
         select(LotTransaction).where(LotTransaction.lot_id == lot.id).order_by(LotTransaction.created_at)
@@ -117,7 +144,7 @@ async def get_lot(
         )
         for tx in tx_result.scalars().all()
     ]
-    base = _to_response(lot, item)
+    base = _to_response(lot, item, location)
     return LotDetailResponse(**base.model_dump(), transactions=transactions)
 
 
@@ -135,29 +162,7 @@ async def consume_lot(
     if lot.status == "on_hold":
         raise HTTPException(status.HTTP_409_CONFLICT, "Lot is on hold and can't be consumed")
 
-    # Guarded UPDATE, not read-then-check-then-write: two concurrent consumes
-    # against the same lot could otherwise both read the same
-    # quantity_remaining, both pass validation, and leave it negative. The
-    # WHERE clause re-checks status/quantity atomically against whatever the
-    # row actually holds at update time, not the Python-side value read above.
-    new_remaining_expr = Lot.quantity_remaining - body.quantity
-    result = await db.execute(
-        update(Lot)
-        .where(Lot.id == lot.id, Lot.quantity_remaining >= body.quantity, Lot.status != "on_hold")
-        .values(
-            quantity_remaining=new_remaining_expr,
-            status=case((new_remaining_expr <= 0, "depleted"), else_="active"),
-        )
-        .returning(Lot.quantity_remaining, Lot.status)
-    )
-    row = result.first()
-    if row is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"Consuming {body.quantity} would exceed the quantity remaining, or the lot was put on "
-            "hold concurrently",
-        )
-    lot.quantity_remaining, lot.status = row
+    await consume_lot_guarded(db, lot, body.quantity)
 
     db.add(
         LotTransaction(
@@ -179,7 +184,81 @@ async def consume_lot(
     )
     await db.commit()
     item = await _get_item(db, current.org_id, lot.item_id)
-    return _to_response(lot, item)
+    location = await _get_location(db, current.org_id, lot.location_id)
+    return _to_response(lot, item, location)
+
+
+@router.post("/{lot_id}/transfer", response_model=LotResponse)
+async def transfer_lot(
+    lot_id: uuid.UUID,
+    body: TransferRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move quantity from this lot to the same lot_number at another location -
+    the destination row is found or created (mirrors PO receiving), and the
+    source is debited with a guarded consume, so a source that lacks the
+    quantity 409s before anything is written to the destination. Returns the
+    *source* lot's new state (its quantity_remaining reflects this location
+    only, same convention as inventory transfer's per-location on-hand)."""
+    if body.quantity <= 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
+
+    lot = await _get_lot_or_404(db, current.org_id, lot_id)
+    if lot.status == "on_hold":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Lot is on hold and can't be transferred")
+    to_location_id = await resolve_location_id(db, current.org_id, body.to_location_id)
+    if to_location_id == lot.location_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "from and to locations must differ")
+
+    await consume_lot_guarded(db, lot, body.quantity)
+    dest_lot = await find_or_create_lot(
+        db,
+        org_id=current.org_id,
+        item_id=lot.item_id,
+        lot_number=lot.lot_number,
+        location_id=to_location_id,
+        quantity=body.quantity,
+        expiry_date=lot.expiry_date,
+        created_by=current.id,
+    )
+
+    db.add(
+        LotTransaction(
+            org_id=current.org_id,
+            lot_id=lot.id,
+            transaction_type="transfer_out",
+            quantity=body.quantity,
+            reason=body.reason,
+            created_by=current.id,
+        )
+    )
+    db.add(
+        LotTransaction(
+            org_id=current.org_id,
+            lot_id=dest_lot.id,
+            transaction_type="transfer_in",
+            quantity=body.quantity,
+            reason=body.reason,
+            created_by=current.id,
+        )
+    )
+    await log_event(
+        db,
+        action="lot.transferred",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(lot.id),
+        metadata={
+            "quantity": str(body.quantity),
+            "from_location_id": str(lot.location_id),
+            "to_location_id": str(to_location_id),
+        },
+    )
+    await db.commit()
+    item = await _get_item(db, current.org_id, lot.item_id)
+    location = await _get_location(db, current.org_id, lot.location_id)
+    return _to_response(lot, item, location)
 
 
 @router.post("/{lot_id}/hold", response_model=LotResponse)
@@ -197,7 +276,8 @@ async def hold_lot(
     )
     await db.commit()
     item = await _get_item(db, current.org_id, lot.item_id)
-    return _to_response(lot, item)
+    location = await _get_location(db, current.org_id, lot.location_id)
+    return _to_response(lot, item, location)
 
 
 @router.post("/{lot_id}/release", response_model=LotResponse)
@@ -217,4 +297,5 @@ async def release_lot(
     )
     await db.commit()
     item = await _get_item(db, current.org_id, lot.item_id)
-    return _to_response(lot, item)
+    location = await _get_location(db, current.org_id, lot.location_id)
+    return _to_response(lot, item, location)

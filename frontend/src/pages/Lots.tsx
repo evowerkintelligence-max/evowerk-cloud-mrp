@@ -3,11 +3,20 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 
+interface LocationResponse {
+  id: string;
+  code: string;
+  name: string;
+  is_default: boolean;
+}
+
 interface LotResponse {
   id: string;
   item_id: string;
   item_sku: string;
   item_name: string;
+  location_id: string;
+  location_code: string;
   lot_number: string;
   quantity_received: string;
   quantity_remaining: string;
@@ -33,6 +42,8 @@ export function Lots() {
   const [selectedLotId, setSelectedLotId] = useState<string | null>(null);
   const [consumeQuantity, setConsumeQuantity] = useState("1");
   const [consumeReason, setConsumeReason] = useState("");
+  const [transferQuantity, setTransferQuantity] = useState("1");
+  const [transferToLocation, setTransferToLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const lots = useQuery<LotResponse[]>({
@@ -40,6 +51,15 @@ export function Lots() {
     queryFn: async () => {
       const res = await apiFetch("/lots");
       if (!res.ok) throw new Error("Failed to load lots");
+      return res.json();
+    },
+  });
+
+  const locations = useQuery<LocationResponse[]>({
+    queryKey: ["locations"],
+    queryFn: async () => {
+      const res = await apiFetch("/locations");
+      if (!res.ok) throw new Error("Failed to load locations");
       return res.json();
     },
   });
@@ -105,16 +125,47 @@ export function Lots() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const transferLot = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/lots/${selectedLotId}/transfer`, {
+        method: "POST",
+        body: JSON.stringify({ to_location_id: transferToLocation, quantity: transferQuantity }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to transfer");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setTransferQuantity("1");
+      setTransferToLocation("");
+      invalidateLot();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
   function onConsume(e: FormEvent) {
     e.preventDefault();
     setError(null);
     consumeLot.mutate();
   }
 
+  function onTransfer(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!transferToLocation) {
+      setError("Pick a destination location");
+      return;
+    }
+    transferLot.mutate();
+  }
+
   return (
     <div>
       <p>
-        <Link to="/">Back to dashboard</Link> · <Link to="/items">Manage items</Link>
+        <Link to="/">Back to dashboard</Link> · <Link to="/items">Manage items</Link> ·{" "}
+        <Link to="/locations">Locations</Link>
       </p>
       <h1>Lots</h1>
 
@@ -125,6 +176,7 @@ export function Lots() {
           <tr>
             <th>Item</th>
             <th>Lot #</th>
+            <th>Location</th>
             <th>Received</th>
             <th>Remaining</th>
             <th>Status</th>
@@ -138,6 +190,7 @@ export function Lots() {
                 {lot.item_sku} - {lot.item_name}
               </td>
               <td>{lot.lot_number}</td>
+              <td>{lot.location_code}</td>
               <td>{lot.quantity_received}</td>
               <td>{lot.quantity_remaining}</td>
               <td>{lot.status}</td>
@@ -150,7 +203,8 @@ export function Lots() {
       {lotDetail.data && (
         <section>
           <h2>
-            {lotDetail.data.item_sku} - Lot {lotDetail.data.lot_number} ({lotDetail.data.status})
+            {lotDetail.data.item_sku} - Lot {lotDetail.data.lot_number} at {lotDetail.data.location_code} (
+            {lotDetail.data.status})
           </h2>
           <p>
             {lotDetail.data.quantity_remaining} / {lotDetail.data.quantity_received} remaining
@@ -187,6 +241,41 @@ export function Lots() {
             <button onClick={() => holdLot.mutate()} disabled={holdLot.isPending}>
               Hold
             </button>
+          )}
+
+          {lotDetail.data.status !== "on_hold" && (
+            <form onSubmit={onTransfer}>
+              <label>
+                Transfer
+                <input
+                  type="number"
+                  step="0.0001"
+                  min="0.0001"
+                  value={transferQuantity}
+                  onChange={(e) => setTransferQuantity(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                to
+                <select
+                  value={transferToLocation}
+                  onChange={(e) => setTransferToLocation(e.target.value)}
+                >
+                  <option value="">Select…</option>
+                  {locations.data
+                    ?.filter((l) => l.id !== lotDetail.data?.location_id)
+                    .map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.code}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <button type="submit" disabled={transferLot.isPending}>
+                Transfer
+              </button>
+            </form>
           )}
 
           <table>

@@ -49,8 +49,29 @@ interface Health {
   warnings: string[];
 }
 
-const TABS = ["overview", "schema", "preview", "health", "clean", "transform"] as const;
+const TABS = ["overview", "schema", "preview", "health", "query", "clean", "transform"] as const;
 type Tab = (typeof TABS)[number];
+
+const AGG_OPTIONS = ["", "sum", "avg", "min", "max", "count"] as const;
+const FILTER_OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"] as const;
+const ITEM_JOIN_COLUMNS = ["sku", "name", "item_type", "lead_time_days", "on_hand"];
+
+interface SelectFieldRow {
+  column: string;
+  agg: string;
+  alias: string;
+}
+
+interface FilterRow {
+  column: string;
+  op: string;
+  value: string;
+}
+
+interface QueryResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+}
 
 function Overview({ d }: { d: DatasetDetail }) {
   const rows: [string, string][] = [
@@ -569,6 +590,226 @@ function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: (id: st
   );
 }
 
+function QueryPanel({ d }: { d: DatasetDetail }) {
+  const names = d.columns.map((c) => c.name);
+  const [joinItemsOn, setJoinItemsOn] = useState("");
+  const allColumns = joinItemsOn ? [...names, ...ITEM_JOIN_COLUMNS.map((c) => `items.${c}`)] : names;
+
+  const [fields, setFields] = useState<SelectFieldRow[]>([{ column: names[0] ?? "", agg: "", alias: "" }]);
+  const [groupBy, setGroupBy] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState<FilterRow[]>([]);
+  const [orderBy, setOrderBy] = useState("");
+  const [orderDesc, setOrderDesc] = useState(false);
+  const [limit, setLimit] = useState("500");
+
+  function updateField(i: number, patch: Partial<SelectFieldRow>) {
+    setFields((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  }
+  function updateFilter(i: number, patch: Partial<FilterRow>) {
+    setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  }
+
+  const query = useMutation({
+    mutationFn: async () => {
+      const body = {
+        select: fields.map((f) => ({
+          column: f.column,
+          agg: f.agg || undefined,
+          alias: f.alias.trim() || undefined,
+        })),
+        group_by: Array.from(groupBy),
+        filters: filters.map((f) => {
+          const value =
+            f.op === "in"
+              ? f.value.split(",").map((v) => v.trim()).filter(Boolean)
+              : f.op !== "contains" && f.value !== "" && !Number.isNaN(Number(f.value))
+                ? Number(f.value)
+                : f.value;
+          return { column: f.column, op: f.op, value };
+        }),
+        join_items_on: joinItemsOn || undefined,
+        order_by: orderBy || undefined,
+        order_desc: orderDesc,
+        limit: Number(limit) || 500,
+      };
+      const res = await apiFetch(`/datasets/${d.id}/query`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
+      return res.json() as Promise<QueryResult>;
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Query</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <Field label="Join Items by column (optional)">
+            <Select value={joinItemsOn} onChange={(e) => setJoinItemsOn(e.target.value)}>
+              <option value="">No join</option>
+              {names.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Select fields</div>
+            {fields.map((f, i) => (
+              <div key={i} className="flex flex-wrap items-end gap-2">
+                <Field label="Column" className="min-w-[10rem]">
+                  <Select value={f.column} onChange={(e) => updateField(i, { column: e.target.value })}>
+                    {allColumns.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Aggregate" className="min-w-[8rem]">
+                  <Select value={f.agg} onChange={(e) => updateField(i, { agg: e.target.value })}>
+                    {AGG_OPTIONS.map((a) => (
+                      <option key={a} value={a}>
+                        {a || "none"}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Alias" className="min-w-[8rem]">
+                  <Input value={f.alias} onChange={(e) => updateField(i, { alias: e.target.value })} placeholder="optional" />
+                </Field>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={fields.length === 1}
+                  onClick={() => setFields((prev) => prev.filter((_, idx) => idx !== i))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setFields((prev) => [...prev, { column: allColumns[0] ?? "", agg: "", alias: "" }])}
+            >
+              + Add field
+            </Button>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Group by (optional)</div>
+            <ColumnChecklist columns={allColumns} selected={groupBy} onChange={setGroupBy} />
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Filters</div>
+            {filters.map((f, i) => (
+              <div key={i} className="flex flex-wrap items-end gap-2">
+                <Field label="Column" className="min-w-[10rem]">
+                  <Select value={f.column} onChange={(e) => updateFilter(i, { column: e.target.value })}>
+                    {allColumns.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Op" className="min-w-[8rem]">
+                  <Select value={f.op} onChange={(e) => updateFilter(i, { op: e.target.value })}>
+                    {FILTER_OPS.map((op) => (
+                      <option key={op} value={op}>
+                        {op}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Value" className="min-w-[10rem]">
+                  <Input
+                    value={f.value}
+                    onChange={(e) => updateFilter(i, { value: e.target.value })}
+                    placeholder={f.op === "in" ? "comma,separated,values" : ""}
+                  />
+                </Field>
+                <Button variant="ghost" size="sm" onClick={() => setFilters((prev) => prev.filter((_, idx) => idx !== i))}>
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setFilters((prev) => [...prev, { column: allColumns[0] ?? "", op: "eq", value: "" }])}
+            >
+              + Add filter
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Order by" className="min-w-[10rem]">
+              <Select value={orderBy} onChange={(e) => setOrderBy(e.target.value)}>
+                <option value="">None</option>
+                {allColumns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <label className="flex items-center gap-2 pb-2 text-sm">
+              <Checkbox checked={orderDesc} onChange={(e) => setOrderDesc(e.target.checked)} />
+              Descending
+            </label>
+            <Field label="Limit" className="w-28">
+              <Input type="number" value={limit} onChange={(e) => setLimit(e.target.value)} />
+            </Field>
+            <Button loading={query.isPending} onClick={() => query.mutate()}>
+              Run query
+            </Button>
+          </div>
+
+          {query.isError && <Alert variant="destructive">{(query.error as Error).message}</Alert>}
+        </CardContent>
+      </Card>
+
+      {query.isSuccess && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Results ({query.data.rows.length} rows)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TableWrap className="max-h-[32rem] overflow-y-auto">
+              <Table>
+                <THead>
+                  <TR>
+                    {query.data.columns.map((c) => (
+                      <TH key={c}>{c}</TH>
+                    ))}
+                  </TR>
+                </THead>
+                <TBody>
+                  {query.data.rows.map((row, i) => (
+                    <TR key={i}>
+                      {query.data!.columns.map((c) => (
+                        <TD key={c} className="whitespace-nowrap">
+                          {row[c] === null || row[c] === undefined ? "—" : String(row[c])}
+                        </TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export function DatasetDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -634,6 +875,7 @@ export function DatasetDetail() {
       {tab === "schema" && <Schema d={d} />}
       {tab === "preview" && <Preview d={d} />}
       {tab === "health" && <HealthPanel id={d.id} />}
+      {tab === "query" && <QueryPanel d={d} />}
       {tab === "clean" && <CleanPanel d={d} onCreated={openDataset} />}
       {tab === "transform" && <TransformPanel d={d} onCreated={openDataset} />}
     </div>

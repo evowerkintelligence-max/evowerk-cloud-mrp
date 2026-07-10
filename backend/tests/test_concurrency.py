@@ -64,7 +64,7 @@ async def pg_engine():
 
 
 @pytest_asyncio.fixture
-async def pg_client(pg_engine):
+async def pg_client(pg_engine, monkeypatch):
     import fakeredis.aioredis as fakeredis
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -86,6 +86,15 @@ async def pg_client(pg_engine):
 
     app.dependency_overrides[db_session.get_db] = _get_db_override
     app.dependency_overrides[redis_client.get_redis] = _get_redis_override
+    # TelemetryMiddleware opens its own session outside the DI chain via the
+    # module-level async_session_factory, which is bound to the default engine
+    # created once at import time in whatever event loop was running then.
+    # Left unpatched, every request leaks a connection from that stale pool -
+    # fine for the first test in the file, but pytest-asyncio hands each test
+    # function a fresh event loop, so every test after the first hits asyncpg
+    # connections still attached to a closed loop ("Future ... attached to a
+    # different loop"). Point it at this test's own pg-backed factory instead.
+    monkeypatch.setattr(db_session, "async_session_factory", session_factory)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

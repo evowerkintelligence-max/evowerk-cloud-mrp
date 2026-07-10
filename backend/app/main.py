@@ -13,8 +13,11 @@ from app.api.routes import (
     items,
     locations,
     lots,
+    oee,
     orgs,
+    process_mining,
     purchase_orders,
+    quality,
     suppliers,
 )
 from app.core.config import get_settings
@@ -51,6 +54,9 @@ app.include_router(inventory.router)
 app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
 app.include_router(datasets.router)
+app.include_router(oee.router)
+app.include_router(quality.router)
+app.include_router(process_mining.router)
 
 
 @app.get("/health")

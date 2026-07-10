@@ -187,6 +187,18 @@ def validate_columns(dataset: Dataset, cols: Iterable[str | None]) -> None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Column not found in dataset: '{col}'")
 
 
+def dataframe_for(dataset: Dataset):
+    """Full dataset as a pandas DataFrame, via the same DuckDB relation every
+    other reader uses (CSV columns come through as strings — callers coerce
+    the specific columns they need, same as the rest of this module)."""
+    rel = dataset_relation(dataset)
+    con = open_con()
+    try:
+        return con.execute(f"SELECT * FROM {rel}").df()
+    finally:
+        con.close()
+
+
 def preview_rows(dataset: Dataset, limit: int = 50) -> list[dict]:
     rel = dataset_relation(dataset)
     con = open_con()

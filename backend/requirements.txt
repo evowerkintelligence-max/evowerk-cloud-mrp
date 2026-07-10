@@ -24,3 +24,6 @@ duckdb>=1.0.0
 pandas>=2.2.0
 openpyxl>=3.1.0
 python-multipart>=0.0.9
+
+# Quality analytics: KMeans clustering of defect-driving process parameters
+scikit-learn>=1.4.0

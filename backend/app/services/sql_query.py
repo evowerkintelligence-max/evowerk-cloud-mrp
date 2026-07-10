@@ -98,7 +98,14 @@ async def run_sql(
         inner = sql.strip()
         if inner.endswith(";"):
             inner = inner[:-1].strip()
-        wrapped = f"SELECT * FROM (\n{inner}\n) AS _q LIMIT {row_limit}"
+        # nosec B608 - this is the one place in the codebase that embeds raw,
+        # not-column-allow-listed user text into SQL (that's the point of a
+        # free-text SQL feature). Safety here comes from the three layers
+        # above instead of allow-listing: extract_statements() just confirmed
+        # `inner` is a single SELECT statement, enable_external_access=false
+        # blocks filesystem/network reads from inside it, and the caller
+        # wraps execution in a timeout. See the module docstring.
+        wrapped = f"SELECT * FROM (\n{inner}\n) AS _q LIMIT {row_limit}"  # nosec B608
 
         columns, rows = await asyncio.to_thread(_execute_with_timeout, con, wrapped, timeout_seconds)
         return {

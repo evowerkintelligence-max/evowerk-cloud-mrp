@@ -22,10 +22,13 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
     inv_terms = _inv(req.units_col) + (f" + {_inv(pcol)}" if pcol else "")
     planned_sel = _val(pcol) if pcol else "0.0"
 
+    # nosec B608 - units_col/date_col/machine_col/planned_units_col are
+    # validate_columns-checked by the route before reaching here, and every
+    # reference below is qi()/num_val()-quoted; no free-text SQL entry.
     con = ds_service.open_con()
     try:
         r = con.execute(
-            f"SELECT SUM({_val(req.units_col)}), {('SUM(' + _val(pcol) + ')') if pcol else 'NULL'}, "
+            f"SELECT SUM({_val(req.units_col)}), {('SUM(' + _val(pcol) + ')') if pcol else 'NULL'}, "  # nosec B608
             f"SUM({inv_terms}), SUM(CASE WHEN ({inv_terms}) > 0 THEN 1 ELSE 0 END), COUNT(*) FROM {rel}"
         ).fetchone() or (0, None, 0, 0, 0)
         total_units = float(r[0] or 0.0)
@@ -38,7 +41,7 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
         if req.date_col and req.date_col in headers:
             dk = f"SUBSTRING(NULLIF(TRIM(CAST({qi(req.date_col)} AS VARCHAR)), ''), 1, 10)"
             for k, u, pl in con.execute(
-                f"SELECT {dk}, SUM({_val(req.units_col)}), SUM({planned_sel}) FROM {rel} "
+                f"SELECT {dk}, SUM({_val(req.units_col)}), SUM({planned_sel}) FROM {rel} "  # nosec B608
                 f"WHERE {dk} IS NOT NULL GROUP BY 1"
             ).fetchall():
                 period_groups[str(k)] = {"units": float(u or 0.0), "planned": float(pl or 0.0)}
@@ -47,7 +50,7 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
         if req.machine_col and req.machine_col in headers:
             mk = f"NULLIF(TRIM(CAST({qi(req.machine_col)} AS VARCHAR)), '')"
             for k, u in con.execute(
-                f"SELECT {mk}, SUM({_val(req.units_col)}) FROM {rel} WHERE {mk} IS NOT NULL GROUP BY 1"
+                f"SELECT {mk}, SUM({_val(req.units_col)}) FROM {rel} WHERE {mk} IS NOT NULL GROUP BY 1"  # nosec B608
             ).fetchall():
                 machine_groups[str(k)] = float(u or 0.0)
     finally:

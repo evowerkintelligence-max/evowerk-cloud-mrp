@@ -53,9 +53,11 @@ def _sniff(path: Path) -> tuple[list[dict], int]:
     rel = relation_for(path)
     con = open_con()
     try:
-        desc = con.execute(f"DESCRIBE SELECT * FROM {rel}").fetchall()
+        # nosec B608 - rel is the DuckDB relation string from relation_for(),
+        # which quote-escapes the file path; no column identifiers here.
+        desc = con.execute(f"DESCRIBE SELECT * FROM {rel}").fetchall()  # nosec B608
         columns = [{"name": str(r[0]), "dtype": str(r[1])} for r in desc]
-        row_count = int(con.execute(f"SELECT COUNT(*) FROM {rel}").fetchone()[0])
+        row_count = int(con.execute(f"SELECT COUNT(*) FROM {rel}").fetchone()[0])  # nosec B608
     finally:
         con.close()
     return columns, row_count
@@ -169,7 +171,7 @@ def preview_rows(dataset: Dataset, limit: int = 50) -> list[dict]:
     rel = dataset_relation(dataset)
     con = open_con()
     try:
-        cur = con.execute(f"SELECT * FROM {rel} LIMIT {int(limit)}")
+        cur = con.execute(f"SELECT * FROM {rel} LIMIT {int(limit)}")  # nosec B608 - rel is the quote-escaped relation string, limit is int()-cast
         names = [d[0] for d in (cur.description or [])]
         return [{n: _json_safe(v) for n, v in zip(names, row)} for row in cur.fetchall()]
     finally:
@@ -196,9 +198,11 @@ def compute_health(dataset: Dataset) -> dict:
         dup_count = 0
         if row_count and names:
             key = "concat_ws(chr(31), " + ", ".join(f"COALESCE(CAST({qi(n)} AS VARCHAR), '')" for n in names) + ")"
+            # nosec B608 - key/rel are built from qi()-quoted dataset column
+            # names (names comes from the sniffed schema, not free text).
             dup_count = int(
                 con.execute(
-                    f"SELECT COUNT(*) FROM ("
+                    f"SELECT COUNT(*) FROM ("  # nosec B608
                     f"SELECT ROW_NUMBER() OVER (PARTITION BY {key}) AS rn FROM {rel}"
                     f") WHERE rn > 1"
                 ).fetchone()[0]
@@ -210,19 +214,21 @@ def compute_health(dataset: Dataset) -> dict:
 
         for n in names:
             blank = _blank_expr(n)
+            # nosec B608 - blank/rel are built from qi()-quoted column names (see
+            # _blank_expr); n comes from `names`, the dataset's own sniffed schema.
             null_count, distinct_count = con.execute(
-                f"SELECT COUNT(*) FILTER (WHERE {blank} IS NULL), COUNT(DISTINCT {blank}) FROM {rel}"
+                f"SELECT COUNT(*) FILTER (WHERE {blank} IS NULL), COUNT(DISTINCT {blank}) FROM {rel}"  # nosec B608
             ).fetchone()
             total_null += null_count
 
             top_rows = con.execute(
-                f"SELECT {blank} AS v, COUNT(*) AS n FROM {rel} WHERE {blank} IS NOT NULL "
+                f"SELECT {blank} AS v, COUNT(*) AS n FROM {rel} WHERE {blank} IS NOT NULL "  # nosec B608
                 f"GROUP BY v ORDER BY n DESC LIMIT 5"
             ).fetchall()
             top_values = [{"value": v, "count": int(c)} for v, c in top_rows]
 
             num_min, num_max, num_mean, num_std, num_count = con.execute(
-                f"SELECT MIN(v), MAX(v), AVG(v), STDDEV_POP(v), COUNT(v) FROM "
+                f"SELECT MIN(v), MAX(v), AVG(v), STDDEV_POP(v), COUNT(v) FROM "  # nosec B608
                 f"(SELECT TRY_CAST({blank} AS DOUBLE) AS v FROM {rel}) WHERE v IS NOT NULL"
             ).fetchone()
 
@@ -232,7 +238,7 @@ def compute_health(dataset: Dataset) -> dict:
                 inferred = "numeric"
             elif non_null:
                 date_count = con.execute(
-                    f"SELECT COUNT(*) FROM (SELECT TRY_CAST({blank} AS TIMESTAMP) AS v FROM {rel}) WHERE v IS NOT NULL"
+                    f"SELECT COUNT(*) FROM (SELECT TRY_CAST({blank} AS TIMESTAMP) AS v FROM {rel}) WHERE v IS NOT NULL"  # nosec B608
                 ).fetchone()[0]
                 if date_count >= non_null * 0.9:
                     inferred = "datetime"
@@ -240,7 +246,7 @@ def compute_health(dataset: Dataset) -> dict:
             outlier_count = outlier_pct = None
             if num_count and num_count >= 8:
                 q1, q3 = con.execute(
-                    f"SELECT quantile_cont(v, 0.25), quantile_cont(v, 0.75) FROM "
+                    f"SELECT quantile_cont(v, 0.25), quantile_cont(v, 0.75) FROM "  # nosec B608
                     f"(SELECT TRY_CAST({blank} AS DOUBLE) AS v FROM {rel}) WHERE v IS NOT NULL"
                 ).fetchone()
                 if q1 is not None and q3 is not None and (q3 - q1) > 0:
@@ -248,7 +254,7 @@ def compute_health(dataset: Dataset) -> dict:
                     low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr
                     outlier_count = int(
                         con.execute(
-                            f"SELECT COUNT(*) FROM (SELECT TRY_CAST({blank} AS DOUBLE) AS v FROM {rel}) "
+                            f"SELECT COUNT(*) FROM (SELECT TRY_CAST({blank} AS DOUBLE) AS v FROM {rel}) "  # nosec B608
                             f"WHERE v IS NOT NULL AND (v < {low} OR v > {high})"
                         ).fetchone()[0]
                     )
@@ -343,11 +349,12 @@ async def clean_dataset(
                 blank = _blank_expr(c)
                 if strategy in ("mean", "median"):
                     fn = "AVG" if strategy == "mean" else "MEDIAN"
-                    val = con.execute(f"SELECT {fn}(TRY_CAST({blank} AS DOUBLE)) FROM {rel}").fetchone()[0]
+                    # nosec B608 - c/blank are qi()-quoted headers (from dataset.columns)
+                    val = con.execute(f"SELECT {fn}(TRY_CAST({blank} AS DOUBLE)) FROM {rel}").fetchone()[0]  # nosec B608
                     fill_map[c] = qs(str(val)) if val is not None else "''"
                 elif strategy == "mode":
                     row = con.execute(
-                        f"SELECT {blank} AS v FROM {rel} WHERE {blank} IS NOT NULL "
+                        f"SELECT {blank} AS v FROM {rel} WHERE {blank} IS NOT NULL "  # nosec B608
                         f"GROUP BY v ORDER BY COUNT(*) DESC LIMIT 1"
                     ).fetchone()
                     fill_map[c] = qs(row[0]) if row else "''"
@@ -366,8 +373,10 @@ async def clean_dataset(
                 return f"CASE WHEN {_blank_expr(c)} IS NULL THEN {fill_map[c]} ELSE {base} END AS {ident}"
             return f"{base} AS {ident}"
 
+        # nosec B608 - step1_expr/headers are qi()-quoted dataset column names
+        # (from dataset.columns, the sniffed schema), not free-text input.
         con.execute(
-            f"CREATE OR REPLACE TEMP VIEW _clean1 AS SELECT {', '.join(step1_expr(c) for c in headers)} FROM {rel}"
+            f"CREATE OR REPLACE TEMP VIEW _clean1 AS SELECT {', '.join(step1_expr(c) for c in headers)} FROM {rel}"  # nosec B608
         )
         cur = "_clean1"
 
@@ -377,7 +386,7 @@ async def clean_dataset(
             fences: dict[str, tuple[float, float]] = {}
             for c in target:
                 q1, q3, n = con.execute(
-                    f"SELECT quantile_cont(v, 0.25), quantile_cont(v, 0.75), COUNT(v) FROM "
+                    f"SELECT quantile_cont(v, 0.25), quantile_cont(v, 0.75), COUNT(v) FROM "  # nosec B608
                     f"(SELECT TRY_CAST({qi(c)} AS DOUBLE) AS v FROM {cur}) WHERE v IS NOT NULL"
                 ).fetchone()
                 if n and n >= 8 and q1 is not None and q3 is not None and (q3 - q1) > 0:
@@ -399,14 +408,14 @@ async def clean_dataset(
                             )
                         else:
                             exprs.append(ident)
-                    con.execute(f"CREATE OR REPLACE TEMP VIEW _clean2 AS SELECT {', '.join(exprs)} FROM {cur}")
+                    con.execute(f"CREATE OR REPLACE TEMP VIEW _clean2 AS SELECT {', '.join(exprs)} FROM {cur}")  # nosec B608
                     ops.append(f"Cap outliers (IQR {factor})")
                 else:
                     where = " AND ".join(
                         f"(TRY_CAST({qi(c)} AS DOUBLE) IS NULL OR TRY_CAST({qi(c)} AS DOUBLE) BETWEEN {low} AND {high})"
                         for c, (low, high) in fences.items()
                     )
-                    con.execute(f"CREATE OR REPLACE TEMP VIEW _clean2 AS SELECT * FROM {cur} WHERE {where}")
+                    con.execute(f"CREATE OR REPLACE TEMP VIEW _clean2 AS SELECT * FROM {cur} WHERE {where}")  # nosec B608
                     ops.append(f"Remove outliers (IQR {factor})")
                 cur = "_clean2"
 
@@ -414,7 +423,7 @@ async def clean_dataset(
             stats: dict[str, tuple[float, float]] = {}
             for c in headers:
                 mean, std, n = con.execute(
-                    f"SELECT AVG(v), STDDEV_POP(v), COUNT(v) FROM "
+                    f"SELECT AVG(v), STDDEV_POP(v), COUNT(v) FROM "  # nosec B608
                     f"(SELECT TRY_CAST({qi(c)} AS DOUBLE) AS v FROM {cur}) WHERE v IS NOT NULL"
                 ).fetchone()
                 if n and n >= 2 and std:
@@ -428,13 +437,13 @@ async def clean_dataset(
                     )
                     for c in headers
                 ]
-                con.execute(f"CREATE OR REPLACE TEMP VIEW _clean3 AS SELECT {', '.join(exprs)} FROM {cur}")
+                con.execute(f"CREATE OR REPLACE TEMP VIEW _clean3 AS SELECT {', '.join(exprs)} FROM {cur}")  # nosec B608
                 cur = "_clean3"
                 ops.append("Standardize numeric columns (z-score)")
 
         if req.drop_duplicates:
             ops.append("Drop duplicates")
-        select_sql = f"SELECT {'DISTINCT ' if req.drop_duplicates else ''}* FROM {cur}"
+        select_sql = f"SELECT {'DISTINCT ' if req.drop_duplicates else ''}* FROM {cur}"  # nosec B608 - cur is an internal temp-view name, not user input
 
         dataset_out = _materialize(db, con, select_sql, org_id=org_id, created_by=created_by, name=output_name)
     finally:
@@ -454,7 +463,7 @@ async def select_columns_dataset(
     rel = dataset_relation(dataset)
     con = open_con()
     try:
-        select_sql = f"SELECT {', '.join(qi(c) for c in keep)} FROM {rel}"
+        select_sql = f"SELECT {', '.join(qi(c) for c in keep)} FROM {rel}"  # nosec B608 - keep is filtered to `c in headers`, the sniffed schema
         dataset_out = _materialize(db, con, select_sql, org_id=org_id, created_by=created_by, name=output_name)
     finally:
         con.close()
@@ -497,7 +506,7 @@ async def pivot_dataset(
             inner = ", ".join(
                 f"CAST({qi(c)} AS VARCHAR) AS {qi(c)}" if c in pivot_cols else qi(c) for c in keep
             )
-            con.execute(f"CREATE OR REPLACE TEMP VIEW _pivot_src AS SELECT {inner} FROM {rel}")
+            con.execute(f"CREATE OR REPLACE TEMP VIEW _pivot_src AS SELECT {inner} FROM {rel}")  # nosec B608 - inner is built from qi()-quoted, `in headers`-checked columns
             on_list = ", ".join(qi(c) for c in pivot_cols)
             sel = (
                 [f"{qi(ts_col)} AS {qi(out_ts)}"]
@@ -505,7 +514,7 @@ async def pivot_dataset(
                 + [f"tag AS {qi(out_tag)}", f"value AS {qi(out_val)}"]
             )
             select_sql = (
-                f"SELECT {', '.join(sel)} FROM (UNPIVOT _pivot_src ON {on_list} INTO NAME tag VALUE value) "
+                f"SELECT {', '.join(sel)} FROM (UNPIVOT _pivot_src ON {on_list} INTO NAME tag VALUE value) "  # nosec B608
                 f"WHERE value IS NOT NULL AND trim(CAST(value AS VARCHAR)) <> ''"
             )
         else:
@@ -521,7 +530,7 @@ async def pivot_dataset(
             passthrough = [h for h in headers if h not in (ts_col, tag_col, value_col)]
             group_cols = ", ".join(qi(c) for c in ([ts_col] + passthrough))
             select_sql = (
-                f"SELECT * FROM (PIVOT {rel} ON {qi(tag_col)} USING first({qi(value_col)}) "
+                f"SELECT * FROM (PIVOT {rel} ON {qi(tag_col)} USING first({qi(value_col)}) "  # nosec B608 - tag_col/value_col are checked against headers above
                 f"GROUP BY {group_cols})"
             )
         dataset_out = _materialize(db, con, select_sql, org_id=org_id, created_by=created_by, name=output_name)

@@ -142,8 +142,10 @@ def oee_overall(
     extras = list((extra_sum_cols or {}).items())
     tail = f", SUM({ideal_units_expr(o, t, ideal_sql)}), SUM({unrated_expr(ideal_sql)})"
     tail += "".join(f", SUM({val_expr(col)})" for _, col in extras)
+    # nosec B608 - p/o/t/g/rel are qi()-quoted, validate_columns-checked column
+    # refs (see val_expr/inv_expr/blank_expr and the route's validate_columns call).
     sql = (
-        f"SELECT SUM({val_expr(p)}), SUM({val_expr(o)}), SUM({val_expr(t)}), SUM({val_expr(g)}), "
+        f"SELECT SUM({val_expr(p)}), SUM({val_expr(o)}), SUM({val_expr(t)}), SUM({val_expr(g)}), "  # nosec B608
         f"SUM({bad}), SUM(CASE WHEN {bad} > 0 THEN 1 ELSE 0 END), COUNT(*), SUM({blank})"
         f"{tail} FROM {rel}{clause}"
     )
@@ -174,7 +176,7 @@ def oee_grouped(
     blank = f"({blank_expr(p)}+{blank_expr(o)}+{blank_expr(t)}+{blank_expr(g)})"
     extra = ", COUNT(*)" if with_count else ""
     sql = (
-        f"SELECT CAST({gq} AS VARCHAR), SUM({val_expr(p)}), SUM({val_expr(o)}), "
+        f"SELECT CAST({gq} AS VARCHAR), SUM({val_expr(p)}), SUM({val_expr(o)}), "  # nosec B608
         f"SUM({val_expr(t)}), SUM({val_expr(g)}), SUM({bad}), SUM({blank}), "
         f"SUM({ideal_units_expr(o, t, ideal_sql)}), SUM({unrated_expr(ideal_sql)}){extra} "
         f"FROM {rel} WHERE NULLIF(TRIM(CAST({gq} AS VARCHAR)), '') IS NOT NULL GROUP BY 1"

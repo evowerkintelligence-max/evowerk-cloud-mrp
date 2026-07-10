@@ -83,17 +83,19 @@ def analyze_shifts(dataset: Dataset, req: Any) -> dict:
     buckets: dict[str, dict[str, float]] = {}
     cat_buckets: dict[str, dict[str, float]] = defaultdict(dict)
 
+    # nosec B608 - every column term above is built from qi()/num_val-quoted,
+    # `in headers`-gated (dataset's own sniffed schema) columns; no free-text SQL.
     con = ds_service.open_con()
     try:
         gr = con.execute(
-            f"SELECT SUM({inv_expr}), SUM(CASE WHEN ({inv_expr}) > 0 THEN 1 ELSE 0 END), COUNT(*) FROM {rel}"
+            f"SELECT SUM({inv_expr}), SUM(CASE WHEN ({inv_expr}) > 0 THEN 1 ELSE 0 END), COUNT(*) FROM {rel}"  # nosec B608
         ).fetchone() or (0, 0, 0)
         invalid_cells = int(gr[0] or 0)
         rows_with_issues = int(gr[1] or 0)
         row_count = int(gr[2] or 0)
 
         for row in con.execute(
-            f"SELECT {shift_key}, COUNT(*), {total_sel}, SUM({units_term}), {scrap_sel}, "
+            f"SELECT {shift_key}, COUNT(*), {total_sel}, SUM({units_term}), {scrap_sel}, "  # nosec B608
             f"{planned_sel}, {oper_sel}, {good_sel}, {dt_sel} FROM {rel} GROUP BY 1"
         ).fetchall():
             buckets[str(row[0])] = {
@@ -111,7 +113,7 @@ def analyze_shifts(dataset: Dataset, req: Any) -> dict:
             cat_key = f"COALESCE(NULLIF(TRIM(CAST({qi(req.downtime_category_col)} AS VARCHAR)), ''), 'Unknown')"
             dval = _val(req.downtime_col)
             for sh, cat, mins in con.execute(
-                f"SELECT {shift_key}, {cat_key}, SUM({dval}) FROM {rel} WHERE {dval} > 0 GROUP BY 1, 2"
+                f"SELECT {shift_key}, {cat_key}, SUM({dval}) FROM {rel} WHERE {dval} > 0 GROUP BY 1, 2"  # nosec B608
             ).fetchall():
                 cat_buckets[str(sh)][str(cat)] = float(mins or 0.0) * unit_factor
     finally:

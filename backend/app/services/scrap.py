@@ -17,9 +17,11 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
     rel = ds_service.dataset_relation(dataset)
     tval, sval = num_val(req.total_units_col), num_val(req.scrap_col)
 
+    # nosec B608 - every column below is gated by an `in headers` (dataset's own
+    # sniffed schema) check and qi()/num_val-quoted before interpolation.
     con = ds_service.open_con()
     try:
-        r = con.execute(f"SELECT SUM({tval}), SUM({sval}), COUNT(*) FROM {rel}").fetchone() or (0, 0, 0)
+        r = con.execute(f"SELECT SUM({tval}), SUM({sval}), COUNT(*) FROM {rel}").fetchone() or (0, 0, 0)  # nosec B608
         total_units = float(r[0] or 0.0)
         total_scrap = float(r[1] or 0.0)
         row_count = int(r[2] or 0)
@@ -27,14 +29,14 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
         reason_groups: dict[str, float] = {}
         if req.reason_col and req.reason_col in headers:
             rk = f"COALESCE(NULLIF(TRIM(CAST({qi(req.reason_col)} AS VARCHAR)), ''), 'Unknown')"
-            for k, s in con.execute(f"SELECT {rk}, SUM({sval}) FROM {rel} GROUP BY 1").fetchall():
+            for k, s in con.execute(f"SELECT {rk}, SUM({sval}) FROM {rel} GROUP BY 1").fetchall():  # nosec B608
                 reason_groups[str(k)] = float(s or 0.0)
 
         machine_groups: dict[str, dict[str, float]] = {}
         if req.machine_col and req.machine_col in headers:
             mk = f"NULLIF(TRIM(CAST({qi(req.machine_col)} AS VARCHAR)), '')"
             for k, t, s in con.execute(
-                f"SELECT {mk}, SUM({tval}), SUM({sval}) FROM {rel} WHERE {mk} IS NOT NULL GROUP BY 1"
+                f"SELECT {mk}, SUM({tval}), SUM({sval}) FROM {rel} WHERE {mk} IS NOT NULL GROUP BY 1"  # nosec B608
             ).fetchall():
                 machine_groups[str(k)] = {"total": float(t or 0.0), "scrap": float(s or 0.0)}
 
@@ -42,7 +44,7 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
         if req.date_col and req.date_col in headers:
             dk = f"SUBSTRING(NULLIF(TRIM(CAST({qi(req.date_col)} AS VARCHAR)), ''), 1, 10)"
             for k, t, s in con.execute(
-                f"SELECT {dk}, SUM({tval}), SUM({sval}) FROM {rel} WHERE {dk} IS NOT NULL GROUP BY 1"
+                f"SELECT {dk}, SUM({tval}), SUM({sval}) FROM {rel} WHERE {dk} IS NOT NULL GROUP BY 1"  # nosec B608
             ).fetchall():
                 period_groups[str(k)] = {"total": float(t or 0.0), "scrap": float(s or 0.0)}
     finally:

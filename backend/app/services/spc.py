@@ -24,7 +24,7 @@ def analyze_spc(dataset: Dataset, req: Any) -> dict:
     # ROW_NUMBER gives a reliable original-order fallback ("rowid" isn't available
     # on table functions). CSV is ALL_VARCHAR, so sort numerically when the order
     # column parses as a number, else lexically (correct for ISO date/timestamps).
-    base = f"(SELECT *, ROW_NUMBER() OVER () AS __rn FROM {rel})"
+    base = f"(SELECT *, ROW_NUMBER() OVER () AS __rn FROM {rel})"  # nosec B608 - rel is the quote-escaped relation string, no identifiers
     if req.order_col:
         label_expr = f"CAST({qi(req.order_col)} AS VARCHAR)"
         numeric_key = f"TRY_CAST(NULLIF(TRIM({label_expr}), '') AS DOUBLE)"
@@ -33,14 +33,17 @@ def analyze_spc(dataset: Dataset, req: Any) -> dict:
         label_expr = "CAST(__rn AS VARCHAR)"
         sort_key = "__rn"
 
+    # nosec B608 - value_col/subgroup_col/order_col are validate_columns-checked
+    # by the route before reaching here, and qi()-quoted (sub_expr/label_expr/
+    # vexpr) or fixed literals (base/rel/__rn) below; no free-text SQL entry.
     con = ds_service.open_con()
     try:
-        total = int((con.execute(f"SELECT COUNT(*) FROM {base}").fetchone() or [0])[0])
+        total = int((con.execute(f"SELECT COUNT(*) FROM {base}").fetchone() or [0])[0])  # nosec B608
         truncated = total > req.max_points
 
         if sub_expr:
             sql = (
-                f"SELECT CAST({sub_expr} AS VARCHAR), {vexpr} FROM {base} "
+                f"SELECT CAST({sub_expr} AS VARCHAR), {vexpr} FROM {base} "  # nosec B608
                 f"WHERE NULLIF(TRIM(CAST({sub_expr} AS VARCHAR)), '') IS NOT NULL "
                 f"ORDER BY {sort_key} LIMIT {req.max_points * 20}"
             )
@@ -64,7 +67,7 @@ def analyze_spc(dataset: Dataset, req: Any) -> dict:
             resp = spc_calc.xbar_r_chart(subgroups, labels)
             all_values = [v for g in subgroups for v in g]
         else:
-            sql = f"SELECT {label_expr}, {vexpr} FROM {base} ORDER BY {sort_key} LIMIT {req.max_points}"
+            sql = f"SELECT {label_expr}, {vexpr} FROM {base} ORDER BY {sort_key} LIMIT {req.max_points}"  # nosec B608
             rows = con.execute(sql).fetchall()
             if len(rows) < 2:
                 raise HTTPException(

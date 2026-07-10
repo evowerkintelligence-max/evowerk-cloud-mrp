@@ -83,6 +83,14 @@ def _column_sql(dataset: Dataset, col: str, *, join_enabled: bool) -> str:
 
 def _filter_sql(dataset: Dataset, f: QueryFilter, *, join_enabled: bool) -> str:
     col_sql = _column_sql(dataset, f.column, join_enabled=join_enabled)
+    if f.value is None:
+        if f.op == "eq":
+            return f"{col_sql} IS NULL"
+        if f.op == "neq":
+            return f"{col_sql} IS NOT NULL"
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Filter on '{f.column}' cannot use op '{f.op}' with a null value"
+        )
     if f.op == "in":
         if not isinstance(f.value, list) or not f.value:
             raise HTTPException(

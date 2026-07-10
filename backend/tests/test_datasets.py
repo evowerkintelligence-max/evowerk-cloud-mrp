@@ -4,9 +4,9 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit  # pragma: allowlist secret
 
-CSV = b"planned,operating,total,good\n100,90,180,171\n100,80,160,152\n"
+CSV = b"sku,qty,region\nA-1,10,east\nA-2,5,west\nA-1,3,west\n"
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
@@ -19,64 +19,68 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"]
 
 
-def _h(token):
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _upload(client, token, data=CSV, filename="prod.csv"):
+async def _upload(client, token, *, filename="stock.csv", content=CSV, name=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    data = {"name": name} if name else {}
     return await client.post(
-        "/datasets", files={"file": (filename, data, "text/csv")}, headers=_h(token)
+        "/datasets",
+        headers=headers,
+        files={"file": (filename, content, "text/csv")},
+        data=data,
     )
 
 
-async def test_upload_list_get_delete(client):
+async def test_upload_sniffs_columns_and_row_count(client):
     token = await _register_and_login(client)
+    res = await _upload(client, token, name="Stock levels")
+    assert res.status_code == 201
+    body = res.json()
+    assert body["name"] == "Stock levels"
+    assert body["row_count"] == 3
+    assert {c["name"] for c in body["columns"]} == {"sku", "qty", "region"}
 
-    res = await _upload(client, token)
-    assert res.status_code == 201, res.text
-    ds = res.json()
-    assert ds["row_count"] == 2
-    assert [c["name"] for c in ds["columns"]] == ["planned", "operating", "total", "good"]
 
-    lst = await client.get("/datasets", headers=_h(token))
-    assert lst.status_code == 200
-    assert len(lst.json()) == 1
+async def test_upload_rejects_unsupported_extension(client):
+    token = await _register_and_login(client)
+    res = await _upload(client, token, filename="stock.exe", content=b"not a dataset")
+    assert res.status_code == 400
 
-    detail = await client.get(f"/datasets/{ds['id']}", headers=_h(token))
+
+async def test_upload_rejects_empty_file(client):
+    token = await _register_and_login(client)
+    res = await _upload(client, token, content=b"")
+    assert res.status_code == 400
+
+
+async def test_list_preview_health_and_delete(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    uploaded = (await _upload(client, token)).json()
+    dataset_id = uploaded["id"]
+
+    listed = await client.get("/datasets", headers=headers)
+    assert listed.status_code == 200
+    assert any(d["id"] == dataset_id for d in listed.json())
+
+    detail = await client.get(f"/datasets/{dataset_id}", headers=headers)
     assert detail.status_code == 200
-    assert len(detail.json()["preview"]) == 2
+    assert len(detail.json()["preview"]) == 3
 
-    delete = await client.delete(f"/datasets/{ds['id']}", headers=_h(token))
-    assert delete.status_code == 204
+    health = await client.get(f"/datasets/{dataset_id}/health", headers=headers)
+    assert health.status_code == 200
+    assert health.json()["row_count"] == 3
 
-    gone = await client.get(f"/datasets/{ds['id']}", headers=_h(token))
-    assert gone.status_code == 404
+    deleted = await client.delete(f"/datasets/{dataset_id}", headers=headers)
+    assert deleted.status_code == 204
+    assert (await client.get(f"/datasets/{dataset_id}", headers=headers)).status_code == 404
 
 
 async def test_tenant_isolation(client):
-    token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
-    token_b = await _register_and_login(client, email="b@example.com", org_name="OrgB")
+    token_a = await _register_and_login(client, email="a@example.com", org_name="A Co")
+    token_b = await _register_and_login(client, email="b@example.com", org_name="B Co")
+    dataset_id = (await _upload(client, token_a)).json()["id"]
 
-    res = await _upload(client, token_a)
-    dataset_id = res.json()["id"]
-
-    # Org B sees none of Org A's datasets, and cannot fetch one by id.
-    assert (await client.get("/datasets", headers=_h(token_b))).json() == []
-    cross = await client.get(f"/datasets/{dataset_id}", headers=_h(token_b))
-    assert cross.status_code == 404
-
-
-async def test_bad_extension_rejected(client):
-    token = await _register_and_login(client)
-    res = await client.post(
-        "/datasets",
-        files={"file": ("malware.exe", b"MZ\x90\x00", "application/octet-stream")},
-        headers=_h(token),
+    res = await client.get(
+        f"/datasets/{dataset_id}", headers={"Authorization": f"Bearer {token_b}"}
     )
-    assert res.status_code == 400
-
-
-async def test_empty_file_rejected(client):
-    token = await _register_and_login(client)
-    res = await _upload(client, token, data=b"")
-    assert res.status_code == 400
+    assert res.status_code == 404

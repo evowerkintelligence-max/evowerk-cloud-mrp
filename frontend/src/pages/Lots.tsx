@@ -7,17 +7,27 @@ import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { humanize } from "@/lib/status";
 
+interface LocationResponse {
+  id: string;
+  code: string;
+  name: string;
+  is_default: boolean;
+}
+
 interface LotResponse {
   id: string;
   item_id: string;
   item_sku: string;
   item_name: string;
+  location_id: string;
+  location_code: string;
   lot_number: string;
   quantity_received: string;
   quantity_remaining: string;
@@ -49,6 +59,8 @@ export function Lots() {
   const [selectedLotId, setSelectedLotId] = useState<string | null>(null);
   const [consumeQuantity, setConsumeQuantity] = useState("1");
   const [consumeReason, setConsumeReason] = useState("");
+  const [transferQuantity, setTransferQuantity] = useState("1");
+  const [transferToLocation, setTransferToLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const lots = useQuery<LotResponse[]>({
@@ -56,6 +68,15 @@ export function Lots() {
     queryFn: async () => {
       const res = await apiFetch("/lots");
       if (!res.ok) throw new Error("Failed to load lots");
+      return res.json();
+    },
+  });
+
+  const locations = useQuery<LocationResponse[]>({
+    queryKey: ["locations"],
+    queryFn: async () => {
+      const res = await apiFetch("/locations");
+      if (!res.ok) throw new Error("Failed to load locations");
       return res.json();
     },
   });
@@ -121,17 +142,47 @@ export function Lots() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const transferLot = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/lots/${selectedLotId}/transfer`, {
+        method: "POST",
+        body: JSON.stringify({ to_location_id: transferToLocation, quantity: transferQuantity }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to transfer");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setTransferQuantity("1");
+      setTransferToLocation("");
+      invalidateLot();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
   function onConsume(e: FormEvent) {
     e.preventDefault();
     setError(null);
     consumeLot.mutate();
   }
 
+  function onTransfer(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!transferToLocation) {
+      setError("Pick a destination location");
+      return;
+    }
+    transferLot.mutate();
+  }
+
   return (
     <div>
       <PageHeader
         title="Lots"
-        description="Lot-tracked stock from received purchase orders. Select a lot to consume, hold, or release it."
+        description="Lot-tracked stock from received purchase orders. Select a lot to consume, hold, transfer, or release it."
       />
 
       {error && (
@@ -153,6 +204,7 @@ export function Lots() {
               <TR>
                 <TH>Item</TH>
                 <TH>Lot #</TH>
+                <TH>Location</TH>
                 <TH>Received</TH>
                 <TH>Remaining</TH>
                 <TH>Status</TH>
@@ -170,6 +222,7 @@ export function Lots() {
                     {lot.item_sku} - {lot.item_name}
                   </TD>
                   <TD className="font-mono text-xs">{lot.lot_number}</TD>
+                  <TD className="text-muted-foreground">{lot.location_code}</TD>
                   <TD className="text-muted-foreground">{lot.quantity_received}</TD>
                   <TD>{lot.quantity_remaining}</TD>
                   <TD>
@@ -188,7 +241,7 @@ export function Lots() {
           <CardHeader className="flex-row items-center justify-between">
             <div>
               <CardTitle className="flex items-center gap-2">
-                {lotDetail.data.item_sku} · Lot {lotDetail.data.lot_number}
+                {lotDetail.data.item_sku} · Lot {lotDetail.data.lot_number} · {lotDetail.data.location_code}
                 <Badge variant={lotStatusVariant(lotDetail.data.status)}>
                   {humanize(lotDetail.data.status)}
                 </Badge>
@@ -219,29 +272,66 @@ export function Lots() {
           </CardHeader>
           <CardContent className="space-y-6">
             {lotDetail.data.status !== "on_hold" && (
-              <form onSubmit={onConsume} className="grid gap-4 sm:grid-cols-[160px_1fr_auto] sm:items-end">
-                <Field label="Quantity" htmlFor="consume-qty">
-                  <Input
-                    id="consume-qty"
-                    type="number"
-                    step="0.0001"
-                    min="0.0001"
-                    value={consumeQuantity}
-                    onChange={(e) => setConsumeQuantity(e.target.value)}
-                    required
-                  />
-                </Field>
-                <Field label="Reason (optional)" htmlFor="consume-reason">
-                  <Input
-                    id="consume-reason"
-                    value={consumeReason}
-                    onChange={(e) => setConsumeReason(e.target.value)}
-                  />
-                </Field>
-                <Button type="submit" variant="secondary" loading={consumeLot.isPending}>
-                  Consume
-                </Button>
-              </form>
+              <div className="grid gap-4 md:grid-cols-2">
+                <form onSubmit={onConsume} className="space-y-3 rounded-lg border border-border p-4">
+                  <p className="text-sm font-semibold">Consume</p>
+                  <Field label="Quantity" htmlFor="consume-qty">
+                    <Input
+                      id="consume-qty"
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      value={consumeQuantity}
+                      onChange={(e) => setConsumeQuantity(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="Reason (optional)" htmlFor="consume-reason">
+                    <Input
+                      id="consume-reason"
+                      value={consumeReason}
+                      onChange={(e) => setConsumeReason(e.target.value)}
+                    />
+                  </Field>
+                  <Button type="submit" variant="secondary" className="w-full" loading={consumeLot.isPending}>
+                    Consume
+                  </Button>
+                </form>
+
+                <form onSubmit={onTransfer} className="space-y-3 rounded-lg border border-border p-4">
+                  <p className="text-sm font-semibold">Transfer</p>
+                  <Field label="Quantity" htmlFor="transfer-qty">
+                    <Input
+                      id="transfer-qty"
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      value={transferQuantity}
+                      onChange={(e) => setTransferQuantity(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="To location" htmlFor="transfer-loc">
+                    <Select
+                      id="transfer-loc"
+                      value={transferToLocation}
+                      onChange={(e) => setTransferToLocation(e.target.value)}
+                    >
+                      <option value="">Select…</option>
+                      {locations.data
+                        ?.filter((l) => l.id !== lotDetail.data?.location_id)
+                        .map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.code}
+                          </option>
+                        ))}
+                    </Select>
+                  </Field>
+                  <Button type="submit" variant="secondary" className="w-full" loading={transferLot.isPending}>
+                    Transfer
+                  </Button>
+                </form>
+              </div>
             )}
 
             <TableWrap>

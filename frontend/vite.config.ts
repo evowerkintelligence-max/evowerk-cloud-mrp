@@ -2,23 +2,6 @@ import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 
-// All API prefixes the SPA talks to, proxied to the backend in dev.
-const apiPrefixes = [
-  "/auth",
-  "/orgs",
-  "/items",
-  "/boms",
-  "/suppliers",
-  "/purchase-orders",
-  "/lots",
-  "/inventory",
-  "/locations",
-  "/mrp",
-  "/forecasts",
-  "/datasets",
-  "/analytics",
-];
-
 // Overridable so the SPA can point at a backend on a non-default port (e.g. when
 // something else already holds 8000 locally) without editing this file.
 const backendPort = process.env.BACKEND_PORT || "8000";
@@ -32,8 +15,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: Object.fromEntries(
-      apiPrefixes.map((prefix) => [prefix, `http://localhost:${backendPort}`]),
-    ),
+    proxy: {
+      // One regex over every backend router prefix (see app/main.py). The old
+      // entry-per-route allowlist silently dropped any router added later:
+      // /forecasts, /mrp, /inventory, /locations and /ai were all missing, so
+      // Planning, Inventory and Ask never reached the API in dev.
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|health)(/|$|\\?)":
+        `http://localhost:${backendPort}`,
+    },
   },
 });

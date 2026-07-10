@@ -30,7 +30,7 @@ class Item(Base):
     # IMMUTABLE AFTER CREATION - load-bearing. On-hand for an item comes from
     # exactly one source depending on this flag: lot-tracked items sum their
     # active Lots, everything else uses inventory_balances (see
-    # forecasts._compute_mrp_plan). Those two are disjoint *because* this can't
+    # services.mrp.compute_mrp_plan). Those two are disjoint *because* this can't
     # change: PATCH /items only edits preferred_supplier_id, inventory
     # consume/adjust reject lot-tracked items, and receiving writes to lots XOR
     # inventory by this flag. Making it mutable would strand one ledger and
@@ -45,6 +45,11 @@ class Item(Base):
     preferred_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Supplier lead time in days, for reorder-point calculation (see
+    # app.services.inventory_analytics). Nullable and NOT defaulted to 0 - no
+    # lead time recorded is a real "insufficient data" state, not a same-day
+    # lead time, and a 0 would silently understate the reorder point.
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

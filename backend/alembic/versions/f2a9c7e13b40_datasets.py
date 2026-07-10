@@ -1,8 +1,8 @@
 """datasets (analytics dataset layer)
 
 Revision ID: f2a9c7e13b40
-Revises: e4b7d9c21a05
-Create Date: 2026-07-09
+Revises: b2c3d4e5f6a7
+Create Date: 2026-07-10
 
 """
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "f2a9c7e13b40"
-down_revision = "e4b7d9c21a05"
+revision = "f2a9c7e13b40"  # pragma: allowlist secret
+down_revision = "b2c3d4e5f6a7"  # pragma: allowlist secret
 branch_labels = None
 depends_on = None
 

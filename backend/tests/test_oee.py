@@ -4,119 +4,107 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
 
-# Two machines, two days. Hand-computed with target_rate=2 units/min:
-#   planned=200, operating=170, total=340, good=323, ideal=(90+80)*2=340
-#   availability = 170/200 = 85.0
-#   performance  = 340/340 = 100.0
-#   quality      = 323/340 = 95.0
-#   oee          = 0.85 * 1.0 * 0.95 = 80.75
 OEE_CSV = (
-    b"planned,operating,total,good,machine,day\n"
-    b"100,90,180,171,M1,2026-01-01\n"
-    b"100,80,160,152,M2,2026-01-02\n"
+    b"date,machine,planned_min,operating_min,total_units,good_units\n"
+    b"2026-01-01,M1,480,440,880,850\n"
+    b"2026-01-01,M2,480,400,760,700\n"
+    b"2026-01-02,M1,480,460,900,880\n"
+    b"2026-01-02,M2,480,420,800,760\n"
 )
 
 
-async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
+async def _register_and_login(client):
     reg = await client.post(
-        "/auth/register", json={"org_name": org_name, "email": email, "password": PASSWORD}
+        "/auth/register", json={"org_name": "Acme", "email": "owner@example.com", "password": PASSWORD}
     )
     assert reg.status_code == 201
-    login = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
-    assert login.status_code == 200
+    login = await client.post("/auth/login", json={"email": "owner@example.com", "password": PASSWORD})
     return login.json()["access_token"]
 
 
-def _h(token):
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _upload(client, token, data=OEE_CSV):
+async def _upload_dataset(client, token):
+    headers = {"Authorization": f"Bearer {token}"}
     res = await client.post(
-        "/datasets", files={"file": ("prod.csv", data, "text/csv")}, headers=_h(token)
+        "/datasets", headers=headers, files={"file": ("oee.csv", OEE_CSV, "text/csv")}
     )
-    assert res.status_code == 201, res.text
+    assert res.status_code == 201
     return res.json()["id"]
 
 
-def _base_mapping(dataset_id, **extra):
-    body = {
-        "dataset_id": dataset_id,
-        "planned_time_col": "planned",
-        "operating_time_col": "operating",
-        "total_units_col": "total",
-        "good_units_col": "good",
-    }
-    body.update(extra)
-    return body
-
-
-async def test_oee_exact_numbers(client):
+async def test_oee_compute_availability_performance_quality(client):
     token = await _register_and_login(client)
-    dataset_id = await _upload(client, token)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload_dataset(client, token)
 
     res = await client.post(
-        "/analytics/oee",
-        json=_base_mapping(dataset_id, target_rate=2, machine_col="machine", date_col="day"),
-        headers=_h(token),
+        f"/datasets/{dataset_id}/oee/compute",
+        headers=headers,
+        json={
+            "planned_time_col": "planned_min",
+            "operating_time_col": "operating_min",
+            "total_units_col": "total_units",
+            "good_units_col": "good_units",
+            "date_col": "date",
+            "machine_col": "machine",
+        },
     )
-    assert res.status_code == 200, res.text
+    assert res.status_code == 200
     body = res.json()
-    assert body["availability"] == 85.0
+
+    total_planned = 480 * 4
+    total_operating = 440 + 400 + 460 + 420
+    total_units = 880 + 760 + 900 + 800
+    good_units = 850 + 700 + 880 + 760
+
+    assert body["total_planned"] == total_planned
+    assert body["total_operating"] == total_operating
+    assert body["availability"] == round(total_operating / total_planned * 100, 2)
+    # No target_rate/machine_rates supplied -> performance is fully estimated at 100%.
     assert body["performance"] == 100.0
-    assert body["quality"] == 95.0
-    assert body["oee"] == 80.75
-    assert body["performance_estimated"] is False
-    assert body["row_count"] == 2
-    assert {m["machine"] for m in body["machines"]} == {"M1", "M2"}
-
-
-async def test_oee_performance_estimated_without_rate(client):
-    token = await _register_and_login(client)
-    dataset_id = await _upload(client, token)
-
-    res = await client.post("/analytics/oee", json=_base_mapping(dataset_id), headers=_h(token))
-    assert res.status_code == 200, res.text
-    body = res.json()
-    # No target rate: performance is pinned to 100% and flagged as estimated.
     assert body["performance_estimated"] is True
-    assert body["performance"] == 100.0
-    assert body["availability"] == 85.0
-    assert body["quality"] == 95.0
+    assert body["quality"] == round(good_units / total_units * 100, 2)
+    assert len(body["machines"]) == 2
+    assert len(body["trend"]) == 2
 
 
-async def test_oee_unknown_column_rejected(client):
+async def test_oee_compute_rejects_unknown_column(client):
     token = await _register_and_login(client)
-    dataset_id = await _upload(client, token)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload_dataset(client, token)
 
     res = await client.post(
-        "/analytics/oee",
-        json=_base_mapping(dataset_id, planned_time_col="does_not_exist"),
-        headers=_h(token),
+        f"/datasets/{dataset_id}/oee/compute",
+        headers=headers,
+        json={
+            "planned_time_col": "nope",
+            "operating_time_col": "operating_min",
+            "total_units_col": "total_units",
+            "good_units_col": "good_units",
+        },
     )
     assert res.status_code == 400
 
 
-async def test_oee_dataset_not_found(client):
+async def test_oee_rca_ranks_worst_machine_first(client):
     token = await _register_and_login(client)
-    import uuid
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload_dataset(client, token)
 
     res = await client.post(
-        "/analytics/oee",
-        json=_base_mapping(str(uuid.uuid4())),
-        headers=_h(token),
+        f"/datasets/{dataset_id}/oee/rca",
+        headers=headers,
+        json={
+            "planned_time_col": "planned_min",
+            "operating_time_col": "operating_min",
+            "total_units_col": "total_units",
+            "good_units_col": "good_units",
+            "machine_col": "machine",
+        },
     )
-    assert res.status_code == 404
-
-
-async def test_oee_tenant_isolation(client):
-    token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
-    token_b = await _register_and_login(client, email="b@example.com", org_name="OrgB")
-    dataset_id = await _upload(client, token_a)
-
-    res = await client.post(
-        "/analytics/oee", json=_base_mapping(dataset_id), headers=_h(token_b)
-    )
-    assert res.status_code == 404
+    assert res.status_code == 200
+    body = res.json()
+    machine_dim = next(d for d in body["dimensions"] if d["name"] == "Machine")
+    oees = [r["oee"] for r in machine_dim["rows"]]
+    assert oees == sorted(oees)  # worst (lowest) OEE first

@@ -13,3 +13,4 @@ build/
 frontend/.vite/
 frontend/*.tsbuildinfo
 backend/data/
+graphify-out/

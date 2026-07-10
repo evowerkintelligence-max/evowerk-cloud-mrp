@@ -1,13 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  BarChart3,
   Boxes,
   CalendarRange,
+  Database,
+  FileText,
   Layers,
   MapPin,
   Package,
   ShieldCheck,
   ShoppingCart,
+  Sparkles,
   Truck,
   Warehouse,
 } from "lucide-react";
@@ -43,6 +47,10 @@ const LINKS = [
   { to: "/inventory", label: "Inventory", description: "On-hand balances by location", icon: Warehouse },
   { to: "/locations", label: "Locations", description: "Warehouses and storage", icon: MapPin },
   { to: "/planning", label: "Planning", description: "Forecasts, MRP, and auto-POs", icon: CalendarRange },
+  { to: "/analytics", label: "Analytics", description: "OEE, downtime, throughput, scrap, shifts, SPC", icon: BarChart3 },
+  { to: "/datasets", label: "Datasets", description: "Upload, clean, and query production data", icon: Database },
+  { to: "/ask", label: "Ask", description: "Natural-language Q&A over your data", icon: Sparkles },
+  { to: "/reports", label: "Reports", description: "Export PDF/CSV reports", icon: FileText },
 ];
 
 export function Dashboard() {

@@ -4,15 +4,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.dataset import Dataset
+from app.services import dataset_query as query_service
 from app.services import datasets as ds_service
-from app.services import storage
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -63,6 +62,11 @@ class DatasetHealthResponse(BaseModel):
     null_cells_pct: float
     columns: list[HealthColumn]
     warnings: list[str]
+
+
+class DatasetQueryResponse(BaseModel):
+    columns: list[str]
+    rows: list[dict]
 
 
 class CleanRequest(BaseModel):
@@ -153,11 +157,7 @@ async def list_datasets(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = (
-        await db.execute(
-            select(Dataset).where(Dataset.org_id == current.org_id).order_by(Dataset.created_at.desc())
-        )
-    ).scalars().all()
+    rows = await ds_service.list_datasets(db, current.org_id)
     return [_to_response(d) for d in rows]
 
 
@@ -180,6 +180,17 @@ async def dataset_health(
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
     return ds_service.compute_health(dataset)
+
+
+@router.post("/{dataset_id}/query", response_model=DatasetQueryResponse)
+async def query_dataset(
+    dataset_id: uuid.UUID,
+    req: query_service.DatasetQueryRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
+    return await query_service.run_query(db, dataset, current.org_id, req)
 
 
 @router.post("/{dataset_id}/clean", response_model=CleanResponse, status_code=status.HTTP_201_CREATED)
@@ -268,8 +279,7 @@ async def delete_dataset(
     db: AsyncSession = Depends(get_db),
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
-    storage.delete_dataset_file(dataset.org_id, dataset.id, dataset.storage_ext)
-    await db.delete(dataset)
+    await ds_service.delete_dataset(db, dataset)
     await log_event(
         db,
         action="dataset.deleted",

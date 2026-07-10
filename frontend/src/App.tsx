@@ -21,6 +21,8 @@ import { Throughput } from "./pages/analytics/Throughput";
 import { Scrap } from "./pages/analytics/Scrap";
 import { Shifts } from "./pages/analytics/Shifts";
 import { Spc } from "./pages/analytics/Spc";
+import { Ask } from "./pages/Ask";
+import { Reports } from "./pages/Reports";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -66,6 +68,8 @@ export function App() {
         <Route path="/analytics/spc" element={<Spc />} />
         <Route path="/datasets" element={<Datasets />} />
         <Route path="/datasets/:id" element={<DatasetDetail />} />
+        <Route path="/ask" element={<Ask />} />
+        <Route path="/reports" element={<Reports />} />
       </Route>
     </Routes>
   );

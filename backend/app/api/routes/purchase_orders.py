@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import case, func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,10 +14,11 @@ from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
-from app.models.lot import Lot, LotTransaction
+from app.models.lot import LotTransaction
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine, PurchaseOrderReceiptLine, Supplier
 from app.services.inventory import apply_inventory_delta
 from app.services.locations import resolve_location_id
+from app.services.lots import find_or_create_lot
 
 router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 
@@ -25,10 +26,6 @@ router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 # the same org can both read the same max and collide on uq_pos_org_number.
 # Retry a few times rather than surfacing an unhandled 500.
 MAX_PO_NUMBER_ATTEMPTS = 3
-
-# Same rationale, for the find-or-create-Lot-by-lot_number race in
-# receive_purchase_order.
-MAX_LOT_CREATE_ATTEMPTS = 3
 
 
 class PurchaseOrderLineInput(BaseModel):
@@ -57,8 +54,7 @@ class ReceiveLineInput(BaseModel):
     # receive_purchase_order's validation loop.
     lot_number: str | None = None
     expiry_date: date | None = None
-    # Non-lot-tracked items only: which location the stock lands in. Defaults to
-    # the org's default location. (Lot-tracked items are not yet location-aware.)
+    # Which location the stock lands in. Defaults to the org's default location.
     location_id: str | None = None
 
 
@@ -301,103 +297,6 @@ async def submit_purchase_order(
     return await _po_to_response(db, po)
 
 
-async def _topup_lot(db: AsyncSession, lot: Lot, quantity: Decimal, expiry_date: date | None) -> Lot:
-    """Guarded UPDATE, not read-then-`+=`-then-write: two concurrent receipts
-    against the same existing lot_number (e.g. two shipments of one physical
-    batch landing close together) could otherwise both read the same starting
-    quantity_received/quantity_remaining, and whichever flush lands second
-    would silently overwrite the first's increment instead of adding to it.
-    Same rationale as consume_lot's guarded UPDATE.
-    """
-    values: dict[str, object] = {
-        "quantity_received": Lot.quantity_received + quantity,
-        "quantity_remaining": Lot.quantity_remaining + quantity,
-        "status": case((Lot.status == "depleted", "active"), else_=Lot.status),
-    }
-    if expiry_date is not None:
-        values["expiry_date"] = case((Lot.expiry_date.is_(None), expiry_date), else_=Lot.expiry_date)
-    result = await db.execute(
-        update(Lot)
-        .where(Lot.id == lot.id)
-        .values(**values)
-        .returning(Lot.quantity_received, Lot.quantity_remaining, Lot.status, Lot.expiry_date)
-    )
-    lot.quantity_received, lot.quantity_remaining, lot.status, lot.expiry_date = result.one()
-    return lot
-
-
-async def _find_or_create_lot(
-    db: AsyncSession,
-    *,
-    org_id: uuid.UUID,
-    item_id: uuid.UUID,
-    lot_number: str,
-    quantity: Decimal,
-    expiry_date: date | None,
-    created_by: uuid.UUID,
-) -> Lot:
-    """A supplier's single physical batch is often delivered across multiple
-    partial shipments/POs, so a repeat lot_number for the same item tops up
-    the existing Lot rather than being rejected as a duplicate.
-    """
-    result = await db.execute(
-        select(Lot).where(Lot.org_id == org_id, Lot.item_id == item_id, Lot.lot_number == lot_number)
-    )
-    lot = result.scalar_one_or_none()
-    if lot is not None:
-        if expiry_date is not None and lot.expiry_date is not None and lot.expiry_date != expiry_date:
-            # A mismatch is a strong signal of a mistyped lot_number colliding
-            # with a genuinely different batch - silently accepting it would
-            # merge two physical batches under one Lot row.
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"Lot {lot_number} already has a different expiry date on file for this item - "
-                "check for a lot_number typo before retrying",
-            )
-        return await _topup_lot(db, lot, quantity, expiry_date)
-
-    # Two concurrent receipts could both try to create the same new
-    # lot_number. Each attempt runs in its own SAVEPOINT (not the plain
-    # try/except-rollback used by create_bom/create_purchase_order) because
-    # this function runs inside receive_purchase_order's loop over multiple
-    # receipt lines - a plain db.rollback() here would discard every other
-    # line already processed in this same request, not just this lot.
-    for attempt in range(MAX_LOT_CREATE_ATTEMPTS):
-        try:
-            async with db.begin_nested():
-                new_lot = Lot(
-                    org_id=org_id,
-                    item_id=item_id,
-                    lot_number=lot_number,
-                    quantity_received=quantity,
-                    quantity_remaining=quantity,
-                    status="active",
-                    expiry_date=expiry_date,
-                    created_by=created_by,
-                )
-                db.add(new_lot)
-                await db.flush()
-            return new_lot
-        except IntegrityError:
-            # Savepoint rolled back automatically - the rest of this
-            # request's pending changes are untouched. Someone else created
-            # this lot_number concurrently; top it up instead of erroring,
-            # since that's the correct outcome for a repeat lot_number.
-            result = await db.execute(
-                select(Lot).where(
-                    Lot.org_id == org_id, Lot.item_id == item_id, Lot.lot_number == lot_number
-                )
-            )
-            existing = result.scalar_one_or_none()
-            if existing is not None:
-                return await _topup_lot(db, existing, quantity, None)
-            if attempt == MAX_LOT_CREATE_ATTEMPTS - 1:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT, f"Could not allocate lot {lot_number}, please retry"
-                ) from None
-    raise AssertionError("unreachable")
-
-
 @router.post("/{po_id}/receive", response_model=PurchaseOrderDetailResponse)
 async def receive_purchase_order(
     po_id: uuid.UUID,
@@ -466,6 +365,10 @@ async def receive_purchase_order(
         )
         db.add(receipt_line)
 
+        # Defaults to the org's default location if unspecified - see
+        # services.locations. Shared by both branches below.
+        location_id = await resolve_location_id(db, current.org_id, receipt.location_id)
+
         if item.is_lot_tracked:
             lot_number = receipt.lot_number
             if lot_number is None:
@@ -474,11 +377,12 @@ async def receive_purchase_order(
                 # vanishes under python -O) that also satisfies the type
                 # checker that lot_number is str, not str | None, below.
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "lot_number is required")
-            lot = await _find_or_create_lot(
+            lot = await find_or_create_lot(
                 db,
                 org_id=current.org_id,
                 item_id=item.id,
                 lot_number=lot_number,
+                location_id=location_id,
                 quantity=receipt.quantity,
                 expiry_date=receipt.expiry_date,
                 created_by=current.id,
@@ -495,10 +399,9 @@ async def receive_purchase_order(
             )
         else:
             # Non-lot-tracked: the received quantity lands in the general
-            # inventory on-hand ledger at the target location (default location
-            # if unspecified), so this item's stock is real for MRP netting
-            # instead of untracked - see services.inventory / services.locations.
-            location_id = await resolve_location_id(db, current.org_id, receipt.location_id)
+            # inventory on-hand ledger at the target location, so this item's
+            # stock is real for MRP netting instead of untracked - see
+            # services.inventory.
             await apply_inventory_delta(
                 db,
                 org_id=current.org_id,

@@ -1,4 +1,4 @@
-"""Dataset ingestion + access for the analytics layer.
+"""Dataset ingestion + access for the ad-hoc query layer and the analytics engines.
 
 Uploads land as DuckDB-native files (xlsx/xls are converted to CSV on ingest);
 schema + row count are sniffed with DuckDB. Every read is tenant-scoped, and
@@ -17,10 +17,19 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analytics.oee_calc import qi, qs
 from app.core.config import get_settings
 from app.models.dataset import Dataset
 from app.services import storage
+
+
+def qi(name: str) -> str:
+    """Quote a SQL identifier (columns are whitelisted against headers upstream)."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def qs(value: str) -> str:
+    """Quote a SQL string literal."""
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def open_con() -> duckdb.DuckDBPyConnection:
@@ -29,7 +38,7 @@ def open_con() -> duckdb.DuckDBPyConnection:
 
 def relation_for(path: Path) -> str:
     """DuckDB table-function for a stored dataset file. CSV is read ALL_VARCHAR so
-    the engines' numeric coercion applies uniformly (matches oee_calc.agg_relation)."""
+    numeric coercion in the query/analytics layers applies uniformly."""
     ext = path.suffix.lower()
     p = str(path).replace("'", "''")
     if ext == ".parquet":
@@ -53,8 +62,8 @@ def _sniff(path: Path) -> tuple[list[dict], int]:
     rel = relation_for(path)
     con = open_con()
     try:
-        # nosec B608 - rel is the DuckDB relation string from relation_for(),
-        # which quote-escapes the file path; no column identifiers here.
+        # nosec B608 - rel is the DuckDB relation string built by relation_for()
+        # above, which quote-escapes the file path itself; no column identifiers here.
         desc = con.execute(f"DESCRIBE SELECT * FROM {rel}").fetchall()  # nosec B608
         columns = [{"name": str(r[0]), "dtype": str(r[1])} for r in desc]
         row_count = int(con.execute(f"SELECT COUNT(*) FROM {rel}").fetchone()[0])  # nosec B608
@@ -63,7 +72,7 @@ def _sniff(path: Path) -> tuple[list[dict], int]:
     return columns, row_count
 
 
-def _json_safe(value: Any) -> Any:
+def json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
@@ -138,9 +147,16 @@ async def create_dataset(
     return dataset
 
 
+async def list_datasets(db: AsyncSession, org_id: uuid.UUID) -> list[Dataset]:
+    result = await db.execute(
+        select(Dataset).where(Dataset.org_id == org_id).order_by(Dataset.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
 async def resolve_dataset(db: AsyncSession, org_id: uuid.UUID, dataset_id: str) -> Dataset:
     """Parse a client-supplied dataset id string and load the tenant-scoped row.
-    Shared by every analytics route (400 on a malformed id, 404 if not found)."""
+    Shared by every dataset/analytics route (400 on a malformed id, 404 if not found)."""
     try:
         did = uuid.UUID(dataset_id)
     except ValueError:
@@ -157,14 +173,32 @@ async def get_dataset_or_404(db: AsyncSession, org_id: uuid.UUID, dataset_id: uu
     return dataset
 
 
+async def delete_dataset(db: AsyncSession, dataset: Dataset) -> None:
+    storage.delete_dataset_file(dataset.org_id, dataset.id, dataset.storage_ext)
+    await db.delete(dataset)
+    await db.flush()
+
+
 def validate_columns(dataset: Dataset, cols: Iterable[str | None]) -> None:
     """Reject any mapped column that is not a real header of this dataset. Column
-    names are interpolated into SQL (identifier-quoted by oee_calc.qi), so this
+    names are interpolated into SQL (identifier-quoted by qi), so this
     allow-list is the security boundary — only known headers may pass."""
     known = {c["name"] for c in dataset.columns}
     for col in cols:
         if col and col not in known:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Column not found in dataset: '{col}'")
+
+
+def dataframe_for(dataset: Dataset):
+    """Full dataset as a pandas DataFrame, via the same DuckDB relation every
+    other reader uses (CSV columns come through as strings — callers coerce
+    the specific columns they need, same as the rest of this module)."""
+    rel = dataset_relation(dataset)
+    con = open_con()
+    try:
+        return con.execute(f"SELECT * FROM {rel}").df()  # nosec B608 - rel is the quote-escaped relation string, no identifiers
+    finally:
+        con.close()
 
 
 def preview_rows(dataset: Dataset, limit: int = 50) -> list[dict]:
@@ -173,7 +207,7 @@ def preview_rows(dataset: Dataset, limit: int = 50) -> list[dict]:
     try:
         cur = con.execute(f"SELECT * FROM {rel} LIMIT {int(limit)}")  # nosec B608 - rel is the quote-escaped relation string, limit is int()-cast
         names = [d[0] for d in (cur.description or [])]
-        return [{n: _json_safe(v) for n, v in zip(names, row)} for row in cur.fetchall()]
+        return [{n: json_safe(v) for n, v in zip(names, row)} for row in cur.fetchall()]
     finally:
         con.close()
 
@@ -184,10 +218,9 @@ def _blank_expr(col: str) -> str:
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
-# Ported from the desktop app's per-column profiler (routes/datasets.py
-# _compute_health): null/distinct counts, top values, numeric stats, and IQR
+# Per-column profiler: null/distinct counts, top values, numeric stats, and IQR
 # outlier fences (needs >=8 numeric values). Recomputed live via DuckDB SQL
-# instead of loading rows into Python — cheap at analytics-dataset scale.
+# instead of loading rows into Python — cheap at dataset scale.
 
 def compute_health(dataset: Dataset) -> dict:
     rel = dataset_relation(dataset)
@@ -198,8 +231,8 @@ def compute_health(dataset: Dataset) -> dict:
         dup_count = 0
         if row_count and names:
             key = "concat_ws(chr(31), " + ", ".join(f"COALESCE(CAST({qi(n)} AS VARCHAR), '')" for n in names) + ")"
-            # nosec B608 - key/rel are built from qi()-quoted dataset column
-            # names (names comes from the sniffed schema, not free text).
+            # nosec B608 - key/rel below are built from qi()-quoted dataset column
+            # names (names comes straight from the sniffed schema, not free text).
             dup_count = int(
                 con.execute(
                     f"SELECT COUNT(*) FROM ("  # nosec B608
@@ -215,7 +248,8 @@ def compute_health(dataset: Dataset) -> dict:
         for n in names:
             blank = _blank_expr(n)
             # nosec B608 - blank/rel are built from qi()-quoted column names (see
-            # _blank_expr); n comes from `names`, the dataset's own sniffed schema.
+            # _blank_expr); n below comes from `names`, the dataset's own sniffed
+            # schema, not user-supplied free text.
             null_count, distinct_count = con.execute(
                 f"SELECT COUNT(*) FILTER (WHERE {blank} IS NULL), COUNT(DISTINCT {blank}) FROM {rel}"  # nosec B608
             ).fetchone()

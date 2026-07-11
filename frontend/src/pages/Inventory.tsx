@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { humanize } from "@/lib/status";
+import { humanize, inventoryStatusVariant } from "@/lib/status";
 
 interface LocationResponse {
   id: string;
@@ -50,7 +49,14 @@ interface InventoryDetail extends InventoryItem {
   transactions: InventoryTransaction[];
 }
 
-export function Inventory() {
+interface InventoryAnalyticsLine {
+  item_id: string;
+  reorder_point: number | null;
+  days_of_supply: number | null;
+  status: string;
+}
+
+export function InventoryPanel() {
   const queryClient = useQueryClient();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [consumeQty, setConsumeQty] = useState("1");
@@ -70,6 +76,16 @@ export function Inventory() {
       return res.json();
     },
   });
+
+  const analytics = useQuery<InventoryAnalyticsLine[]>({
+    queryKey: ["inventory-analytics"],
+    queryFn: async () => {
+      const res = await apiFetch("/inventory/analytics");
+      if (!res.ok) throw new Error("Failed to load inventory analytics");
+      return (await res.json()).lines;
+    },
+  });
+  const analyticsByItem = new Map(analytics.data?.map((a) => [a.item_id, a]));
 
   const locations = useQuery<LocationResponse[]>({
     queryKey: ["locations"],
@@ -160,11 +176,6 @@ export function Inventory() {
 
   return (
     <div>
-      <PageHeader
-        title="Inventory"
-        description="On-hand stock for non-lot-tracked items, per location. Receiving a PO adds stock; consume, adjust, or transfer to move it. (Lot-tracked items track on-hand through their lots.)"
-      />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}
@@ -186,25 +197,34 @@ export function Inventory() {
                 <TH>Total on hand</TH>
                 <TH>By location</TH>
                 <TH>UoM</TH>
+                <TH>Status</TH>
               </TR>
             </THead>
             <TBody>
-              {balances.data?.map((bal) => (
-                <TR
-                  key={bal.item_id}
-                  onClick={() => setSelectedItemId(bal.item_id)}
-                  className={`cursor-pointer ${selectedItemId === bal.item_id ? "bg-primary/5" : ""}`}
-                >
-                  <TD className="font-medium">
-                    {bal.item_sku} - {bal.item_name}
-                  </TD>
-                  <TD>{bal.quantity_on_hand}</TD>
-                  <TD className="text-muted-foreground">
-                    {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
-                  </TD>
-                  <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
-                </TR>
-              ))}
+              {balances.data?.map((bal) => {
+                const a = analyticsByItem.get(bal.item_id);
+                return (
+                  <TR
+                    key={bal.item_id}
+                    onClick={() => setSelectedItemId(bal.item_id)}
+                    className={`cursor-pointer ${selectedItemId === bal.item_id ? "bg-primary/5" : ""}`}
+                  >
+                    <TD className="font-medium">
+                      {bal.item_sku} - {bal.item_name}
+                    </TD>
+                    <TD>{bal.quantity_on_hand}</TD>
+                    <TD className="text-muted-foreground">
+                      {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
+                    </TD>
+                    <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
+                    <TD>
+                      {a && a.status !== "no_data" && (
+                        <Badge variant={inventoryStatusVariant(a.status)}>{humanize(a.status)}</Badge>
+                      )}
+                    </TD>
+                  </TR>
+                );
+              })}
             </TBody>
           </Table>
         </TableWrap>
@@ -218,6 +238,17 @@ export function Inventory() {
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}
+              {(() => {
+                const a = analyticsByItem.get(detail.data.item_id);
+                if (!a || a.reorder_point == null) return null;
+                return (
+                  <>
+                    {" "}
+                    · Reorder point: {a.reorder_point.toFixed(2)}{" "}
+                    <Badge variant={inventoryStatusVariant(a.status)}>{humanize(a.status)}</Badge>
+                  </>
+                );
+              })()}
             </p>
           </CardHeader>
           <CardContent className="space-y-6">

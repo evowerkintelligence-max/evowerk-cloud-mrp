@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { ShoppingCart } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,7 +53,7 @@ interface PurchaseOrderDetailResponse extends PurchaseOrderResponse {
 const CANCELLABLE_STATUSES = ["draft", "submitted"];
 const RECEIVABLE_STATUSES = ["submitted", "partially_received"];
 
-export function PurchaseOrders() {
+export function PurchaseOrdersPanel() {
   const queryClient = useQueryClient();
   const [selectedPoId, setSelectedPoId] = useState<string | null>(null);
   const [newPoSupplierId, setNewPoSupplierId] = useState("");
@@ -243,11 +242,6 @@ export function PurchaseOrders() {
 
   return (
     <div>
-      <PageHeader
-        title="Purchase Orders"
-        description="Create drafts, submit them to suppliers, and receive stock as it arrives."
-      />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}

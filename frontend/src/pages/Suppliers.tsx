@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { Truck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +17,7 @@ interface SupplierResponse {
   phone: string | null;
 }
 
-export function Suppliers() {
+export function SuppliersPanel() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -63,8 +62,6 @@ export function Suppliers() {
 
   return (
     <div>
-      <PageHeader title="Suppliers" description="Your vendor directory — the sources behind purchase orders." />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}

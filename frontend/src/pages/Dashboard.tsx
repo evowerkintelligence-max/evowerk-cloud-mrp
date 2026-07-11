@@ -8,7 +8,6 @@ import {
   FileText,
   Layers,
   LayoutGrid,
-  MapPin,
   Package,
   ShieldCheck,
   ShoppingCart,
@@ -41,11 +40,9 @@ function useCount(key: string, path: string) {
 
 const LINKS = [
   { to: "/boms", label: "Bills of Materials", description: "Component structures and versions", icon: Layers },
-  { to: "/suppliers", label: "Suppliers", description: "Vendor directory and contacts", icon: Truck },
-  { to: "/purchase-orders", label: "Purchase Orders", description: "Draft, submit, and receive POs", icon: ShoppingCart },
+  { to: "/procurement", label: "Procurement", description: "Suppliers and purchase orders", icon: ShoppingCart },
   { to: "/lots", label: "Lots", description: "Lot-tracked stock and holds", icon: Boxes },
-  { to: "/inventory", label: "Inventory", description: "On-hand balances by location", icon: Warehouse },
-  { to: "/locations", label: "Locations", description: "Warehouses and storage", icon: MapPin },
+  { to: "/warehouse", label: "Warehouse", description: "On-hand inventory and storage locations", icon: Warehouse },
   { to: "/planning", label: "Planning", description: "Forecasts, MRP, and auto-POs", icon: CalendarRange },
   { to: "/analytics", label: "Analytics", description: "OEE, downtime, throughput, scrap, shifts, SPC", icon: BarChart3 },
   { to: "/datasets", label: "Datasets", description: "Upload, clean, and query production data", icon: Database },

@@ -11,11 +11,9 @@ import {
   LayoutGrid,
   Layers,
   LogOut,
-  MapPin,
   PackageX,
   ShoppingCart,
   TimerOff,
-  Truck,
   Users,
   Warehouse,
 } from "lucide-react";
@@ -33,11 +31,9 @@ interface OrgResponse {
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/boms", label: "Bills of Materials", icon: Layers, end: false },
-  { to: "/suppliers", label: "Suppliers", icon: Truck, end: false },
-  { to: "/purchase-orders", label: "Purchase Orders", icon: ShoppingCart, end: false },
+  { to: "/procurement", label: "Procurement", icon: ShoppingCart, end: false },
   { to: "/lots", label: "Lots", icon: Boxes, end: false },
-  { to: "/inventory", label: "Inventory", icon: Warehouse, end: false },
-  { to: "/locations", label: "Locations", icon: MapPin, end: false },
+  { to: "/warehouse", label: "Warehouse", icon: Warehouse, end: false },
   { to: "/planning", label: "Planning", icon: CalendarRange, end: false },
 ];
 

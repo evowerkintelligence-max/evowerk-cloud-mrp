@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 
@@ -53,23 +52,6 @@ interface MrpPlanResponse {
   lines: MrpPlanLine[];
 }
 
-interface SupplierResponse {
-  id: string;
-  name: string;
-}
-
-interface GeneratedPo {
-  po_id: string;
-  po_number: number;
-  supplier_name: string;
-  lines: { item_id: string }[];
-}
-
-interface AutoGenerateResult {
-  created: { po_id: string; po_number: number; supplier_name: string; line_count: number }[];
-  unassigned: { item_id: string; item_sku: string; item_name: string; net_requirement: string }[];
-}
-
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -93,12 +75,6 @@ export function Planning() {
   // MRP horizon
   const [horizonStart, setHorizonStart] = useState(today());
   const [horizonEnd, setHorizonEnd] = useState(plusDays(90));
-
-  // Draft-PO generation from the plan
-  const [poSupplierId, setPoSupplierId] = useState("");
-  const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
-  const [generatedPo, setGeneratedPo] = useState<GeneratedPo | null>(null);
-  const [autoResult, setAutoResult] = useState<AutoGenerateResult | null>(null);
 
   const items = useQuery<ItemResponse[]>({
     queryKey: ["items"],
@@ -132,89 +108,6 @@ export function Planning() {
     },
   });
 
-  const suppliers = useQuery<SupplierResponse[]>({
-    queryKey: ["suppliers"],
-    queryFn: async () => {
-      const res = await apiFetch("/suppliers");
-      if (!res.ok) throw new Error("Failed to load suppliers");
-      return res.json();
-    },
-  });
-
-  // Only purchased items with a real shortfall can go on a PO.
-  const orderableItemIds = (plan.data?.lines ?? [])
-    .filter((line) => !line.is_manufactured && Number(line.net_requirement) > 0)
-    .map((line) => line.item_id);
-  const chosenItemIds = orderableItemIds.filter((id) => selectedItems[id]);
-
-  const generatePo = useMutation({
-    mutationFn: async () => {
-      const res = await apiFetch("/mrp/generate-po", {
-        method: "POST",
-        body: JSON.stringify({
-          supplier_id: poSupplierId,
-          item_ids: chosenItemIds,
-          horizon_start: horizonStart,
-          horizon_end: horizonEnd,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? "Failed to create draft PO");
-      }
-      return (await res.json()) as GeneratedPo;
-    },
-    onSuccess: (po) => {
-      setGeneratedPo(po);
-      setSelectedItems({});
-      // The new draft counts as on-order once submitted; refresh so the plan
-      // and PO list stay in sync.
-      queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
-      queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
-    },
-    onError: (e: Error) => setError(e.message),
-  });
-
-  function onGeneratePo() {
-    setError(null);
-    setGeneratedPo(null);
-    if (!poSupplierId) {
-      setError("Pick a supplier for the draft PO");
-      return;
-    }
-    if (chosenItemIds.length === 0) {
-      setError("Select at least one item to order");
-      return;
-    }
-    generatePo.mutate();
-  }
-
-  const autoGeneratePos = useMutation({
-    mutationFn: async () => {
-      const res = await apiFetch("/mrp/generate-pos", {
-        method: "POST",
-        body: JSON.stringify({ horizon_start: horizonStart, horizon_end: horizonEnd }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? "Failed to auto-generate POs");
-      }
-      return (await res.json()) as AutoGenerateResult;
-    },
-    onSuccess: (result) => {
-      setAutoResult(result);
-      queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
-      queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
-    },
-    onError: (e: Error) => setError(e.message),
-  });
-
-  function onAutoGenerate() {
-    setError(null);
-    setAutoResult(null);
-    autoGeneratePos.mutate();
-  }
-
   function invalidatePlanning() {
     queryClient.invalidateQueries({ queryKey: ["forecasts"] });
     queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
@@ -245,6 +138,11 @@ export function Planning() {
     onError: (e: Error) => setError(e.message),
   });
 
+  // Tracked separately from deleteForecast.isPending/.variables - those
+  // reflect only the single most-recently-invoked call, so deleting row B
+  // while row A's DELETE is still in flight would incorrectly re-enable A's
+  // button. A Set of in-flight ids handles overlapping calls correctly.
+  const [pendingForecastIds, setPendingForecastIds] = useState<Set<string>>(new Set());
   const deleteForecast = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiFetch(`/forecasts/${id}`, { method: "DELETE" });
@@ -253,6 +151,13 @@ export function Planning() {
         throw new Error(body.detail ?? "Failed to delete forecast");
       }
     },
+    onMutate: (id) => setPendingForecastIds((prev) => new Set(prev).add(id)),
+    onSettled: (_data, _err, id) =>
+      setPendingForecastIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      }),
     onSuccess: invalidatePlanning,
     onError: (e: Error) => setError(e.message),
   });
@@ -352,7 +257,7 @@ export function Planning() {
                         variant="ghost"
                         size="sm"
                         onClick={() => deleteForecast.mutate(fc.id)}
-                        loading={deleteForecast.isPending && deleteForecast.variables === fc.id}
+                        loading={pendingForecastIds.has(fc.id)}
                       >
                         Delete
                       </Button>
@@ -399,7 +304,6 @@ export function Planning() {
               <Table>
                 <THead>
                   <TR>
-                    <TH>Order?</TH>
                     <TH>Item</TH>
                     <TH>Independent</TH>
                     <TH>Dependent</TH>
@@ -414,22 +318,8 @@ export function Planning() {
                 <TBody>
                   {plan.data.lines.map((line) => {
                     const qty = Number(line.suggested_order_quantity);
-                    const orderable = !line.is_manufactured && qty > 0;
                     return (
                       <TR key={line.item_id}>
-                        <TD>
-                          {orderable && (
-                            <Checkbox
-                              checked={!!selectedItems[line.item_id]}
-                              onChange={(e) =>
-                                setSelectedItems((prev) => ({
-                                  ...prev,
-                                  [line.item_id]: e.target.checked,
-                                }))
-                              }
-                            />
-                          )}
-                        </TD>
                         <TD className="font-medium">
                           {line.item_sku} - {line.item_name}
                           {line.is_manufactured && (
@@ -461,96 +351,20 @@ export function Planning() {
               </Table>
             </TableWrap>
           )}
+          {plan.data && plan.data.lines.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              Ready to order the shortfalls?{" "}
+              <Link
+                to={`/procurement?tab=generate&horizonStart=${horizonStart}&horizonEnd=${horizonEnd}`}
+                className="text-primary hover:underline"
+              >
+                Generate purchase orders
+              </Link>{" "}
+              in Procurement.
+            </p>
+          )}
         </CardContent>
       </Card>
-
-      {plan.data && plan.data.lines.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Generate purchase orders</CardTitle>
-            <CardDescription>
-              Turn purchased shortfalls into draft POs — automatically by preferred supplier, or manually.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-8">
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold">Auto-generate by preferred supplier</h3>
-              <p className="text-sm text-muted-foreground">
-                Create a draft PO per supplier for every purchased shortfall, routed by each item's{" "}
-                <Link to="/items" className="text-primary hover:underline">
-                  preferred supplier
-                </Link>
-                . Items with no preferred supplier are listed as unassigned.
-              </p>
-              <Button onClick={onAutoGenerate} loading={autoGeneratePos.isPending}>
-                Auto-generate POs
-              </Button>
-              {autoResult && (
-                <div className="space-y-2 rounded-lg border border-border p-4">
-                  {autoResult.created.length > 0 ? (
-                    <ul className="space-y-1 text-sm">
-                      {autoResult.created.map((po) => (
-                        <li key={po.po_id} className="flex items-center gap-2">
-                          <Badge variant="success">Draft PO #{po.po_number}</Badge>
-                          {po.supplier_name} · {po.line_count} line
-                          {po.line_count === 1 ? "" : "s"}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No POs created.</p>
-                  )}
-                  {autoResult.unassigned.length > 0 && (
-                    <Alert variant="warning">
-                      No preferred supplier for: {autoResult.unassigned.map((u) => u.item_sku).join(", ")}.
-                      Assign one under Items, or order manually below.
-                    </Alert>
-                  )}
-                  <Link to="/purchase-orders" className="inline-block text-sm text-primary hover:underline">
-                    Open Purchase Orders →
-                  </Link>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-3 border-t border-border pt-6">
-              <h3 className="text-sm font-semibold">Create a draft PO manually</h3>
-              <p className="text-sm text-muted-foreground">
-                Select the purchased shortfalls above, pick a supplier, and generate a single draft PO at
-                the suggested quantities.
-              </p>
-              <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end sm:max-w-lg">
-                <Field label="Supplier" htmlFor="gen-supplier">
-                  <Select
-                    id="gen-supplier"
-                    value={poSupplierId}
-                    onChange={(e) => setPoSupplierId(e.target.value)}
-                  >
-                    <option value="">Select a supplier…</option>
-                    {suppliers.data?.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Button variant="secondary" onClick={onGeneratePo} loading={generatePo.isPending}>
-                  Create from {chosenItemIds.length} item{chosenItemIds.length === 1 ? "" : "s"}
-                </Button>
-              </div>
-              {generatedPo && (
-                <Alert variant="success">
-                  Created draft PO #{generatedPo.po_number} for {generatedPo.supplier_name} with{" "}
-                  {generatedPo.lines.length} line{generatedPo.lines.length === 1 ? "" : "s"}.{" "}
-                  <Link to="/purchase-orders" className="font-medium underline">
-                    Open Purchase Orders
-                  </Link>
-                </Alert>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

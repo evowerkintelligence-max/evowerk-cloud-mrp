@@ -7,11 +7,9 @@ import { MfaChallenge } from "./pages/MfaChallenge";
 import { Dashboard } from "./pages/Dashboard";
 import { Items } from "./pages/Items";
 import { Boms } from "./pages/Boms";
-import { Suppliers } from "./pages/Suppliers";
-import { PurchaseOrders } from "./pages/PurchaseOrders";
+import { Procurement } from "./pages/Procurement";
 import { Lots } from "./pages/Lots";
-import { Inventory } from "./pages/Inventory";
-import { Locations } from "./pages/Locations";
+import { Warehouse } from "./pages/Warehouse";
 import { Planning } from "./pages/Planning";
 import { Datasets } from "./pages/analytics/Datasets";
 import { DatasetDetail } from "./pages/analytics/DatasetDetail";
@@ -56,11 +54,9 @@ export function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/items" element={<Items />} />
         <Route path="/boms" element={<Boms />} />
-        <Route path="/suppliers" element={<Suppliers />} />
-        <Route path="/purchase-orders" element={<PurchaseOrders />} />
+        <Route path="/procurement" element={<Procurement />} />
         <Route path="/lots" element={<Lots />} />
-        <Route path="/inventory" element={<Inventory />} />
-        <Route path="/locations" element={<Locations />} />
+        <Route path="/warehouse" element={<Warehouse />} />
         <Route path="/planning" element={<Planning />} />
         <Route path="/analytics" element={<Navigate to="/analytics/oee" replace />} />
         <Route path="/analytics/oee" element={<Oee />} />

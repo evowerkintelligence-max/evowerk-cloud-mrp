@@ -16,7 +16,10 @@ three independent layers instead:
      break once external access is off), then enable_external_access=false
      blocks read_csv_auto/read_parquet/httpfs/COPY from inside the query.
   3. A wall-clock timeout (DuckDB has no native statement_timeout) via a
-     watchdog thread calling con.interrupt(), plus a hard row cap.
+     watchdog thread calling con.interrupt(), plus a hard row cap. The budget
+     covers materializing the dataset too, not just the final SELECT - both
+     run inside the same worker thread so a slow/huge dataset can't block the
+     event loop or run unbounded before the query itself even starts.
 
 Errors are deliberately generic to the client — the real duckdb.Error is
 logged server-side only, since a bad query here is entirely user-authored
@@ -48,17 +51,24 @@ def _validate_single_select(con: duckdb.DuckDBPyConnection, sql: str) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a single SELECT statement is allowed")
 
 
-def _execute_with_timeout(con: duckdb.DuckDBPyConnection, sql: str, timeout_seconds: float) -> list:
-    """Run `sql` on a worker thread, interrupting `con` if it outruns the
-    timeout. Runs synchronously (called via asyncio.to_thread by run_sql)."""
+def _execute_with_timeout(con: duckdb.DuckDBPyConnection, statements: list[str], timeout_seconds: float) -> list:
+    """Run `statements` in order on a worker thread, interrupting `con` if the
+    whole sequence outruns the timeout. Only the last statement's result set
+    is returned - the earlier ones are setup (materializing the dataset,
+    locking down external access), run here rather than on the caller's
+    coroutine so they don't block the event loop and so they share the same
+    wall-clock budget as the query they're setting up for. Runs synchronously
+    (called via asyncio.to_thread by run_sql)."""
     result: dict = {}
 
     def _work() -> None:
         try:
-            cur = con.execute(sql)
+            cur = None
+            for stmt in statements:
+                cur = con.execute(stmt)
             result["rows"] = cur.fetchall()
             result["columns"] = [d[0] for d in (cur.description or [])]
-        except duckdb.Error as exc:
+        except Exception as exc:  # noqa: BLE001 - must never leave `result` without "error"/"rows", see caller
             result["error"] = exc
 
     worker = threading.Thread(target=_work, daemon=True)
@@ -85,11 +95,9 @@ async def run_sql(
     rel = ds_service.dataset_relation(dataset)
     con = ds_service.open_con()
     try:
-        # nosec B608 - rel is the server-built, quote-escaped relation string
-        # from dataset_relation(); no client input reaches this line.
-        con.execute(f"CREATE TEMP TABLE dataset AS SELECT * FROM {rel}")  # nosec B608
-        con.execute("SET enable_external_access=false")
-
+        # Statement shape is checked before paying for materialization below -
+        # extract_statements() only parses `sql`, it doesn't need `dataset` to
+        # exist yet.
         _validate_single_select(con, sql)
         # extract_statements() confirmed exactly one statement above, so the only
         # semicolon that can appear is a single trailing terminator - strip it
@@ -107,7 +115,12 @@ async def run_sql(
         # wraps execution in a timeout. See the module docstring.
         wrapped = f"SELECT * FROM (\n{inner}\n) AS _q LIMIT {row_limit}"  # nosec B608
 
-        columns, rows = await asyncio.to_thread(_execute_with_timeout, con, wrapped, timeout_seconds)
+        # nosec B608 - rel is the server-built, quote-escaped relation string
+        # from dataset_relation(); no client input reaches this line.
+        materialize = f"CREATE TEMP TABLE dataset AS SELECT * FROM {rel}"  # nosec B608
+        statements = [materialize, "SET enable_external_access=false", wrapped]
+
+        columns, rows = await asyncio.to_thread(_execute_with_timeout, con, statements, timeout_seconds)
         return {
             "columns": columns,
             "rows": [{n: ds_service.json_safe(v) for n, v in zip(columns, row)} for row in rows],

@@ -10,7 +10,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user
@@ -145,8 +145,16 @@ async def create_chart(
 ):
     _validate_chart_type(req.chart_type)
     await ds_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
+    position = 0
     if req.dashboard_id is not None:
         await _get_dashboard_or_404(db, current.org_id, req.dashboard_id)
+        # Append after the last chart on this dashboard, not always 0 - two
+        # charts both at position 0 make the dashboard's move-up/move-down
+        # swap a no-op between them.
+        max_position = await db.scalar(
+            select(func.max(Chart.position)).where(Chart.dashboard_id == req.dashboard_id)
+        )
+        position = (max_position + 1) if max_position is not None else 0
 
     chart = Chart(
         org_id=current.org_id,
@@ -157,7 +165,7 @@ async def create_chart(
         query_config=req.query.model_dump(mode="json"),
         category_field=req.category_field,
         value_field=req.value_field,
-        position=0,
+        position=position,
         created_by=current.id,
     )
     db.add(chart)
@@ -190,11 +198,15 @@ async def update_chart(
     db: AsyncSession = Depends(get_db),
 ):
     chart = await _get_chart_or_404(db, current.org_id, chart_id)
-    if req.dashboard_id is not None:
+    # "dashboard_id" in model_fields_set distinguishes an explicit null (detach
+    # from any dashboard) from the field being omitted entirely (leave as-is) -
+    # both would otherwise collapse to the same `None` value.
+    dashboard_id_sent = "dashboard_id" in req.model_fields_set
+    if dashboard_id_sent and req.dashboard_id is not None:
         await _get_dashboard_or_404(db, current.org_id, req.dashboard_id)
     if req.name is not None:
         chart.name = req.name
-    if req.dashboard_id is not None:
+    if dashboard_id_sent:
         chart.dashboard_id = req.dashboard_id
     if req.position is not None:
         chart.position = req.position

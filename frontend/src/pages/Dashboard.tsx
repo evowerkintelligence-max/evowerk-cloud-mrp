@@ -40,7 +40,6 @@ function useCount(key: string, path: string) {
 }
 
 const LINKS = [
-  { to: "/items", label: "Items", description: "SKUs, types, and preferred suppliers", icon: Package },
   { to: "/boms", label: "Bills of Materials", description: "Component structures and versions", icon: Layers },
   { to: "/suppliers", label: "Suppliers", description: "Vendor directory and contacts", icon: Truck },
   { to: "/purchase-orders", label: "Purchase Orders", description: "Draft, submit, and receive POs", icon: ShoppingCart },

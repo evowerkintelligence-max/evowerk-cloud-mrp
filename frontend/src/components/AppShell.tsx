@@ -12,7 +12,6 @@ import {
   Layers,
   LogOut,
   MapPin,
-  Package,
   PackageX,
   ShoppingCart,
   TimerOff,
@@ -33,7 +32,6 @@ interface OrgResponse {
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/items", label: "Items", icon: Package, end: false },
   { to: "/boms", label: "Bills of Materials", icon: Layers, end: false },
   { to: "/suppliers", label: "Suppliers", icon: Truck, end: false },
   { to: "/purchase-orders", label: "Purchase Orders", icon: ShoppingCart, end: false },

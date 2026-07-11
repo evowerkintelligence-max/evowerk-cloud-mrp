@@ -7,11 +7,11 @@ import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { ItemSelect } from "@/components/ItemSelect";
 import { humanize } from "@/lib/status";
 
 interface ItemResponse {
@@ -304,21 +304,13 @@ export function Boms() {
         <CardContent>
           <form onSubmit={onCreateBom} className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
             <Field label="For item" htmlFor="bom-item">
-              <Select
+              <ItemSelect
                 id="bom-item"
+                items={items.data}
                 value={newBomItemId}
-                onChange={(e) => setNewBomItemId(e.target.value)}
+                onChange={setNewBomItemId}
                 required
-              >
-                <option value="" disabled>
-                  Select an item
-                </option>
-                {items.data?.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.sku} - {item.name}
-                  </option>
-                ))}
-              </Select>
+              />
             </Field>
             <Button type="submit" loading={createBom.isPending}>
               Create draft
@@ -424,23 +416,14 @@ export function Boms() {
             {bomDetail.data.status === "draft" && (
               <form onSubmit={onAddLine} className="grid gap-4 sm:grid-cols-[1fr_160px_auto] sm:items-end">
                 <Field label="Component" htmlFor="component">
-                  <Select
+                  <ItemSelect
                     id="component"
+                    items={items.data}
                     value={lineComponentId}
-                    onChange={(e) => setLineComponentId(e.target.value)}
+                    onChange={setLineComponentId}
+                    excludeId={bomDetail.data.item_id}
                     required
-                  >
-                    <option value="" disabled>
-                      Select a component
-                    </option>
-                    {items.data
-                      ?.filter((item) => item.id !== bomDetail.data!.item_id)
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.sku} - {item.name}
-                        </option>
-                      ))}
-                  </Select>
+                  />
                 </Field>
                 <Field label="Quantity" htmlFor="qty">
                   <Input

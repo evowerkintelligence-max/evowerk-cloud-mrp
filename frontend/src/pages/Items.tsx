@@ -112,6 +112,7 @@ export function Items() {
   const [expandedHistoryIds, setExpandedHistoryIds] = useState<Set<string>>(new Set());
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [showManualAdd, setShowManualAdd] = useState(false);
 
   const org = useQuery<OrgMeResponse>({
     queryKey: ["org-me"],
@@ -305,6 +306,7 @@ export function Items() {
       setLeadTimeDays("");
       setDescription("");
       setBarcode("");
+      setShowManualAdd(false);
       queryClient.invalidateQueries({ queryKey: ["items"] });
     },
     onError: (e: Error) => setError(e.message),
@@ -372,67 +374,83 @@ export function Items() {
       )}
 
       {isOwner ? (
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Add an item</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="SKU" htmlFor="sku">
-                <Input id="sku" value={sku} onChange={(e) => setSku(e.target.value)} required />
-              </Field>
-              <Field label="Name" htmlFor="name">
-                <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
-              </Field>
-              <Field label="Type" htmlFor="type">
-                <Select id="type" value={itemType} onChange={(e) => setItemType(e.target.value)}>
-                  <option value="raw_material">Raw material</option>
-                  <option value="component">Component</option>
-                  <option value="finished_good">Finished good</option>
-                </Select>
-              </Field>
-              <Field label="Unit of measure" htmlFor="uom">
-                <Input
-                  id="uom"
-                  value={unitOfMeasure}
-                  onChange={(e) => setUnitOfMeasure(e.target.value)}
-                  required
-                />
-              </Field>
-              <Field label="Lead time (days)" htmlFor="leadTimeDays">
-                <Input
-                  id="leadTimeDays"
-                  type="number"
-                  min={0}
-                  value={leadTimeDays}
-                  onChange={(e) => setLeadTimeDays(e.target.value)}
-                />
-              </Field>
-              <Field label="Description" htmlFor="description">
-                <Input
-                  id="description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </Field>
-              <Field label="Barcode" htmlFor="barcode">
-                <Input id="barcode" value={barcode} onChange={(e) => setBarcode(e.target.value)} />
-              </Field>
-              <label className="flex items-center gap-2 self-end pb-2.5 text-sm">
-                <Checkbox
-                  checked={isLotTracked}
-                  onChange={(e) => setIsLotTracked(e.target.checked)}
-                />
-                Lot tracked
-              </label>
-              <div className="flex items-end sm:col-span-2 lg:col-span-1">
-                <Button type="submit" className="w-full" loading={createItem.isPending}>
-                  Add item
+        <div className="mb-8">
+          {!showManualAdd && (
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowManualAdd(true)}>
+              + Add item manually
+            </Button>
+          )}
+          {showManualAdd && (
+            <Card>
+              <CardHeader className="flex-row items-center justify-between">
+                <CardTitle>Add an item</CardTitle>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowManualAdd(false)}>
+                  Cancel
                 </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+              </CardHeader>
+              <CardContent>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Prefer bulk changes? <Link to="/datasets" className="underline">Upload a CSV or Excel file</Link>{" "}
+                  and import it below instead.
+                </p>
+                <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <Field label="SKU" htmlFor="sku">
+                    <Input id="sku" value={sku} onChange={(e) => setSku(e.target.value)} required />
+                  </Field>
+                  <Field label="Name" htmlFor="name">
+                    <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
+                  </Field>
+                  <Field label="Type" htmlFor="type">
+                    <Select id="type" value={itemType} onChange={(e) => setItemType(e.target.value)}>
+                      <option value="raw_material">Raw material</option>
+                      <option value="component">Component</option>
+                      <option value="finished_good">Finished good</option>
+                    </Select>
+                  </Field>
+                  <Field label="Unit of measure" htmlFor="uom">
+                    <Input
+                      id="uom"
+                      value={unitOfMeasure}
+                      onChange={(e) => setUnitOfMeasure(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="Lead time (days)" htmlFor="leadTimeDays">
+                    <Input
+                      id="leadTimeDays"
+                      type="number"
+                      min={0}
+                      value={leadTimeDays}
+                      onChange={(e) => setLeadTimeDays(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Description" htmlFor="description">
+                    <Input
+                      id="description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Barcode" htmlFor="barcode">
+                    <Input id="barcode" value={barcode} onChange={(e) => setBarcode(e.target.value)} />
+                  </Field>
+                  <label className="flex items-center gap-2 self-end pb-2.5 text-sm">
+                    <Checkbox
+                      checked={isLotTracked}
+                      onChange={(e) => setIsLotTracked(e.target.checked)}
+                    />
+                    Lot tracked
+                  </label>
+                  <div className="flex items-end sm:col-span-2 lg:col-span-1">
+                    <Button type="submit" className="w-full" loading={createItem.isPending}>
+                      Add item
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       ) : (
         <Alert className="mb-8">Only organization owners can add or edit items. You can still view the catalog and export it below.</Alert>
       )}
@@ -441,7 +459,7 @@ export function Items() {
         <EmptyState
           icon={<Package />}
           title="No items yet"
-          description="Add your first SKU using the form above."
+          description="Import a dataset, or add your first SKU manually using the button above."
         />
       ) : (
         <>

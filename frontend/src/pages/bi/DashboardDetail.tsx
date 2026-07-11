@@ -107,10 +107,16 @@ export function DashboardDetail() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["bi-dashboard", id] }),
   });
 
+  // Unlinks the chart from this dashboard (dashboard_id -> null) rather than
+  // deleting it, matching the "Remove from dashboard" label - the chart and
+  // its saved query survive and can be re-added to a dashboard later.
   const removeChart = useMutation({
     mutationFn: async (chartId: string) => {
-      const res = await apiFetch(`/bi/charts/${chartId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete chart");
+      const res = await apiFetch(`/bi/charts/${chartId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ dashboard_id: null }),
+      });
+      if (!res.ok) throw new Error("Failed to remove chart from dashboard");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["bi-dashboard", id] }),
   });

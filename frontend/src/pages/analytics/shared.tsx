@@ -580,7 +580,7 @@ export function useQueryBuilder(datasetId: string, names: string[]) {
 
   return {
     joinItemsOn, setJoinItemsOn,
-    allColumns, isNumericColumn,
+    allColumns, isNumericColumn, healthLoading: health.isLoading,
     fields, setFields, updateField,
     groupBy, setGroupBy,
     filters, setFilters, updateFilter,

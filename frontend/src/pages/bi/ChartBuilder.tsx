@@ -166,9 +166,12 @@ export function ChartBuilder() {
               </Field>
             </div>
 
-            <Button disabled={!ready} loading={preview.isPending} onClick={() => preview.mutate()}>
+            <Button disabled={!ready || qb.healthLoading} loading={preview.isPending} onClick={() => preview.mutate()}>
               Preview
             </Button>
+            {qb.healthLoading && (
+              <p className="text-xs text-muted-foreground">Determining column types before filtering is allowed…</p>
+            )}
             {preview.isError && <Alert variant="destructive">{(preview.error as Error).message}</Alert>}
           </CardContent>
         </Card>

@@ -54,13 +54,17 @@ async def _forecast(client, token, item, qty, period="2030-06-01"):
 async def _create_active_bom(client, token, produced_item, lines):
     headers = {"Authorization": f"Bearer {token}"}
     bom = await client.post("/boms", json={"item_id": produced_item["id"]}, headers=headers)
-    bom_id = bom.json()["id"]
+    bom_data = bom.json()
+    bom_id = bom_data["id"]
     await client.patch(
         f"/boms/{bom_id}",
-        json=[
-            {"component_item_id": comp["id"], "quantity": str(qty), "sequence": i}
-            for i, (comp, qty) in enumerate(lines)
-        ],
+        json={
+            "lines": [
+                {"component_item_id": comp["id"], "quantity": str(qty), "sequence": i}
+                for i, (comp, qty) in enumerate(lines)
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
         headers=headers,
     )
     activate = await client.post(f"/boms/{bom_id}/activate", headers=headers)

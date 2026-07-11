@@ -252,10 +252,14 @@ async def test_generate_pos_excludes_manufactured_items(client):
     rod = await _create_item(client, token, "ROD", preferred_supplier_id=sup["id"])
     # FG (manufactured) -> 2x ROD.
     bom = await client.post("/boms", json={"item_id": fg["id"]}, headers=headers)
-    bom_id = bom.json()["id"]
+    bom_data = bom.json()
+    bom_id = bom_data["id"]
     await client.patch(
         f"/boms/{bom_id}",
-        json=[{"component_item_id": rod["id"], "quantity": "2", "sequence": 0}],
+        json={
+            "lines": [{"component_item_id": rod["id"], "quantity": "2", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
         headers=headers,
     )
     await client.post(f"/boms/{bom_id}/activate", headers=headers)

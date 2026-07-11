@@ -90,6 +90,20 @@ function Overview({ d }: { d: DatasetDetail }) {
 }
 
 function Schema({ d }: { d: DatasetDetail }) {
+  // CSV/TSV datasets are sniffed ALL_VARCHAR=1 at ingest, so c.dtype is always
+  // "VARCHAR" for them - inferred_dtype (from the health endpoint, based on
+  // actual cell content) is the real type. Same query key as HealthPanel/
+  // QueryPanel, so this is a no-op fetch if either tab was already visited.
+  const health = useQuery<Health>({
+    queryKey: ["dataset-health", d.id],
+    queryFn: async () => {
+      const res = await apiFetch(`/datasets/${d.id}/health`);
+      if (!res.ok) throw new Error("Failed to compute health");
+      return res.json();
+    },
+  });
+  const inferredByColumn = new Map(health.data?.columns.map((c) => [c.name, c.inferred_dtype]));
+
   return (
     <Card>
       <CardHeader>
@@ -109,7 +123,7 @@ function Schema({ d }: { d: DatasetDetail }) {
                 <TR key={c.name}>
                   <TD className="font-medium">{c.name}</TD>
                   <TD>
-                    <Badge variant="neutral">{c.dtype}</Badge>
+                    <Badge variant="neutral">{inferredByColumn.get(c.name) ?? c.dtype}</Badge>
                   </TD>
                 </TR>
               ))}
@@ -567,9 +581,12 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
         <CardContent className="space-y-5">
           <QueryBuilderFields qb={qb} names={names} />
 
-          <Button loading={query.isPending} onClick={() => query.mutate()}>
+          <Button disabled={qb.healthLoading} loading={query.isPending} onClick={() => query.mutate()}>
             Run query
           </Button>
+          {qb.healthLoading && (
+            <p className="text-xs text-muted-foreground">Determining column types before filtering is allowed…</p>
+          )}
 
           {query.isError && <Alert variant="destructive">{(query.error as Error).message}</Alert>}
         </CardContent>

@@ -15,6 +15,7 @@ router = APIRouter(prefix="/orgs", tags=["orgs"])
 class OrgResponse(BaseModel):
     id: str
     name: str
+    role: str
 
 
 @router.get("/me", response_model=OrgResponse)
@@ -24,4 +25,4 @@ async def get_my_org(
 ):
     result = await db.execute(select(Org).where(Org.id == current.org_id))
     org = result.scalar_one()
-    return OrgResponse(id=str(org.id), name=org.name)
+    return OrgResponse(id=str(org.id), name=org.name, role=current.role)

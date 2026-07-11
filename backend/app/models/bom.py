@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,7 +12,10 @@ from app.db.base import Base
 
 class Item(Base):
     __tablename__ = "items"
-    __table_args__ = (UniqueConstraint("org_id", "sku", name="uq_items_org_sku"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "sku", name="uq_items_org_sku"),
+        UniqueConstraint("org_id", "barcode", name="uq_items_org_barcode"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
@@ -30,12 +33,14 @@ class Item(Base):
     # IMMUTABLE AFTER CREATION - load-bearing. On-hand for an item comes from
     # exactly one source depending on this flag: lot-tracked items sum their
     # active Lots, everything else uses inventory_balances (see
-    # services.mrp.compute_mrp_plan). Those two are disjoint *because* this can't
-    # change: PATCH /items only edits preferred_supplier_id, inventory
-    # consume/adjust reject lot-tracked items, and receiving writes to lots XOR
-    # inventory by this flag. Making it mutable would strand one ledger and
-    # double-count on-hand - don't add it to ItemUpdateRequest without migrating
-    # the existing on-hand first. (Guarded by test_is_lot_tracked_immutable.)
+    # services.mrp.compute_mrp_plan). Those two are disjoint *because* this
+    # can't change: is_lot_tracked is deliberately never a field on
+    # ItemUpdateRequest (unlike preferred_supplier_id/lead_time_days/name/etc,
+    # which are), inventory consume/adjust reject lot-tracked items, and
+    # receiving writes to lots XOR inventory by this flag. Making it mutable
+    # would strand one ledger and double-count on-hand - don't add it to
+    # ItemUpdateRequest without migrating the existing on-hand first.
+    # (Guarded by test_is_lot_tracked_immutable.)
     is_lot_tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Default source of supply, used to auto-group MRP shortfalls into supplier
     # POs (see app.api.routes.forecasts.generate_pos). Nullable - an item may
@@ -50,6 +55,14 @@ class Item(Base):
     # lead time recorded is a real "insufficient data" state, not a same-day
     # lead time, and a 0 would silently understate the reorder point.
     lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Catalog-only: hides/tags a discontinued SKU in the UI. Does NOT gate
+    # services.mrp.compute_mrp_plan or forecasts.generate_pos - an inactive
+    # item is still planned and ordered until that's deliberately wired in.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nullable + unique per org (see __table_args__) - NULLs don't collide
+    # under a unique constraint, so items without a barcode are unaffected.
+    barcode: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

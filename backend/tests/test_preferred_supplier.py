@@ -124,6 +124,41 @@ async def test_is_lot_tracked_immutable(client):
     assert (await client.get("/items", headers=headers)).json()[0]["is_lot_tracked"] is False
 
 
+async def test_create_item_with_lead_time_days(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    res = await client.post(
+        "/items",
+        json={"sku": "ROD", "name": "Rod", "lead_time_days": 14},
+        headers=headers,
+    )
+    assert res.status_code == 201
+    assert res.json()["lead_time_days"] == 14
+
+
+async def test_patch_toggles_is_active(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, "ROD")
+    assert item["is_active"] is True
+
+    off = await client.patch(
+        f"/items/{item['id']}",
+        json={"preferred_supplier_id": None, "is_active": False},
+        headers=headers,
+    )
+    assert off.status_code == 200
+    assert off.json()["is_active"] is False
+
+    on = await client.patch(
+        f"/items/{item['id']}",
+        json={"preferred_supplier_id": None, "is_active": True},
+        headers=headers,
+    )
+    assert on.status_code == 200
+    assert on.json()["is_active"] is True
+
+
 async def test_patch_item_requires_owner(client, test_engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -235,6 +270,28 @@ async def test_generate_pos_excludes_manufactured_items(client):
     po = await client.get(f"/purchase-orders/{po_id}", headers=headers)
     assert po.json()["lines"][0]["item_id"] == rod["id"]
     assert _dec(po.json()["lines"][0]["quantity_ordered"]) == Decimal("200")
+
+
+async def test_generate_pos_ignores_is_active(client):
+    # is_active is catalog-only for now (see Item.is_active) - it must NOT
+    # gate MRP shortfalls or auto-PO generation. If someone wires deactivation
+    # into compute_mrp_plan/generate_pos later, this test fails - a deliberate
+    # tripwire, update it deliberately alongside that change.
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    sup = await _create_supplier(client, token)
+    item = await _create_item(client, token, "ROD", preferred_supplier_id=sup["id"])
+    await client.patch(
+        f"/items/{item['id']}",
+        json={"preferred_supplier_id": sup["id"], "is_active": False},
+        headers=headers,
+    )
+    await _forecast(client, token, item, 100)
+
+    res = await _generate_pos(client, token)
+    body = res.json()
+    assert len(body["created"]) == 1
+    assert body["created"][0]["line_count"] == 1
 
 
 async def test_generate_pos_empty_when_nothing_orderable(client):

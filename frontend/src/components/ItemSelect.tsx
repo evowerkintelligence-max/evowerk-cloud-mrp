@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { Select } from "@/components/ui/select";
@@ -35,6 +35,13 @@ export function ItemSelect({
   const [adding, setAdding] = useState(false);
   const [sku, setSku] = useState("");
   const [name, setName] = useState("");
+  const requiredMirrorRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    requiredMirrorRef.current?.setCustomValidity(
+      required && !value ? "Select an item, or finish creating the new one." : "",
+    );
+  }, [required, value]);
 
   const createItem = useMutation({
     mutationFn: async () => {
@@ -60,6 +67,22 @@ export function ItemSelect({
   if (adding) {
     return (
       <div className="flex flex-wrap items-start gap-2">
+        {/* Swapping the <select> out for these inputs would otherwise drop
+            the surrounding form's `required` coverage for this field -
+            mirror it here so submitting mid-create still gets blocked.
+            Zero-size but left in normal flow (not sr-only's absolute clip)
+            so the native validation bubble anchors right here, next to the
+            SKU/Name inputs, instead of off in a detached corner. */}
+        <input
+          ref={requiredMirrorRef}
+          id={id}
+          aria-label="Item"
+          required={required}
+          value={value}
+          onChange={() => {}}
+          tabIndex={-1}
+          style={{ position: "static", width: 0, height: 0, padding: 0, margin: 0, border: 0, opacity: 0 }}
+        />
         <Input
           placeholder="SKU"
           value={sku}
@@ -90,6 +113,8 @@ export function ItemSelect({
           onClick={() => {
             setAdding(false);
             createItem.reset();
+            setSku("");
+            setName("");
           }}
         >
           Cancel
@@ -107,8 +132,12 @@ export function ItemSelect({
       value={value}
       required={required}
       onChange={(e) => {
-        if (e.target.value === NEW_ITEM_VALUE) setAdding(true);
-        else onChange(e.target.value);
+        if (e.target.value === NEW_ITEM_VALUE) {
+          onChange("");
+          setAdding(true);
+        } else {
+          onChange(e.target.value);
+        }
       }}
     >
       <option value="" disabled>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,8 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.api.deps import CurrentUser, get_current_user, require_role
+from app.core.time import ensure_utc
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Bom, BomLine, Item
@@ -23,17 +26,20 @@ router = APIRouter(prefix="/boms", tags=["boms"])
 # uses the identical pattern for po_number - see create_purchase_order).
 MAX_VERSION_ATTEMPTS = 3
 
-# Only activate() walks this graph, since a draft's lines don't affect any live
-# calculation - the only moment a new "produces" edge becomes real is
-# activation. Bounded rather than an unbounded graph walk, since this runs
-# synchronously inside a request.
-MAX_CYCLE_CHECK_DEPTH = 20
-
 
 class BomLineInput(BaseModel):
     component_item_id: str
     quantity: Decimal
     sequence: int = 0
+
+
+class BomLinesUpdateRequest(BaseModel):
+    lines: list[BomLineInput]
+    # Echoed back from the last BomResponse the client saw. Guards against two
+    # editors overwriting each other's lines: the second PATCH to land loses
+    # the race and must refetch and retry rather than silently clobbering the
+    # first editor's lines with a stale full-snapshot replace.
+    expected_updated_at: datetime
 
 
 class BomLineResponse(BaseModel):
@@ -57,6 +63,7 @@ class BomResponse(BaseModel):
     item_name: str
     version: int
     status: str
+    updated_at: datetime
 
 
 class BomDetailResponse(BomResponse):
@@ -79,12 +86,39 @@ async def _get_bom_or_404(db: AsyncSession, org_id: uuid.UUID, bom_id: uuid.UUID
     return bom
 
 
+async def _reject_if_cycle(
+    db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, component_ids: set[uuid.UUID]
+) -> None:
+    if await _would_create_cycle(db, org_id, item_id, component_ids):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This would create a circular dependency (a component's own active BOM "
+            "eventually requires this item)",
+        )
+
+
+async def _flush_checking_version(db: AsyncSession) -> None:
+    """The expected_updated_at / status pre-checks in each route catch the
+    common case with a clear message; row_version (the Bom model's
+    version_id_col) is the real guard for the narrow window between that
+    check and this flush - convert its StaleDataError into the same 409
+    instead of a raw 500.
+    """
+    try:
+        await db.flush()
+    except StaleDataError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This BOM was changed elsewhere since you loaded it - refresh and try again",
+        ) from None
+
+
 async def _bom_to_response(db: AsyncSession, bom: Bom, item: Item | None = None) -> BomResponse:
     if item is None:
         item = await _get_item_or_404(db, bom.org_id, bom.item_id)
     return BomResponse(
         id=str(bom.id), item_id=str(bom.item_id), item_sku=item.sku, item_name=item.name,
-        version=bom.version, status=bom.status,
+        version=bom.version, status=bom.status, updated_at=bom.updated_at,
     )
 
 
@@ -99,9 +133,12 @@ async def _would_create_cycle(
     visited: set[uuid.UUID] = set()
     frontier = start_component_ids
 
-    for _ in range(MAX_CYCLE_CHECK_DEPTH):
-        if not frontier:
-            return False
+    # No fixed depth cap: each pass strictly grows `visited` (frontier -=
+    # visited, then folds the remainder in) or returns, and visited can never
+    # exceed the org's total item count - so this always terminates without
+    # needing an arbitrary ceiling that would false-positive on a deep-but-
+    # acyclic BOM tree.
+    while frontier:
         if target_item_id in frontier:
             return True
         frontier -= visited
@@ -121,13 +158,7 @@ async def _would_create_cycle(
         )
         frontier = {row[0] for row in lines_result.all()}
 
-    # Budget exhausted with frontier still non-empty: we can't prove there's no
-    # cycle beyond this depth. Silently returning False here would let a
-    # genuine deep cycle through and corrupt MRP netting - fail closed instead.
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        f"Can't verify this BOM graph is acyclic within {MAX_CYCLE_CHECK_DEPTH} levels - refusing to activate",
-    )
+    return False
 
 
 @router.post("", response_model=BomResponse, status_code=status.HTTP_201_CREATED)
@@ -225,16 +256,23 @@ async def get_bom(
 @router.patch("/{bom_id}", response_model=BomDetailResponse)
 async def update_bom_lines(
     bom_id: uuid.UUID,
-    lines_in: list[BomLineInput],
+    body: BomLinesUpdateRequest,
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
+    lines_in = body.lines
     bom = await _get_bom_or_404(db, current.org_id, bom_id)
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be edited")
+    if ensure_utc(bom.updated_at) != ensure_utc(body.expected_updated_at):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This BOM was changed elsewhere since you loaded it - refresh and try again",
+        )
     if not lines_in:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A BOM needs at least one line")
 
+    component_ids: set[uuid.UUID] = set()
     for line_in in lines_in:
         if line_in.quantity <= 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
@@ -244,7 +282,21 @@ async def update_bom_lines(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid component_item_id") from None
         if component_id == bom.item_id:
             raise HTTPException(status.HTTP_409_CONFLICT, "A BOM can't list its own item as a component")
-        await _get_item_or_404(db, current.org_id, component_id)
+        component_ids.add(component_id)
+
+    # One query for every distinct component instead of one per line - a BOM
+    # with dozens of lines was otherwise issuing that many item lookups.
+    found_result = await db.execute(
+        select(Item.id).where(Item.org_id == current.org_id, Item.id.in_(component_ids))
+    )
+    if {row[0] for row in found_result.all()} != component_ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+
+    # Same check activate() runs, surfaced here so a cycle is caught the moment
+    # it's drafted rather than after the user has finished building the BOM.
+    # activate() re-checks anyway, since the active-BOM graph can shift between
+    # this save and that activation.
+    await _reject_if_cycle(db, current.org_id, bom.item_id, component_ids)
 
     await db.execute(BomLine.__table__.delete().where(BomLine.bom_id == bom.id))
     for line_in in lines_in:
@@ -257,7 +309,11 @@ async def update_bom_lines(
                 sequence=line_in.sequence,
             )
         )
-    await db.flush()
+    # bom_lines is a separate table, so nothing here dirties the boms row on
+    # its own - bump updated_at explicitly or the CAS check above would never
+    # actually detect this edit on a subsequent PATCH.
+    bom.updated_at = datetime.now(timezone.utc)
+    await _flush_checking_version(db)
 
     await log_event(
         db,
@@ -281,17 +337,20 @@ async def activate_bom(
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be activated")
 
+    # Lock every BOM row in the org for the rest of this transaction so two
+    # concurrent activations can't both walk the cycle check before either
+    # commits - e.g. mutually-referencing drafts A and B could otherwise each
+    # see the other as still-draft (invisible to the active-only walk) and
+    # both pass, creating a real cycle once both commit. A second activate()
+    # in this org now blocks here until the first one commits or rolls back.
+    await db.execute(select(Bom.id).where(Bom.org_id == current.org_id).with_for_update())
+
     lines_result = await db.execute(select(BomLine.component_item_id).where(BomLine.bom_id == bom.id))
     component_ids = {row[0] for row in lines_result.all()}
     if not component_ids:
         raise HTTPException(status.HTTP_409_CONFLICT, "Can't activate a BOM with no lines")
 
-    if await _would_create_cycle(db, current.org_id, bom.item_id, component_ids):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Activating this BOM would create a circular dependency (a component's "
-            "own BOM eventually requires this item)",
-        )
+    await _reject_if_cycle(db, current.org_id, bom.item_id, component_ids)
 
     previously_active = await db.execute(
         select(Bom).where(Bom.org_id == current.org_id, Bom.item_id == bom.item_id, Bom.status == "active")
@@ -300,7 +359,7 @@ async def activate_bom(
         other.status = "archived"
 
     bom.status = "active"
-    await db.flush()
+    await _flush_checking_version(db)
 
     await log_event(
         db,
@@ -312,3 +371,34 @@ async def activate_bom(
     )
     await db.commit()
     return await _bom_to_response(db, bom)
+
+
+@router.delete("/{bom_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_bom(
+    bom_id: uuid.UUID,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    bom = await _get_bom_or_404(db, current.org_id, bom_id)
+    if bom.status != "draft":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be deleted")
+
+    # Guarded DELETE, not delete-by-id: a concurrent activate() could flip this
+    # BOM to active between the check above and here. Re-check status='draft'
+    # as part of the DELETE itself so that race loses cleanly instead of
+    # silently deleting a BOM another request just made active.
+    result = await db.execute(Bom.__table__.delete().where(Bom.id == bom.id, Bom.status == "draft"))
+    if result.rowcount == 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This BOM was changed elsewhere since you loaded it - refresh and try again",
+        )
+    await log_event(
+        db,
+        action="bom.deleted",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(bom.id),
+        metadata={"item_id": str(bom.item_id), "version": bom.version},
+    )
+    await db.commit()

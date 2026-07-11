@@ -99,6 +99,17 @@ class Bom(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    # SQLAlchemy's own optimistic-concurrency guard: every UPDATE for this row
+    # gets "AND row_version = <loaded value>" appended and bumps it by 1,
+    # raising StaleDataError if another transaction already moved it since this
+    # row was read. Separate from `version` (the BOM revision number, a
+    # business field) and from `updated_at` (not usable as a version_id_col
+    # itself - edits that only touch bom_lines rows don't dirty it on their
+    # own, see update_bom_lines, which still bumps it by hand and lets that
+    # same write carry row_version along for the ride).
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    __mapper_args__ = {"version_id_col": row_version}
 
 
 class BomLine(Base):

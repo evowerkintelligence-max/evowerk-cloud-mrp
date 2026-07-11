@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, CurrentUser
 from app.core.config import get_settings
+from app.core.time import ensure_utc
 from app.core.security import (
     create_access_token,
     decrypt_secret,
@@ -100,10 +101,7 @@ def _client_ip(request: Request) -> str | None:
 def _is_locked(user: User) -> bool:
     if user.locked_until is None:
         return False
-    locked_until = user.locked_until
-    if locked_until.tzinfo is None:
-        locked_until = locked_until.replace(tzinfo=timezone.utc)
-    return locked_until > datetime.now(timezone.utc)
+    return ensure_utc(user.locked_until) > datetime.now(timezone.utc)
 
 
 def _register_failed_attempt(user: User) -> None:
@@ -313,11 +311,7 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     invalid = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     if stored is None or stored.revoked:
         raise invalid
-    expires_at = stored.expires_at
-    if expires_at.tzinfo is None:
-        # SQLite (used in tests) drops tzinfo on round-trip; Postgres preserves it.
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
+    if ensure_utc(stored.expires_at) < datetime.now(timezone.utc):
         raise invalid
 
     user_result = await db.execute(select(User).where(User.id == stored.user_id))

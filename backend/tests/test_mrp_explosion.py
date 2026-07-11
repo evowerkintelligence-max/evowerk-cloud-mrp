@@ -48,13 +48,17 @@ async def _create_active_bom(client, token, produced_item, lines):
     headers = {"Authorization": f"Bearer {token}"}
     bom = await client.post("/boms", json={"item_id": produced_item["id"]}, headers=headers)
     assert bom.status_code == 201
-    bom_id = bom.json()["id"]
+    bom_data = bom.json()
+    bom_id = bom_data["id"]
     patch = await client.patch(
         f"/boms/{bom_id}",
-        json=[
-            {"component_item_id": comp["id"], "quantity": str(qty), "sequence": i}
-            for i, (comp, qty) in enumerate(lines)
-        ],
+        json={
+            "lines": [
+                {"component_item_id": comp["id"], "quantity": str(qty), "sequence": i}
+                for i, (comp, qty) in enumerate(lines)
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
         headers=headers,
     )
     assert patch.status_code == 200
@@ -276,12 +280,16 @@ async def test_only_active_bom_explodes(client):
 
     # Draft BOM only (created + lines set, never activated).
     bom = await client.post("/boms", json={"item_id": fg["id"]}, headers=headers)
-    bom_id = bom.json()["id"]
-    await client.patch(
-        f"/boms/{bom_id}",
-        json=[{"component_item_id": rod["id"], "quantity": "2", "sequence": 0}],
+    bom_data = bom.json()
+    patch = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": rod["id"], "quantity": "2", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
         headers=headers,
     )
+    assert patch.status_code == 200
 
     await _forecast(client, token, fg, 100)
 

@@ -62,7 +62,10 @@ async def test_bom_create_edit_lines_and_activate(client):
 
     lines = await client.patch(
         f"/boms/{bom_data['id']}",
-        json=[{"component_item_id": comp["id"], "quantity": "4.5", "sequence": 0}],
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "4.5", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
         headers=headers,
     )
     assert lines.status_code == 200
@@ -76,10 +79,84 @@ async def test_bom_create_edit_lines_and_activate(client):
     # Draft-only edit guard: an active BOM's lines can no longer be edited.
     edit_after_activate = await client.patch(
         f"/boms/{bom_data['id']}",
-        json=[{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": lines.json()["updated_at"],
+        },
         headers=headers,
     )
     assert edit_after_activate.status_code == 409
+
+
+async def test_bom_patch_rejects_stale_updated_at(client):
+    """Two editors load the same draft; the second one's PATCH must be
+    rejected as stale instead of silently clobbering the first one's lines."""
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    parent = await _create_item(client, token, sku="FG-1B", name="Widget B", item_type="finished_good")
+    comp = await _create_item(client, token, sku="RAW-2B", name="Bolt B", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+
+    first_edit = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert first_edit.status_code == 200
+
+    stale_edit = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "2", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert stale_edit.status_code == 409
+
+
+async def test_delete_draft_bom(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    item = await _create_item(client, token, sku="FG-DEL", name="Deletable", item_type="finished_good")
+    bom = await client.post("/boms", json={"item_id": item["id"]}, headers=headers)
+    bom_id = bom.json()["id"]
+
+    delete = await client.delete(f"/boms/{bom_id}", headers=headers)
+    assert delete.status_code == 204
+
+    get_after_delete = await client.get(f"/boms/{bom_id}", headers=headers)
+    assert get_after_delete.status_code == 404
+
+
+async def test_delete_active_bom_rejected(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    parent = await _create_item(client, token, sku="FG-DEL2", name="Not Deletable", item_type="finished_good")
+    comp = await _create_item(client, token, sku="RAW-DEL2", name="Comp", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+
+    delete = await client.delete(f"/boms/{bom_data['id']}", headers=headers)
+    assert delete.status_code == 409
 
 
 async def test_activate_supersedes_previous_active_version(client):
@@ -91,13 +168,16 @@ async def test_activate_supersedes_previous_active_version(client):
 
     async def _make_active_bom():
         bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
-        bom_id = bom.json()["id"]
+        bom_data = bom.json()
         await client.patch(
-            f"/boms/{bom_id}",
-            json=[{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+            f"/boms/{bom_data['id']}",
+            json={
+                "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom_data["updated_at"],
+            },
             headers=headers,
         )
-        activated = await client.post(f"/boms/{bom_id}/activate", headers=headers)
+        activated = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
         return activated.json()
 
     v1 = await _make_active_bom()
@@ -116,19 +196,23 @@ async def test_activate_rejects_immediate_self_reference(client):
 
     item = await _create_item(client, token, sku="FG-3", name="Loopy", item_type="finished_good")
     bom = await client.post("/boms", json={"item_id": item["id"]}, headers=headers)
-    bom_id = bom.json()["id"]
+    bom_data = bom.json()
 
     res = await client.patch(
-        f"/boms/{bom_id}",
-        json=[{"component_item_id": item["id"], "quantity": "1", "sequence": 0}],
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": item["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
         headers=headers,
     )
     assert res.status_code == 409
 
 
-async def test_activate_rejects_multilevel_cycle(client):
-    """A -> B (active), then trying to activate a B -> A BOM must be rejected -
-    otherwise A indirectly requires itself to be built."""
+async def test_edit_rejects_multilevel_cycle(client):
+    """A -> B (active), then editing a draft B -> A BOM must be rejected on the
+    PATCH itself - the same check activate() runs, but surfaced immediately so
+    the user doesn't build out a whole cyclic draft before finding out."""
     token, _ = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -136,58 +220,93 @@ async def test_activate_rejects_multilevel_cycle(client):
     item_b = await _create_item(client, token, sku="B", name="Item B", item_type="component")
 
     bom_a = await client.post("/boms", json={"item_id": item_a["id"]}, headers=headers)
-    bom_a_id = bom_a.json()["id"]
+    bom_a_data = bom_a.json()
     await client.patch(
-        f"/boms/{bom_a_id}",
-        json=[{"component_item_id": item_b["id"], "quantity": "1", "sequence": 0}],
+        f"/boms/{bom_a_data['id']}",
+        json={
+            "lines": [{"component_item_id": item_b["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_a_data["updated_at"],
+        },
         headers=headers,
     )
-    activate_a = await client.post(f"/boms/{bom_a_id}/activate", headers=headers)
+    activate_a = await client.post(f"/boms/{bom_a_data['id']}/activate", headers=headers)
     assert activate_a.status_code == 200
 
     bom_b = await client.post("/boms", json={"item_id": item_b["id"]}, headers=headers)
-    bom_b_id = bom_b.json()["id"]
-    await client.patch(
-        f"/boms/{bom_b_id}",
-        json=[{"component_item_id": item_a["id"], "quantity": "1", "sequence": 0}],
+    bom_b_data = bom_b.json()
+    edit_b = await client.patch(
+        f"/boms/{bom_b_data['id']}",
+        json={
+            "lines": [{"component_item_id": item_a["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_b_data["updated_at"],
+        },
         headers=headers,
     )
-    activate_b = await client.post(f"/boms/{bom_b_id}/activate", headers=headers)
-    assert activate_b.status_code == 409
+    assert edit_b.status_code == 409
 
 
-async def test_activate_fails_closed_on_cycle_deeper_than_budget(client):
-    """A cycle spanning more levels than MAX_CYCLE_CHECK_DEPTH must still be
-    rejected, not silently treated as acyclic just because the walk ran out
-    of budget before reaching back around to the target item."""
+async def test_deep_acyclic_chain_activates_without_a_depth_ceiling(client):
+    """A real ERP-scale BOM tree can nest well past 20 levels without ever
+    cycling back on itself. There's no fixed depth cap on the cycle walk (it's
+    naturally bounded by the org's item count), so a long acyclic chain must
+    activate cleanly at every level instead of hitting a false-positive."""
     token, _ = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
-    # 25 items, each (but the last) with an active BOM whose sole component is
-    # the next item: I0 -> I1 -> ... -> I23 -> I24. 25 > MAX_CYCLE_CHECK_DEPTH
-    # (20), so the closing edge below isn't reachable within the walk's budget.
-    n = 25
+    # I0 -> I1 -> ... -> I29, no closing edge - 30 levels, well past the old
+    # MAX_CYCLE_CHECK_DEPTH=20 constant that used to fail closed here.
+    n = 30
+    items = [await _create_item(client, token, sku=f"CHAIN-{i}", name=f"Item {i}") for i in range(n)]
+    for i in range(n - 1):
+        bom = await client.post("/boms", json={"item_id": items[i]["id"]}, headers=headers)
+        bom_data = bom.json()
+        await client.patch(
+            f"/boms/{bom_data['id']}",
+            json={
+                "lines": [{"component_item_id": items[i + 1]["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom_data["updated_at"],
+            },
+            headers=headers,
+        )
+        activated = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+        assert activated.status_code == 200
+
+
+async def test_deep_cycle_rejected_on_the_closing_edit(client):
+    """Same 30-level chain, but this time the last item's BOM closes the loop
+    back to the first. The closing PATCH itself must be rejected - the walk
+    has no depth cap to run out of, so this can't be a fail-closed false
+    positive, it's a real cycle."""
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    n = 30
     items = [await _create_item(client, token, sku=f"CYC-{i}", name=f"Item {i}") for i in range(n)]
     for i in range(n - 1):
         bom = await client.post("/boms", json={"item_id": items[i]["id"]}, headers=headers)
-        bom_id = bom.json()["id"]
+        bom_data = bom.json()
         await client.patch(
-            f"/boms/{bom_id}",
-            json=[{"component_item_id": items[i + 1]["id"], "quantity": "1", "sequence": 0}],
+            f"/boms/{bom_data['id']}",
+            json={
+                "lines": [{"component_item_id": items[i + 1]["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom_data["updated_at"],
+            },
             headers=headers,
         )
-        activated = await client.post(f"/boms/{bom_id}/activate", headers=headers)
+        activated = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
         assert activated.status_code == 200
 
-    # Close the loop: I24 -> I0.
+    # Close the loop: I29 -> I0. Rejected on the PATCH, before activation.
     closing_bom = await client.post("/boms", json={"item_id": items[n - 1]["id"]}, headers=headers)
-    closing_bom_id = closing_bom.json()["id"]
-    await client.patch(
-        f"/boms/{closing_bom_id}",
-        json=[{"component_item_id": items[0]["id"], "quantity": "1", "sequence": 0}],
+    closing_bom_data = closing_bom.json()
+    res = await client.patch(
+        f"/boms/{closing_bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": items[0]["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": closing_bom_data["updated_at"],
+        },
         headers=headers,
     )
-    res = await client.post(f"/boms/{closing_bom_id}/activate", headers=headers)
     assert res.status_code == 409
 
 

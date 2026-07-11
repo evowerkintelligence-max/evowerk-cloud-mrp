@@ -24,10 +24,16 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"]
 
 
-async def _create_item(client, token, sku, name="Item"):
+async def _create_item(client, token, sku, name="Item", min_order_qty=None):
     res = await client.post(
         "/items",
-        json={"sku": sku, "name": name, "item_type": "component", "unit_of_measure": "ea"},
+        json={
+            "sku": sku,
+            "name": name,
+            "item_type": "component",
+            "unit_of_measure": "ea",
+            "min_order_qty": str(min_order_qty) if min_order_qty is not None else None,
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 201
@@ -99,6 +105,22 @@ async def test_generate_po_creates_draft_at_net_quantities(client):
     assert po.status_code == 200
     assert po.json()["status"] == "draft"
     assert _dec(po.json()["lines"][0]["quantity_ordered"]) == Decimal("100")
+
+
+async def test_generate_po_rounds_up_to_moq(client):
+    """The PO line quantity must be the MOQ-rounded suggested_order_quantity,
+    not the raw net_requirement - otherwise a supplier's MOQ never reaches an
+    actual order."""
+    token = await _register_and_login(client)
+    item = await _create_item(client, token, "ROD", "Steel Rod", min_order_qty=500)
+    supplier = await _create_supplier(client, token)
+    await _forecast(client, token, item, 20)  # well under the 500 MOQ
+
+    res = await _generate_po(client, token, supplier, [item["id"]])
+    assert res.status_code == 200
+    lines = res.json()["lines"]
+    assert len(lines) == 1
+    assert _dec(lines[0]["quantity_ordered"]) == Decimal("500")
 
 
 async def test_generate_po_prefills_last_known_unit_price(client):

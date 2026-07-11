@@ -25,6 +25,8 @@ interface MrpPlanLine {
   on_draft: string;
   net_requirement: string;
   suggested_order_quantity: string;
+  need_by_date: string | null;
+  suggested_order_date: string | null;
 }
 
 interface MrpPlanResponse {
@@ -230,6 +232,7 @@ export function GeneratePosPanel({
                     <TH>On draft</TH>
                     <TH>Net req.</TH>
                     <TH>Suggested action</TH>
+                    <TH>Order by</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -271,6 +274,21 @@ export function GeneratePosPanel({
                             <Badge variant={line.is_manufactured ? "accent" : "info"}>
                               {line.is_manufactured ? "Build" : "Order"} {line.suggested_order_quantity}
                             </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TD>
+                        <TD>
+                          {line.suggested_order_date ? (
+                            <span
+                              className={
+                                line.suggested_order_date < today()
+                                  ? "font-semibold text-destructive"
+                                  : undefined
+                              }
+                            >
+                              {line.suggested_order_date}
+                            </span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}

@@ -26,6 +26,7 @@ interface ItemResponse {
   is_lot_tracked: boolean;
   preferred_supplier_id: string | null;
   lead_time_days: number | null;
+  min_order_qty: string | null;
   is_active: boolean;
   description: string | null;
   barcode: string | null;
@@ -104,6 +105,7 @@ export function Items() {
   const [unitOfMeasure, setUnitOfMeasure] = useState("ea");
   const [isLotTracked, setIsLotTracked] = useState(false);
   const [leadTimeDays, setLeadTimeDays] = useState("");
+  const [minOrderQty, setMinOrderQty] = useState("");
   const [description, setDescription] = useState("");
   const [barcode, setBarcode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -211,6 +213,38 @@ export function Items() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const [pendingMoqItemIds, setPendingMoqItemIds] = useState<Set<string>>(new Set());
+  const setMoq = useMutation({
+    mutationFn: async ({
+      itemId,
+      preferredSupplierId,
+      minOrderQty: value,
+    }: {
+      itemId: string;
+      preferredSupplierId: string | null;
+      minOrderQty: string | null;
+    }) => {
+      const res = await apiFetch(`/items/${itemId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ preferred_supplier_id: preferredSupplierId, min_order_qty: value }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to update MOQ");
+      }
+      return res.json();
+    },
+    onMutate: ({ itemId }) => setPendingMoqItemIds((prev) => new Set(prev).add(itemId)),
+    onSettled: (_data, _err, { itemId }) =>
+      setPendingMoqItemIds((prev) => {
+        const next = new Set(prev);
+        next.delete(itemId);
+        return next;
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["items"] }),
+    onError: (e: Error) => setError(e.message),
+  });
+
   const [pendingActiveItemIds, setPendingActiveItemIds] = useState<Set<string>>(new Set());
   const setActive = useMutation({
     mutationFn: async ({
@@ -290,6 +324,7 @@ export function Items() {
           unit_of_measure: unitOfMeasure,
           is_lot_tracked: isLotTracked,
           lead_time_days: leadTimeDays === "" ? null : Number(leadTimeDays),
+          min_order_qty: minOrderQty === "" ? null : minOrderQty,
           description: description === "" ? null : description,
           barcode: barcode === "" ? null : barcode,
         }),
@@ -304,6 +339,7 @@ export function Items() {
       setSku("");
       setName("");
       setLeadTimeDays("");
+      setMinOrderQty("");
       setDescription("");
       setBarcode("");
       setShowManualAdd(false);
@@ -422,6 +458,16 @@ export function Items() {
                       min={0}
                       value={leadTimeDays}
                       onChange={(e) => setLeadTimeDays(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Min order qty" htmlFor="minOrderQty">
+                    <Input
+                      id="minOrderQty"
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={minOrderQty}
+                      onChange={(e) => setMinOrderQty(e.target.value)}
                     />
                   </Field>
                   <Field label="Description" htmlFor="description">
@@ -564,6 +610,7 @@ export function Items() {
                       <TH>UoM</TH>
                       <TH>Lot tracked</TH>
                       <TH>Lead time (days)</TH>
+                      <TH>Min order qty</TH>
                       <TH>Description</TH>
                       <TH>Barcode</TH>
                       <TH>Status</TH>
@@ -642,6 +689,28 @@ export function Items() {
                                       itemId: item.id,
                                       preferredSupplierId: item.preferred_supplier_id,
                                       leadTimeDays: value,
+                                    });
+                                  }}
+                                />
+                              </div>
+                            </TD>
+                            <TD>
+                              <div className="max-w-[110px]">
+                                <Label className="sr-only">Min order qty</Label>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step="any"
+                                  defaultValue={item.min_order_qty ?? ""}
+                                  disabled={!isOwner || pendingMoqItemIds.has(item.id)}
+                                  onBlur={(e) => {
+                                    const raw = e.target.value;
+                                    const value = raw === "" ? null : raw;
+                                    if (value === item.min_order_qty) return;
+                                    setMoq.mutate({
+                                      itemId: item.id,
+                                      preferredSupplierId: item.preferred_supplier_id,
+                                      minOrderQty: value,
                                     });
                                   }}
                                 />

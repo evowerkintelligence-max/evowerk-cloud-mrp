@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
@@ -32,6 +33,7 @@ class ItemCreateRequest(BaseModel):
     is_lot_tracked: bool = False
     preferred_supplier_id: str | None = None
     lead_time_days: int | None = None
+    min_order_qty: Decimal | None = None
     description: str | None = None
     barcode: str | None = None
 
@@ -45,6 +47,7 @@ class ItemUpdateRequest(BaseModel):
     # that only ever sent one of these fields shouldn't have the others
     # silently reset. Checked via model_fields_set in update_item.
     lead_time_days: int | None = None
+    min_order_qty: Decimal | None = None
     is_active: bool | None = None
     name: str | None = None
     unit_of_measure: str | None = None
@@ -61,6 +64,7 @@ class ItemResponse(BaseModel):
     is_lot_tracked: bool
     preferred_supplier_id: str | None
     lead_time_days: int | None
+    min_order_qty: Decimal | None
     is_active: bool
     description: str | None
     barcode: str | None
@@ -78,6 +82,7 @@ def _to_response(item: Item) -> ItemResponse:
             str(item.preferred_supplier_id) if item.preferred_supplier_id else None
         ),
         lead_time_days=item.lead_time_days,
+        min_order_qty=item.min_order_qty,
         is_active=item.is_active,
         description=item.description,
         barcode=item.barcode,
@@ -124,6 +129,7 @@ async def _create_item_row(
     is_lot_tracked: bool = False,
     preferred_supplier_id: str | None = None,
     lead_time_days: int | None = None,
+    min_order_qty: Decimal | None = None,
     description: str | None = None,
     barcode: str | None = None,
 ) -> Item:
@@ -134,6 +140,8 @@ async def _create_item_row(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"item_type must be one of {sorted(VALID_ITEM_TYPES)}")
     if lead_time_days is not None and lead_time_days < 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "lead_time_days must be non-negative")
+    if min_order_qty is not None and min_order_qty <= 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "min_order_qty must be positive")
     resolved_supplier_id = await _resolve_supplier_id(db, org_id, preferred_supplier_id)
 
     item = Item(
@@ -145,6 +153,7 @@ async def _create_item_row(
         is_lot_tracked=is_lot_tracked,
         preferred_supplier_id=resolved_supplier_id,
         lead_time_days=lead_time_days,
+        min_order_qty=min_order_qty,
         description=description,
         barcode=barcode,
     )
@@ -183,6 +192,7 @@ async def create_item(
         is_lot_tracked=body.is_lot_tracked,
         preferred_supplier_id=body.preferred_supplier_id,
         lead_time_days=body.lead_time_days,
+        min_order_qty=body.min_order_qty,
         description=body.description,
         barcode=body.barcode,
     )
@@ -273,6 +283,15 @@ async def import_items(
             )
             continue
 
+        moq_raw = _row_cell(row, field_map, "min_order_qty")
+        try:
+            min_order_qty = Decimal(moq_raw) if moq_raw is not None else None
+        except InvalidOperation:
+            errors.append(
+                ImportRowError(row=row_number, sku=sku, message="min_order_qty must be a number")
+            )
+            continue
+
         try:
             item = await _create_item_row(
                 db,
@@ -286,6 +305,7 @@ async def import_items(
                 in {"true", "1", "yes"},
                 preferred_supplier_id=_row_cell(row, field_map, "preferred_supplier_id"),
                 lead_time_days=lead_time_days,
+                min_order_qty=min_order_qty,
                 description=_row_cell(row, field_map, "description"),
                 barcode=_row_cell(row, field_map, "barcode"),
             )
@@ -312,7 +332,8 @@ async def export_items(
     writer.writerow(
         [
             "sku", "name", "item_type", "unit_of_measure", "is_lot_tracked",
-            "lead_time_days", "is_active", "description", "barcode", "preferred_supplier_id",
+            "lead_time_days", "min_order_qty", "is_active", "description", "barcode",
+            "preferred_supplier_id",
         ]
     )
     for item in items:
@@ -324,6 +345,7 @@ async def export_items(
                 item.unit_of_measure,
                 item.is_lot_tracked,
                 item.lead_time_days if item.lead_time_days is not None else "",
+                item.min_order_qty if item.min_order_qty is not None else "",
                 item.is_active,
                 item.description or "",
                 item.barcode or "",
@@ -355,6 +377,11 @@ async def update_item(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "lead_time_days must be non-negative")
         item.lead_time_days = body.lead_time_days
         metadata["lead_time_days"] = body.lead_time_days
+    if "min_order_qty" in body.model_fields_set:
+        if body.min_order_qty is not None and body.min_order_qty <= 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "min_order_qty must be positive")
+        item.min_order_qty = body.min_order_qty
+        metadata["min_order_qty"] = str(body.min_order_qty) if body.min_order_qty is not None else None
     if "is_active" in body.model_fields_set and body.is_active is not None:
         item.is_active = body.is_active
         metadata["is_active"] = body.is_active

@@ -51,10 +51,16 @@ class Item(Base):
         Uuid(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
     )
     # Supplier lead time in days, for reorder-point calculation (see
-    # app.services.inventory_analytics). Nullable and NOT defaulted to 0 - no
-    # lead time recorded is a real "insufficient data" state, not a same-day
-    # lead time, and a 0 would silently understate the reorder point.
+    # app.services.inventory_analytics) and for MRP order-date offsetting (see
+    # app.services.mrp). Nullable and NOT defaulted to 0 - no lead time
+    # recorded is a real "insufficient data" state, not a same-day lead time,
+    # and a 0 would silently understate the reorder point / order date.
     lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Supplier minimum order quantity, for MRP order-quantity rounding (see
+    # app.services.mrp). Nullable and NOT defaulted to 0 for the same reason
+    # as lead_time_days - "no MOQ recorded" must not silently behave like
+    # "MOQ of 0" (a no-op) is indistinguishable from real data.
+    min_order_qty: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     # Catalog-only: hides/tags a discontinued SKU in the UI. Does NOT gate
     # services.mrp.compute_mrp_plan or forecasts.generate_pos - an inactive
     # item is still planned and ordered until that's deliberately wired in.

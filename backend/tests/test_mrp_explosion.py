@@ -26,7 +26,9 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"]
 
 
-async def _create_item(client, token, sku, name="Item", is_lot_tracked=False):
+async def _create_item(
+    client, token, sku, name="Item", is_lot_tracked=False, lead_time_days=None, min_order_qty=None
+):
     res = await client.post(
         "/items",
         json={
@@ -35,6 +37,8 @@ async def _create_item(client, token, sku, name="Item", is_lot_tracked=False):
             "item_type": "component",
             "unit_of_measure": "ea",
             "is_lot_tracked": is_lot_tracked,
+            "lead_time_days": lead_time_days,
+            "min_order_qty": str(min_order_qty) if min_order_qty is not None else None,
         },
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -298,3 +302,89 @@ async def test_only_active_bom_explodes(client):
     # FG plans as a plain (unexploded) item; no component demand appears.
     assert lines["FG"]["is_manufactured"] is False
     assert "ROD" not in lines
+
+
+async def test_lead_time_offsets_suggested_order_date(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    rod = await _create_item(client, token, "ROD", "Steel Rod", lead_time_days=10)
+    await _forecast(client, token, rod, 50, period="2030-06-15")
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert lines["ROD"]["need_by_date"] == "2030-06-15"
+    # 2030-06-15 minus 10 days.
+    assert lines["ROD"]["suggested_order_date"] == "2030-06-05"
+
+
+async def test_no_lead_time_leaves_order_date_unset(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    rod = await _create_item(client, token, "ROD", "Steel Rod")  # no lead_time_days
+    await _forecast(client, token, rod, 50, period="2030-06-15")
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert lines["ROD"]["need_by_date"] == "2030-06-15"
+    assert lines["ROD"]["suggested_order_date"] is None
+
+
+async def test_lead_time_need_date_propagates_through_explosion(client):
+    """A component's need date comes from its parent's need date, not its own
+    (a pure component has no direct forecast to date it by)."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    fg = await _create_item(client, token, "FG", "Widget")
+    rod = await _create_item(client, token, "ROD", "Steel Rod", lead_time_days=7)
+    await _create_active_bom(client, token, fg, [(rod, 2)])
+    await _forecast(client, token, fg, 100, period="2030-03-01")
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert lines["ROD"]["need_by_date"] == "2030-03-01"
+    assert lines["ROD"]["suggested_order_date"] == "2030-02-22"  # 2030-03-01 minus 7 days
+
+
+async def test_moq_rounds_up_suggested_quantity_without_inflating_explosion(client):
+    """MOQ rounds the item's own order quantity but must not leak into what
+    its components need - explosion always uses the raw net."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    fg = await _create_item(client, token, "FG", "Widget")
+    rod = await _create_item(client, token, "ROD", "Steel Rod", min_order_qty=500)
+    await _create_active_bom(client, token, fg, [(rod, 2)])
+    await _forecast(client, token, fg, 10)  # -> 20 rods needed, below the 500 MOQ
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert _dec(lines["ROD"]["net_requirement"]) == Decimal("20")
+    assert _dec(lines["ROD"]["suggested_order_quantity"]) == Decimal("500")
+
+
+async def test_moq_below_net_requirement_is_a_no_op(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    rod = await _create_item(client, token, "ROD", "Steel Rod", min_order_qty=10)
+    await _forecast(client, token, rod, 200)  # already well above the MOQ
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert _dec(lines["ROD"]["net_requirement"]) == Decimal("200")
+    assert _dec(lines["ROD"]["suggested_order_quantity"]) == Decimal("200")
+
+
+async def test_manufactured_item_ignores_lead_time_and_moq(client):
+    """MOQ/lead time are purchasing concepts - a build action never rounds or
+    offsets by them, even if the fields happen to be set on the item."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    fg = await _create_item(client, token, "FG", "Widget", lead_time_days=5, min_order_qty=1000)
+    rod = await _create_item(client, token, "ROD", "Steel Rod")
+    await _create_active_bom(client, token, fg, [(rod, 1)])
+    await _forecast(client, token, fg, 10, period="2030-06-15")
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert lines["FG"]["is_manufactured"] is True
+    assert _dec(lines["FG"]["suggested_order_quantity"]) == Decimal("10")  # not rounded to 1000
+    assert lines["FG"]["suggested_order_date"] is None  # build, not buy - no order date

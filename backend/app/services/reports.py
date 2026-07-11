@@ -7,11 +7,19 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Literal
 
+from fastapi import HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.dashboard import Chart
+from app.models.dataset import Dataset
+from app.models.report_spec import SavedReport
 from app.models.tenant import Org
+from app.services import dataset_query as query_service
+from app.services import datasets as ds_service
 from app.services.inventory_analytics import compute_inventory_analytics
 from app.services.mrp import compute_mrp_plan
 from app.services.rca import RcaResult, compute_rca
@@ -26,7 +34,7 @@ from app.services.scenario import compare_lead_time_scenario
 # report_id: build a Report, render it, stream it.
 BRAND = "EvoWerk Cloud MRP"
 
-KINDS = ("mrp-plan", "inventory-analytics", "rca", "scenario")
+KINDS = ("mrp-plan", "inventory-analytics", "rca", "scenario", "dataset")
 FORMATS = {"csv": "text/csv", "html": "text/html; charset=utf-8", "pdf": "application/pdf"}
 
 
@@ -405,6 +413,153 @@ async def build_scenario_report(
             "A longer lead time raises σ_DLT, so both safety stock and reorder point rise with it.",
         ],
     )
+
+
+async def build_dataset_report(db: AsyncSession, org_id: uuid.UUID, dataset: Dataset) -> Report:
+    """A report over an uploaded dataset instead of live org data - a capped
+    row preview plus the same size/shape KPIs the Datasets page shows.
+    Column dtypes aren't included: CSV/TSV uploads are sniffed ALL_VARCHAR
+    (see services.datasets.relation_for), so a per-column type line would
+    read "VARCHAR" for nearly every column and add noise, not signal.
+    """
+    preview_limit = 200
+    preview = ds_service.preview_rows(dataset, limit=preview_limit)
+    col_names = [c["name"] for c in dataset.columns]
+
+    return Report(
+        slug="dataset",
+        title=dataset.name,
+        subtitle=f"Uploaded dataset — {_int(dataset.row_count)} rows, {_int(len(col_names))} columns",
+        org_name=await _org_name(db, org_id),
+        generated_at=_now(),
+        kpis=[
+            ("Rows", _int(dataset.row_count)),
+            ("Columns", _int(len(col_names))),
+            ("Size", f"{dataset.size_bytes / 1024:,.1f} KB"),
+            ("Format", dataset.fmt.upper()),
+        ],
+        sections=[
+            Section(
+                title=f"Preview (first {len(preview)} of {dataset.row_count:,} rows)",
+                columns=col_names,
+                rows=[
+                    [EM_DASH if row.get(c) is None else str(row.get(c)) for c in col_names] for row in preview
+                ],
+                note=None if preview else "Dataset is empty.",
+            )
+        ],
+        notes=[
+            f"Preview capped at {preview_limit} rows - use the Datasets page to work with the full file.",
+        ],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Custom report builder - a user-composed Report from an ordered list of
+# sections, saved as a SavedReport and rendered through the same
+# render_csv/html/pdf below as every other report kind. Ported from the
+# desktop app's reportsView.js (a list-based section builder, not drag/drop -
+# see the workflow/report-builder port plan). kpi_grid is deliberately not
+# included: it depends on a dedicated KPIs engine this app doesn't have yet.
+# --------------------------------------------------------------------------- #
+_BULLET_LABELS = {
+    "findings": "Finding",
+    "risks": "Risk",
+    "recommendations": "Recommendation",
+    "caveats": "Caveat",
+}
+
+
+class ReportSectionSpec(BaseModel):
+    type: Literal[
+        "title", "exec_summary", "table", "bi_chart",
+        "findings", "risks", "recommendations", "caveats", "text",
+    ]
+    title: str | None = None
+    text: str | None = None
+    items: list[str] | None = None
+    dataset_id: uuid.UUID | None = None
+    query: query_service.DatasetQueryRequest | None = None
+    chart_id: uuid.UUID | None = None
+
+
+async def _resolve_section(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> Section:
+    if spec.type in ("title", "exec_summary", "text"):
+        lines = [line for line in (spec.text or "").splitlines() if line.strip()]
+        return Section(
+            title=spec.title or spec.type.replace("_", " ").title(),
+            columns=["Text"],
+            rows=[[line] for line in lines] or [[EM_DASH]],
+        )
+
+    if spec.type in _BULLET_LABELS:
+        return Section(
+            title=spec.title or spec.type.title(),
+            columns=[_BULLET_LABELS[spec.type]],
+            rows=[[item] for item in (spec.items or [])] or [[EM_DASH]],
+        )
+
+    if spec.type == "table":
+        if spec.dataset_id is None or spec.query is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{spec.type}' section needs dataset_id and query")
+        dataset = await ds_service.get_dataset_or_404(db, org_id, spec.dataset_id)
+        result = await query_service.run_query(db, dataset, org_id, spec.query)
+        columns = result["columns"]
+        return Section(
+            title=spec.title or dataset.name,
+            columns=columns,
+            rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
+        )
+
+    # spec.type == "bi_chart": replay a saved Chart's query, same as GET
+    # /bi/charts/{id}/data - a table is the correct rendering here too, since
+    # a PDF/CSV export can't embed a live chart anyway.
+    if spec.chart_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "'bi_chart' section needs chart_id")
+    chart = (
+        await db.execute(select(Chart).where(Chart.id == spec.chart_id, Chart.org_id == org_id))
+    ).scalar_one_or_none()
+    if chart is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Chart not found: {spec.chart_id}")
+    dataset = await ds_service.get_dataset_or_404(db, org_id, chart.dataset_id)
+    query = query_service.DatasetQueryRequest.model_validate(chart.query_config)
+    result = await query_service.run_query(db, dataset, org_id, query)
+    columns = result["columns"]
+    return Section(
+        title=spec.title or chart.name,
+        columns=columns,
+        rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
+    )
+
+
+async def build_custom_report(
+    db: AsyncSession, org_id: uuid.UUID, name: str, sections: list[ReportSectionSpec]
+) -> Report:
+    resolved = [await _resolve_section(db, org_id, s) for s in sections]
+    return Report(
+        slug="custom",
+        title=name,
+        subtitle=f"{len(resolved)} section(s)",
+        org_name=await _org_name(db, org_id),
+        generated_at=_now(),
+        sections=resolved,
+    )
+
+
+async def list_saved_reports(db: AsyncSession, org_id: uuid.UUID) -> list[SavedReport]:
+    rows = await db.execute(
+        select(SavedReport).where(SavedReport.org_id == org_id).order_by(SavedReport.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
+async def get_saved_report_or_404(db: AsyncSession, org_id: uuid.UUID, report_id: uuid.UUID) -> SavedReport:
+    row = (
+        await db.execute(select(SavedReport).where(SavedReport.id == report_id, SavedReport.org_id == org_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+    return row
 
 
 # --------------------------------------------------------------------------- #

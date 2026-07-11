@@ -23,6 +23,7 @@ from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models
     audit,
+    automl_run,
     bom,
     dashboard,
     dataset,
@@ -32,9 +33,11 @@ from app.models import (  # noqa: F401 - register models
     location,
     lot,
     procurement,
+    report_spec,
     telemetry,
     tenant,
     user,
+    workflow,
 )
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

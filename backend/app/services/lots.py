@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -43,6 +44,23 @@ async def topup_lot(db: AsyncSession, lot: Lot, quantity: Decimal, expiry_date: 
     return lot
 
 
+async def _topup_checked(db: AsyncSession, lot: Lot, quantity: Decimal, expiry_date: date | None) -> Lot:
+    """Shared by find_or_create_lot's fast path and its concurrent-creation
+    retry, so the expiry-mismatch guard applies the same way regardless of
+    which path found the existing lot.
+    """
+    if expiry_date is not None and lot.expiry_date is not None and lot.expiry_date != expiry_date:
+        # A mismatch is a strong signal of a mistyped lot_number colliding
+        # with a genuinely different batch - silently accepting it would
+        # merge two physical batches under one Lot row.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Lot {lot.lot_number} already has a different expiry date on file for this item at this "
+            "location - check for a lot_number typo before retrying",
+        )
+    return await topup_lot(db, lot, quantity, expiry_date)
+
+
 async def find_or_create_lot(
     db: AsyncSession,
     *,
@@ -71,16 +89,7 @@ async def find_or_create_lot(
     )
     lot = result.scalar_one_or_none()
     if lot is not None:
-        if expiry_date is not None and lot.expiry_date is not None and lot.expiry_date != expiry_date:
-            # A mismatch is a strong signal of a mistyped lot_number colliding
-            # with a genuinely different batch - silently accepting it would
-            # merge two physical batches under one Lot row.
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"Lot {lot_number} already has a different expiry date on file for this item at this "
-                "location - check for a lot_number typo before retrying",
-            )
-        return await topup_lot(db, lot, quantity, expiry_date)
+        return await _topup_checked(db, lot, quantity, expiry_date)
 
     for attempt in range(MAX_LOT_CREATE_ATTEMPTS):
         try:
@@ -113,7 +122,7 @@ async def find_or_create_lot(
             )
             existing = result.scalar_one_or_none()
             if existing is not None:
-                return await topup_lot(db, existing, quantity, None)
+                return await _topup_checked(db, existing, quantity, expiry_date)
             if attempt == MAX_LOT_CREATE_ATTEMPTS - 1:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, f"Could not allocate lot {lot_number}, please retry"
@@ -148,3 +157,57 @@ async def consume_lot_guarded(db: AsyncSession, lot: Lot, quantity: Decimal) -> 
         )
     lot.quantity_remaining, lot.status = row
     return lot
+
+
+@dataclass
+class LotConsumption:
+    lot: Lot
+    quantity: Decimal
+
+
+async def consume_lot_fefo(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    item_id: uuid.UUID,
+    location_id: uuid.UUID,
+    quantity: Decimal,
+) -> list[LotConsumption]:
+    """Consume `quantity` of an item at a location across as many active,
+    unheld lots as needed - earliest-expiring first (lots with no expiry
+    date last), oldest-received as the tiebreak - so a caller who just wants
+    "the right stock to use next" doesn't have to pick a specific lot.
+    Raises 409 and writes nothing if the location can't cover the full
+    request (each individual debit is still guarded via consume_lot_guarded,
+    so a concurrent change to a candidate lot surfaces as the same 409
+    rather than overselling it).
+    """
+    result = await db.execute(
+        select(Lot)
+        .where(
+            Lot.org_id == org_id,
+            Lot.item_id == item_id,
+            Lot.location_id == location_id,
+            Lot.status == "active",
+            Lot.quantity_remaining > 0,
+        )
+        .order_by(Lot.expiry_date.is_(None), Lot.expiry_date, Lot.created_at)
+    )
+    candidates = result.scalars().all()
+
+    remaining = quantity
+    consumed: list[LotConsumption] = []
+    for lot in candidates:
+        if remaining <= 0:
+            break
+        take = min(lot.quantity_remaining, remaining)
+        await consume_lot_guarded(db, lot, take)
+        consumed.append(LotConsumption(lot=lot, quantity=take))
+        remaining -= take
+
+    if remaining > 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Only {quantity - remaining} of {quantity} available as active, unheld stock at this location",
+        )
+    return consumed

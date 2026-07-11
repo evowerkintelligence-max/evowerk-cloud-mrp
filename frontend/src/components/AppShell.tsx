@@ -4,8 +4,10 @@ import {
   Activity,
   BarChart3,
   Boxes,
+  Brain,
   CalendarRange,
   Database,
+  FileStack,
   Gauge,
   LayoutDashboard,
   LayoutGrid,
@@ -16,6 +18,7 @@ import {
   TimerOff,
   Users,
   Warehouse,
+  Workflow,
 } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
@@ -46,6 +49,9 @@ const ANALYTICS_NAV = [
   { to: "/analytics/shifts", label: "Shifts", icon: Users, end: false },
   { to: "/analytics/spc", label: "SPC", icon: Activity, end: false },
   { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, end: false },
+  { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
+  { to: "/report-builder", label: "Report Builder", icon: FileStack, end: false },
+  { to: "/automl", label: "AutoML", icon: Brain, end: false },
 ];
 
 function Brand() {

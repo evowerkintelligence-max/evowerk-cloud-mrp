@@ -24,6 +24,11 @@ import { Reports } from "./pages/Reports";
 import { Dashboards as BiDashboards } from "./pages/bi/Dashboards";
 import { ChartBuilder } from "./pages/bi/ChartBuilder";
 import { DashboardDetail as BiDashboardDetail } from "./pages/bi/DashboardDetail";
+import { Workflows } from "./pages/workflows/Workflows";
+import { WorkflowBuilder } from "./pages/workflows/WorkflowBuilder";
+import { ReportBuilder } from "./pages/ReportBuilder";
+import { AutoML } from "./pages/AutoML";
+import { AutoMLRun } from "./pages/automl/AutoMLRun";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -72,6 +77,11 @@ export function App() {
         <Route path="/bi" element={<BiDashboards />} />
         <Route path="/bi/new" element={<ChartBuilder />} />
         <Route path="/bi/:id" element={<BiDashboardDetail />} />
+        <Route path="/workflows" element={<Workflows />} />
+        <Route path="/workflows/:id" element={<WorkflowBuilder />} />
+        <Route path="/report-builder" element={<ReportBuilder />} />
+        <Route path="/automl" element={<AutoML />} />
+        <Route path="/automl/:id" element={<AutoMLRun />} />
       </Route>
     </Routes>
   );

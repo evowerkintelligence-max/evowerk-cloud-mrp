@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,7 +13,12 @@ from app.api.deps import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.models.bom import Item
 from app.services.inventory_analytics import InventoryAnalyticsLine, compute_inventory_analytics
-from app.services.morning_brief import BriefLine, compute_morning_brief
+from app.services.morning_brief import (
+    BriefLine,
+    LotAlertLine,
+    compute_lot_alerts,
+    compute_morning_brief,
+)
 from app.services.rca import DIMENSIONS, RcaDimensionValue, RcaResult, compute_rca
 from app.services.scenario import ScenarioDelta, compare_lead_time_scenario
 
@@ -84,8 +90,24 @@ class BriefLineResponse(BaseModel):
     is_new_this_week: bool
 
 
+class LotAlertResponse(BaseModel):
+    lot_id: str
+    item_id: str
+    item_sku: str
+    item_name: str
+    location_id: str
+    location_code: str
+    lot_number: str
+    quantity_remaining: Decimal
+    status: str
+    expiry_date: date | None
+    days_until_expiry: int | None
+    reason: str
+
+
 class MorningBriefResponse(BaseModel):
     lines: list[BriefLineResponse]
+    lot_alerts: list[LotAlertResponse]
 
 
 def _brief_to_response(line: BriefLine) -> BriefLineResponse:
@@ -103,6 +125,23 @@ def _brief_to_response(line: BriefLine) -> BriefLineResponse:
     )
 
 
+def _lot_alert_to_response(alert: LotAlertLine) -> LotAlertResponse:
+    return LotAlertResponse(
+        lot_id=str(alert.lot_id),
+        item_id=str(alert.item_id),
+        item_sku=alert.item_sku,
+        item_name=alert.item_name,
+        location_id=str(alert.location_id),
+        location_code=alert.location_code,
+        lot_number=alert.lot_number,
+        quantity_remaining=alert.quantity_remaining,
+        status=alert.status,
+        expiry_date=alert.expiry_date,
+        days_until_expiry=alert.days_until_expiry,
+        reason=alert.reason,
+    )
+
+
 @router.get("/morning-brief", response_model=MorningBriefResponse)
 async def get_morning_brief(
     current: CurrentUser = Depends(get_current_user),
@@ -110,9 +149,14 @@ async def get_morning_brief(
 ):
     """Daily digest of items needing attention (stockout/low/excess/slow-moving),
     ranked by severity, compared against the same figures 7 days ago where
-    available. See app.services.morning_brief."""
+    available, plus lots on hold or expiring soon. See
+    app.services.morning_brief."""
     lines = await compute_morning_brief(db, current.org_id)
-    return MorningBriefResponse(lines=[_brief_to_response(line) for line in lines])
+    lot_alerts = await compute_lot_alerts(db, current.org_id)
+    return MorningBriefResponse(
+        lines=[_brief_to_response(line) for line in lines],
+        lot_alerts=[_lot_alert_to_response(alert) for alert in lot_alerts],
+    )
 
 
 class RcaDimensionValueResponse(BaseModel):

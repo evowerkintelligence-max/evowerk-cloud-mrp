@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     ai_insights,
+    automl,
     auth,
     bi,
     boms,
@@ -27,6 +28,7 @@ from app.api.routes import (
     spc,
     suppliers,
     throughput,
+    workflows,
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
@@ -75,6 +77,8 @@ app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
 app.include_router(reports.router)
 app.include_router(bi.router)
+app.include_router(workflows.router)
+app.include_router(automl.router)
 
 
 @app.get("/health")

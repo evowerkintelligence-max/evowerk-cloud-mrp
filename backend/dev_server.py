@@ -33,9 +33,11 @@ from app.models import (  # noqa: F401 - register models on the metadata
     location,
     lot,
     procurement,
+    report_spec,
     telemetry,
     tenant,
     user,
+    workflow,
 )
 
 engine = create_async_engine(os.environ["DATABASE_URL"])

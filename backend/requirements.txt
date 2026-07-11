@@ -28,5 +28,14 @@ python-multipart>=0.0.9
 # Quality analytics: KMeans clustering of defect-driving process parameters
 scikit-learn>=1.4.0
 
+# AutoML: boosted-tree candidates, Bayesian hyperparameter search, SHAP
+# explainability. All optional at runtime - automl_engine.py degrades
+# gracefully (falls back to sklearn GradientBoosting / random search /
+# permutation importance) if any of these fail to import.
+xgboost>=2.0.0
+lightgbm>=4.0.0
+optuna>=3.6.0
+shap>=0.45.0
+
 # Report exports. PDF only - the HTML and CSV renderers are stdlib.
 reportlab>=4.0.0

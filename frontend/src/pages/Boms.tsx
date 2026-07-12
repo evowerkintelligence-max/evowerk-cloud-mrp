@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Layers } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,11 +7,11 @@ import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { ItemSelect } from "@/components/ItemSelect";
 import { humanize } from "@/lib/status";
 
 interface ItemResponse {
@@ -29,6 +29,7 @@ interface BomResponse {
   item_name: string;
   version: number;
   status: string;
+  updated_at: string;
 }
 
 interface BomLineResponse {
@@ -49,6 +50,80 @@ function bomStatusVariant(status: string) {
   if (status === "active") return "success" as const;
   if (status === "archived") return "neutral" as const;
   return "warning" as const; // draft
+}
+
+// Recursively explodes a line into its component's own active BOM, if it has
+// one - lazily fetched only once expanded, reusing the same GET /boms/{id}
+// the top-level detail view already uses.
+function BomLineRow({
+  line,
+  depth,
+  allBoms,
+  onRemove,
+  removePending,
+}: {
+  line: BomLineResponse;
+  depth: number;
+  allBoms: BomResponse[];
+  onRemove?: (lineId: string) => void;
+  removePending?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const childBom = allBoms.find((b) => b.item_id === line.component_item_id && b.status === "active");
+
+  const childDetail = useQuery<BomDetailResponse>({
+    queryKey: ["boms", childBom?.id],
+    enabled: expanded && !!childBom,
+    queryFn: async () => {
+      const res = await apiFetch(`/boms/${childBom!.id}`);
+      if (!res.ok) throw new Error("Failed to load BOM");
+      return res.json();
+    },
+  });
+
+  return (
+    <>
+      <TR>
+        <TD className="font-medium">
+          <span className="inline-flex items-center gap-1" style={{ paddingLeft: `${depth * 1.25}rem` }}>
+            {childBom ? (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="text-muted-foreground hover:text-foreground"
+                title={expanded ? "Collapse" : "Show this component's own BOM"}
+              >
+                {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              </button>
+            ) : (
+              <span className="inline-block size-3.5" />
+            )}
+            {line.component_sku} - {line.component_name}
+          </span>
+        </TD>
+        <TD>{line.quantity}</TD>
+        <TD className="text-muted-foreground">{line.unit_of_measure}</TD>
+        {onRemove && (
+          <TD>
+            <Button
+              variant="ghost"
+              size="icon"
+              loading={removePending}
+              onClick={() => onRemove(line.id)}
+              title="Remove line"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </TD>
+        )}
+      </TR>
+      {expanded &&
+        childBom &&
+        childDetail.data?.lines.map((childLine) => (
+          <BomLineRow key={childLine.id} line={childLine} depth={depth + 1} allBoms={allBoms} />
+        ))}
+    </>
+  );
 }
 
 export function Boms() {
@@ -106,6 +181,14 @@ export function Boms() {
     onError: (e: Error) => setError(e.message),
   });
 
+  function patchLines(lines: { component_item_id: string; quantity: string; sequence: number }[]) {
+    if (!bomDetail.data) throw new Error("No BOM selected");
+    return apiFetch(`/boms/${selectedBomId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ lines, expected_updated_at: bomDetail.data.updated_at }),
+    });
+  }
+
   const addLine = useMutation({
     mutationFn: async () => {
       if (!bomDetail.data) throw new Error("No BOM selected");
@@ -114,13 +197,10 @@ export function Boms() {
         quantity: l.quantity,
         sequence: l.sequence,
       }));
-      const res = await apiFetch(`/boms/${selectedBomId}`, {
-        method: "PATCH",
-        body: JSON.stringify([
-          ...existingLines,
-          { component_item_id: lineComponentId, quantity: lineQuantity, sequence: existingLines.length },
-        ]),
-      });
+      const res = await patchLines([
+        ...existingLines,
+        { component_item_id: lineComponentId, quantity: lineQuantity, sequence: existingLines.length },
+      ]);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail ?? "Failed to update lines");
@@ -130,6 +210,31 @@ export function Boms() {
     onSuccess: () => {
       setLineComponentId("");
       setLineQuantity("1");
+      queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const removeLine = useMutation({
+    mutationFn: async (lineId: string) => {
+      if (!bomDetail.data) throw new Error("No BOM selected");
+      const remaining = bomDetail.data.lines
+        .filter((l) => l.id !== lineId)
+        .map((l) => ({
+          component_item_id: l.component_item_id,
+          quantity: l.quantity,
+          sequence: l.sequence,
+        }));
+      if (remaining.length === 0) throw new Error("A BOM needs at least one line - delete the draft instead");
+      const res = await patchLines(remaining);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to remove line");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setError(null);
       queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
     },
     onError: (e: Error) => setError(e.message),
@@ -147,6 +252,22 @@ export function Boms() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["boms"] });
       queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const deleteBom = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/boms/${selectedBomId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to delete BOM");
+      }
+    },
+    onSuccess: () => {
+      setError(null);
+      setSelectedBomId(null);
+      queryClient.invalidateQueries({ queryKey: ["boms"] });
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -183,21 +304,13 @@ export function Boms() {
         <CardContent>
           <form onSubmit={onCreateBom} className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
             <Field label="For item" htmlFor="bom-item">
-              <Select
+              <ItemSelect
                 id="bom-item"
+                items={items.data}
                 value={newBomItemId}
-                onChange={(e) => setNewBomItemId(e.target.value)}
+                onChange={setNewBomItemId}
                 required
-              >
-                <option value="" disabled>
-                  Select an item
-                </option>
-                {items.data?.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.sku} - {item.name}
-                  </option>
-                ))}
-              </Select>
+              />
             </Field>
             <Button type="submit" loading={createBom.isPending}>
               Create draft
@@ -249,14 +362,29 @@ export function Boms() {
               </Badge>
             </CardTitle>
             {bomDetail.data.status === "draft" && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => activateBom.mutate()}
-                loading={activateBom.isPending}
-              >
-                Activate
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-rose-400 hover:text-rose-300"
+                  loading={deleteBom.isPending}
+                  onClick={() => {
+                    if (confirm(`Delete this draft BOM for ${bomDetail.data!.item_sku}? This cannot be undone.`)) {
+                      deleteBom.mutate();
+                    }
+                  }}
+                >
+                  <Trash2 className="size-4" /> Delete
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => activateBom.mutate()}
+                  loading={activateBom.isPending}
+                >
+                  Activate
+                </Button>
+              </div>
             )}
           </CardHeader>
           <CardContent className="space-y-6">
@@ -267,17 +395,19 @@ export function Boms() {
                     <TH>Component</TH>
                     <TH>Quantity</TH>
                     <TH>UoM</TH>
+                    {bomDetail.data.status === "draft" && <TH />}
                   </TR>
                 </THead>
                 <TBody>
                   {bomDetail.data.lines.map((line) => (
-                    <TR key={line.id}>
-                      <TD className="font-medium">
-                        {line.component_sku} - {line.component_name}
-                      </TD>
-                      <TD>{line.quantity}</TD>
-                      <TD className="text-muted-foreground">{line.unit_of_measure}</TD>
-                    </TR>
+                    <BomLineRow
+                      key={line.id}
+                      line={line}
+                      depth={0}
+                      allBoms={boms.data ?? []}
+                      onRemove={bomDetail.data!.status === "draft" ? (id) => removeLine.mutate(id) : undefined}
+                      removePending={removeLine.isPending}
+                    />
                   ))}
                 </TBody>
               </Table>
@@ -286,23 +416,14 @@ export function Boms() {
             {bomDetail.data.status === "draft" && (
               <form onSubmit={onAddLine} className="grid gap-4 sm:grid-cols-[1fr_160px_auto] sm:items-end">
                 <Field label="Component" htmlFor="component">
-                  <Select
+                  <ItemSelect
                     id="component"
+                    items={items.data}
                     value={lineComponentId}
-                    onChange={(e) => setLineComponentId(e.target.value)}
+                    onChange={setLineComponentId}
+                    excludeId={bomDetail.data.item_id}
                     required
-                  >
-                    <option value="" disabled>
-                      Select a component
-                    </option>
-                    {items.data
-                      ?.filter((item) => item.id !== bomDetail.data!.item_id)
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.sku} - {item.name}
-                        </option>
-                      ))}
-                  </Select>
+                  />
                 </Field>
                 <Field label="Quantity" htmlFor="qty">
                   <Input

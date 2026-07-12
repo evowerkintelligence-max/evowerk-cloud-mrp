@@ -23,18 +23,28 @@ from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models on the metadata
+    artifact,
     audit,
     bom,
+    dashboard,
     dataset,
     forecast,
     inventory,
     inventory_snapshot,
+    integration,
+    kpi,
     location,
     lot,
+    maintenance_schedule,
     procurement,
+    rca_case,
+    realtime,
+    report_spec,
+    scenario,
     telemetry,
     tenant,
     user,
+    workflow,
 )
 
 engine = create_async_engine(os.environ["DATABASE_URL"])
@@ -64,4 +74,4 @@ async def _init_tables():
 
 if __name__ == "__main__":
     asyncio.run(_init_tables())
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8000)), log_level="warning")

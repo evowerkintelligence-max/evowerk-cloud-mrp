@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { MapPin } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,7 +18,7 @@ interface LocationResponse {
   is_default: boolean;
 }
 
-export function Locations() {
+export function LocationsPanel() {
   const queryClient = useQueryClient();
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -62,11 +61,6 @@ export function Locations() {
 
   return (
     <div>
-      <PageHeader
-        title="Locations"
-        description="Warehouses and storage locations that hold on-hand stock."
-      />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}

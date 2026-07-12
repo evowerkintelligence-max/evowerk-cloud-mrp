@@ -4,14 +4,19 @@ output "alb_dns_name" {
 }
 
 output "acm_certificate_validation_records" {
-  description = "Only populated if route53_zone_id was left empty - add these as CNAME records at your DNS provider, wait for validation, then re-apply."
-  value = var.route53_zone_id == "" ? [
-    for dvo in aws_acm_certificate.main.domain_validation_options : {
+  description = "Only populated if domain_name was set and route53_zone_id was left empty - add these as CNAME records at your DNS provider, wait for validation, then re-apply."
+  value = var.domain_name != "" && var.route53_zone_id == "" ? [
+    for dvo in aws_acm_certificate.main[0].domain_validation_options : {
       name  = dvo.resource_record_name
       type  = dvo.resource_record_type
       value = dvo.resource_record_value
     }
   ] : []
+}
+
+output "app_url" {
+  description = "Where to reach the app - the ALB DNS name over plain HTTP if domain_name was left empty, otherwise your domain over HTTPS."
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}"
 }
 
 output "ecr_backend_repository_url" {

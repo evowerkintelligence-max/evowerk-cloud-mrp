@@ -3,17 +3,23 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.middleware.audit import log_event
+from app.middleware.rate_limit import rate_limit
 from app.models.dataset import Dataset
 from app.services import dataset_query as query_service
 from app.services import datasets as ds_service
+from app.services import sql_query as sql_query_service
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+
+_settings = get_settings()
+_sql_rate_limit = rate_limit("dataset_sql_query", _settings.rate_limit_sql_query_per_5min, 300)
 
 
 class DatasetColumn(BaseModel):
@@ -65,6 +71,28 @@ class DatasetHealthResponse(BaseModel):
 
 
 class DatasetQueryResponse(BaseModel):
+    columns: list[str]
+    rows: list[dict]
+
+
+class SqlQueryRequest(BaseModel):
+    sql: str
+    limit: int = 500
+
+    @field_validator("sql")
+    @classmethod
+    def _require_sql(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("sql must not be empty")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def _cap_limit(cls, v: int) -> int:
+        return max(1, min(v, 5000))
+
+
+class SqlQueryResponse(BaseModel):
     columns: list[str]
     rows: list[dict]
 
@@ -191,6 +219,29 @@ async def query_dataset(
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
     return await query_service.run_query(db, dataset, current.org_id, req)
+
+
+@router.post("/{dataset_id}/sql", response_model=SqlQueryResponse, dependencies=[Depends(_sql_rate_limit)])
+async def sql_query_dataset(
+    dataset_id: uuid.UUID,
+    req: SqlQueryRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
+    result = await sql_query_service.run_sql(
+        dataset, req.sql, timeout_seconds=_settings.sql_query_timeout_seconds, row_limit=req.limit
+    )
+    await log_event(
+        db,
+        action="dataset.sql_query",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(dataset.id),
+        metadata={"sql": req.sql[:2000]},
+    )
+    await db.commit()
+    return result
 
 
 @router.post("/{dataset_id}/clean", response_model=CleanResponse, status_code=status.HTTP_201_CREATED)

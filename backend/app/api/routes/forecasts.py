@@ -497,7 +497,8 @@ async def _add_po_lines(
     chosen: list[MrpPlanLine],
     prices: dict[uuid.UUID, Decimal],
 ) -> list[GeneratePoLine]:
-    """Add one draft PO line per chosen plan line, at net-required quantity and
+    """Add one draft PO line per chosen plan line, at the suggested order
+    quantity (net requirement, rounded up to the item's MOQ if it has one) and
     last-known price, and return the response view of them."""
     response_lines: list[GeneratePoLine] = []
     for seq, line in enumerate(chosen):
@@ -508,7 +509,7 @@ async def _add_po_lines(
                 org_id=org_id,
                 po_id=po.id,
                 item_id=item_uuid,
-                quantity_ordered=line.net_requirement,
+                quantity_ordered=line.suggested_order_quantity,
                 unit_price=unit_price,
                 sequence=seq,
             )
@@ -518,7 +519,7 @@ async def _add_po_lines(
                 item_id=line.item_id,
                 item_sku=line.item_sku,
                 item_name=line.item_name,
-                quantity_ordered=line.net_requirement,
+                quantity_ordered=line.suggested_order_quantity,
                 unit_price=unit_price,
             )
         )

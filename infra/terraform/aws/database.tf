@@ -27,10 +27,10 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
 
-  backup_retention_period   = 7
+  backup_retention_period   = var.db_backup_retention_period
   final_snapshot_identifier = "${local.name_prefix}-final-snapshot"
   skip_final_snapshot       = false
-  deletion_protection       = true
+  deletion_protection       = var.db_deletion_protection
 
   tags = { Name = "${local.name_prefix}-postgres" }
 }

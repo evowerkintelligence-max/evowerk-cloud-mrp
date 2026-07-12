@@ -85,7 +85,7 @@ resource "aws_ecs_task_definition" "backend" {
       environment = [
         { name = "ENV", value = "production" },
         { name = "REDIS_URL", value = "redis://redis.internal:6379/0" },
-        { name = "CORS_ORIGINS", value = jsonencode(["https://${var.domain_name}"]) },
+        { name = "CORS_ORIGINS", value = jsonencode([var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}"]) },
       ]
 
       secrets = [
@@ -228,5 +228,5 @@ resource "aws_ecs_service" "frontend" {
     container_port   = 80
   }
 
-  depends_on = [aws_lb_listener.https, aws_ecs_service.backend]
+  depends_on = [aws_lb_listener.https, aws_lb_listener.http_forward, aws_ecs_service.backend]
 }

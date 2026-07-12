@@ -15,7 +15,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { C, fileSize, fmt, type Dataset } from "./shared";
+import { C, ColumnChecklist, QueryBuilderFields, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
 
 interface DatasetDetail extends Dataset {
   preview: Record<string, unknown>[];
@@ -49,24 +49,8 @@ interface Health {
   warnings: string[];
 }
 
-const TABS = ["overview", "schema", "preview", "health", "query", "clean", "transform"] as const;
+const TABS = ["overview", "schema", "preview", "health", "query", "sql", "clean", "transform"] as const;
 type Tab = (typeof TABS)[number];
-
-const AGG_OPTIONS = ["", "sum", "avg", "min", "max", "count"] as const;
-const FILTER_OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"] as const;
-const ITEM_JOIN_COLUMNS = ["sku", "name", "item_type", "lead_time_days", "on_hand"];
-
-interface SelectFieldRow {
-  column: string;
-  agg: string;
-  alias: string;
-}
-
-interface FilterRow {
-  column: string;
-  op: string;
-  value: string;
-}
 
 interface QueryResult {
   columns: string[];
@@ -106,6 +90,20 @@ function Overview({ d }: { d: DatasetDetail }) {
 }
 
 function Schema({ d }: { d: DatasetDetail }) {
+  // CSV/TSV datasets are sniffed ALL_VARCHAR=1 at ingest, so c.dtype is always
+  // "VARCHAR" for them - inferred_dtype (from the health endpoint, based on
+  // actual cell content) is the real type. Same query key as HealthPanel/
+  // QueryPanel, so this is a no-op fetch if either tab was already visited.
+  const health = useQuery<Health>({
+    queryKey: ["dataset-health", d.id],
+    queryFn: async () => {
+      const res = await apiFetch(`/datasets/${d.id}/health`);
+      if (!res.ok) throw new Error("Failed to compute health");
+      return res.json();
+    },
+  });
+  const inferredByColumn = new Map(health.data?.columns.map((c) => [c.name, c.inferred_dtype]));
+
   return (
     <Card>
       <CardHeader>
@@ -125,7 +123,7 @@ function Schema({ d }: { d: DatasetDetail }) {
                 <TR key={c.name}>
                   <TD className="font-medium">{c.name}</TD>
                   <TD>
-                    <Badge variant="neutral">{c.dtype}</Badge>
+                    <Badge variant="neutral">{inferredByColumn.get(c.name) ?? c.dtype}</Badge>
                   </TD>
                 </TR>
               ))}
@@ -392,37 +390,6 @@ function CleanPanel({ d, onCreated }: { d: DatasetDetail; onCreated: (id: string
   );
 }
 
-function ColumnChecklist({
-  columns,
-  selected,
-  onChange,
-}: {
-  columns: string[];
-  selected: Set<string>;
-  onChange: (next: Set<string>) => void;
-}) {
-  return (
-    <div className="grid max-h-64 grid-cols-2 gap-1.5 overflow-y-auto rounded-md border border-border p-3 sm:grid-cols-3">
-      {columns.map((c) => (
-        <label key={c} className="flex items-center gap-2 truncate text-sm">
-          <Checkbox
-            checked={selected.has(c)}
-            onChange={(e) => {
-              const next = new Set(selected);
-              if (e.target.checked) next.add(c);
-              else next.delete(c);
-              onChange(next);
-            }}
-          />
-          <span className="truncate" title={c}>
-            {c}
-          </span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
 function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: (id: string) => void }) {
   const names = d.columns.map((c) => c.name);
 
@@ -592,47 +559,14 @@ function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: (id: st
 
 function QueryPanel({ d }: { d: DatasetDetail }) {
   const names = d.columns.map((c) => c.name);
-  const [joinItemsOn, setJoinItemsOn] = useState("");
-  const allColumns = joinItemsOn ? [...names, ...ITEM_JOIN_COLUMNS.map((c) => `items.${c}`)] : names;
-
-  const [fields, setFields] = useState<SelectFieldRow[]>([{ column: names[0] ?? "", agg: "", alias: "" }]);
-  const [groupBy, setGroupBy] = useState<Set<string>>(new Set());
-  const [filters, setFilters] = useState<FilterRow[]>([]);
-  const [orderBy, setOrderBy] = useState("");
-  const [orderDesc, setOrderDesc] = useState(false);
-  const [limit, setLimit] = useState("500");
-
-  function updateField(i: number, patch: Partial<SelectFieldRow>) {
-    setFields((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
-  }
-  function updateFilter(i: number, patch: Partial<FilterRow>) {
-    setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
-  }
+  const qb = useQueryBuilder(d.id, names);
 
   const query = useMutation({
     mutationFn: async () => {
-      const body = {
-        select: fields.map((f) => ({
-          column: f.column,
-          agg: f.agg || undefined,
-          alias: f.alias.trim() || undefined,
-        })),
-        group_by: Array.from(groupBy),
-        filters: filters.map((f) => {
-          const value =
-            f.op === "in"
-              ? f.value.split(",").map((v) => v.trim()).filter(Boolean)
-              : f.op !== "contains" && f.value !== "" && !Number.isNaN(Number(f.value))
-                ? Number(f.value)
-                : f.value;
-          return { column: f.column, op: f.op, value };
-        }),
-        join_items_on: joinItemsOn || undefined,
-        order_by: orderBy || undefined,
-        order_desc: orderDesc,
-        limit: Number(limit) || 500,
-      };
-      const res = await apiFetch(`/datasets/${d.id}/query`, { method: "POST", body: JSON.stringify(body) });
+      const res = await apiFetch(`/datasets/${d.id}/query`, {
+        method: "POST",
+        body: JSON.stringify(qb.toRequestBody()),
+      });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
       return res.json() as Promise<QueryResult>;
     },
@@ -645,132 +579,90 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
           <CardTitle>Query</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          <Field label="Join Items by column (optional)">
-            <Select value={joinItemsOn} onChange={(e) => setJoinItemsOn(e.target.value)}>
-              <option value="">No join</option>
-              {names.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <QueryBuilderFields qb={qb} names={names} />
 
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Select fields</div>
-            {fields.map((f, i) => (
-              <div key={i} className="flex flex-wrap items-end gap-2">
-                <Field label="Column" className="min-w-[10rem]">
-                  <Select value={f.column} onChange={(e) => updateField(i, { column: e.target.value })}>
-                    {allColumns.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
+          <Button disabled={qb.healthLoading} loading={query.isPending} onClick={() => query.mutate()}>
+            Run query
+          </Button>
+          {qb.healthLoading && (
+            <p className="text-xs text-muted-foreground">Determining column types before filtering is allowed…</p>
+          )}
+
+          {query.isError && <Alert variant="destructive">{(query.error as Error).message}</Alert>}
+        </CardContent>
+      </Card>
+
+      {query.isSuccess && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Results ({query.data.rows.length} rows)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TableWrap className="max-h-[32rem] overflow-y-auto">
+              <Table>
+                <THead>
+                  <TR>
+                    {query.data.columns.map((c) => (
+                      <TH key={c}>{c}</TH>
                     ))}
-                  </Select>
-                </Field>
-                <Field label="Aggregate" className="min-w-[8rem]">
-                  <Select value={f.agg} onChange={(e) => updateField(i, { agg: e.target.value })}>
-                    {AGG_OPTIONS.map((a) => (
-                      <option key={a} value={a}>
-                        {a || "none"}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Alias" className="min-w-[8rem]">
-                  <Input value={f.alias} onChange={(e) => updateField(i, { alias: e.target.value })} placeholder="optional" />
-                </Field>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={fields.length === 1}
-                  onClick={() => setFields((prev) => prev.filter((_, idx) => idx !== i))}
-                >
-                  Remove
-                </Button>
-              </div>
-            ))}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setFields((prev) => [...prev, { column: allColumns[0] ?? "", agg: "", alias: "" }])}
-            >
-              + Add field
-            </Button>
-          </div>
+                  </TR>
+                </THead>
+                <TBody>
+                  {query.data.rows.map((row, i) => (
+                    <TR key={i}>
+                      {query.data!.columns.map((c) => (
+                        <TD key={c} className="whitespace-nowrap">
+                          {row[c] === null || row[c] === undefined ? "—" : String(row[c])}
+                        </TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
 
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Group by (optional)</div>
-            <ColumnChecklist columns={allColumns} selected={groupBy} onChange={setGroupBy} />
-          </div>
+function SqlPanel({ d }: { d: DatasetDetail }) {
+  const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 100`);
 
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Filters</div>
-            {filters.map((f, i) => (
-              <div key={i} className="flex flex-wrap items-end gap-2">
-                <Field label="Column" className="min-w-[10rem]">
-                  <Select value={f.column} onChange={(e) => updateFilter(i, { column: e.target.value })}>
-                    {allColumns.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Op" className="min-w-[8rem]">
-                  <Select value={f.op} onChange={(e) => updateFilter(i, { op: e.target.value })}>
-                    {FILTER_OPS.map((op) => (
-                      <option key={op} value={op}>
-                        {op}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Value" className="min-w-[10rem]">
-                  <Input
-                    value={f.value}
-                    onChange={(e) => updateFilter(i, { value: e.target.value })}
-                    placeholder={f.op === "in" ? "comma,separated,values" : ""}
-                  />
-                </Field>
-                <Button variant="ghost" size="sm" onClick={() => setFilters((prev) => prev.filter((_, idx) => idx !== i))}>
-                  Remove
-                </Button>
-              </div>
-            ))}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setFilters((prev) => [...prev, { column: allColumns[0] ?? "", op: "eq", value: "" }])}
-            >
-              + Add filter
-            </Button>
-          </div>
+  const query = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/datasets/${d.id}/sql`, {
+        method: "POST",
+        body: JSON.stringify({ sql, limit: 500 }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
+      return res.json() as Promise<QueryResult>;
+    },
+  });
 
-          <div className="flex flex-wrap items-end gap-3">
-            <Field label="Order by" className="min-w-[10rem]">
-              <Select value={orderBy} onChange={(e) => setOrderBy(e.target.value)}>
-                <option value="">None</option>
-                {allColumns.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <label className="flex items-center gap-2 pb-2 text-sm">
-              <Checkbox checked={orderDesc} onChange={(e) => setOrderDesc(e.target.checked)} />
-              Descending
-            </label>
-            <Field label="Limit" className="w-28">
-              <Input type="number" value={limit} onChange={(e) => setLimit(e.target.value)} />
-            </Field>
-            <Button loading={query.isPending} onClick={() => query.mutate()}>
-              Run query
-            </Button>
-          </div>
-
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>SQL</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <textarea
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            rows={8}
+            spellCheck={false}
+            className="w-full rounded-md border border-border bg-background p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-primary/40"
+          />
+          <p className="text-xs text-muted-foreground">
+            Runs against a single read-only table named <code>dataset</code> — SELECT only, no joins to other
+            files. Columns are text (VARCHAR); cast numeric columns explicitly, e.g.{" "}
+            <code>CAST(qty AS DOUBLE)</code>.
+          </p>
+          <Button loading={query.isPending} onClick={() => query.mutate()}>
+            Run SQL
+          </Button>
           {query.isError && <Alert variant="destructive">{(query.error as Error).message}</Alert>}
         </CardContent>
       </Card>
@@ -876,6 +768,7 @@ export function DatasetDetail() {
       {tab === "preview" && <Preview d={d} />}
       {tab === "health" && <HealthPanel id={d.id} />}
       {tab === "query" && <QueryPanel d={d} />}
+      {tab === "sql" && <SqlPanel d={d} />}
       {tab === "clean" && <CleanPanel d={d} onCreated={openDataset} />}
       {tab === "transform" && <TransformPanel d={d} onCreated={openDataset} />}
     </div>

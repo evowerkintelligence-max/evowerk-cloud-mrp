@@ -552,3 +552,125 @@ async def test_lot_location_cross_tenant_isolation(client):
     )
     # b_default isn't a location in org A - resolve_location_id 404s it.
     assert cross.status_code == 404
+
+
+async def test_list_lots_status_location_filters_and_pagination(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="FILT", is_lot_tracked=True)
+    supplier = await _create_supplier(client, token)
+    wh2 = (await _create_location(client, token, "WH2")).json()
+    po_id, line_id = await _create_submitted_po(client, token, item, supplier, qty="30")
+    await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[{"po_line_id": line_id, "quantity": "10", "lot_number": "LOT-1"}],
+        headers=headers,
+    )
+    await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[{"po_line_id": line_id, "quantity": "10", "lot_number": "LOT-2", "location_id": wh2["id"]}],
+        headers=headers,
+    )
+    lots = (await client.get("/lots", headers=headers)).json()
+    lot2_id = next(lot["id"] for lot in lots if lot["lot_number"] == "LOT-2")
+    await client.post(f"/lots/{lot2_id}/hold", headers=headers)
+
+    by_status = await client.get("/lots?status=on_hold", headers=headers)
+    assert by_status.status_code == 200
+    assert [lot["lot_number"] for lot in by_status.json()] == ["LOT-2"]
+
+    by_location = await client.get(f"/lots?location_id={wh2['id']}", headers=headers)
+    assert [lot["lot_number"] for lot in by_location.json()] == ["LOT-2"]
+
+    bad_status = await client.get("/lots?status=bogus", headers=headers)
+    assert bad_status.status_code == 400
+
+    page1 = (await client.get("/lots?limit=1&offset=0", headers=headers)).json()
+    page2 = (await client.get("/lots?limit=1&offset=1", headers=headers)).json()
+    assert len(page1) == 1 and len(page2) == 1
+    assert page1[0]["id"] != page2[0]["id"]
+
+
+async def test_consume_fefo_splits_across_lots_earliest_expiry_first(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="FEFO-1", is_lot_tracked=True)
+    supplier = await _create_supplier(client, token)
+    location_id = await _default_location_id(client, token)
+    po_id, line_id = await _create_submitted_po(client, token, item, supplier, qty="25")
+    await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[
+            {"po_line_id": line_id, "quantity": "10", "lot_number": "LOT-EARLY", "expiry_date": "2026-08-01"},
+            {"po_line_id": line_id, "quantity": "15", "lot_number": "LOT-LATE", "expiry_date": "2027-01-01"},
+        ],
+        headers=headers,
+    )
+
+    res = await client.post(
+        "/lots/consume-fefo",
+        json={"item_id": item["id"], "location_id": location_id, "quantity": "12", "reason": "production"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    lines = res.json()["lines"]
+    assert [line["lot_number"] for line in lines] == ["LOT-EARLY", "LOT-LATE"]
+    assert lines[0]["quantity_consumed"] == "10.0000"
+    assert lines[1]["quantity_consumed"] == "2.0000"
+
+    lots_by_number = {lot["lot_number"]: lot for lot in (await client.get("/lots", headers=headers)).json()}
+    assert lots_by_number["LOT-EARLY"]["quantity_remaining"] == "0.0000"
+    assert lots_by_number["LOT-EARLY"]["status"] == "depleted"
+    assert lots_by_number["LOT-LATE"]["quantity_remaining"] == "13.0000"
+
+
+async def test_consume_fefo_insufficient_stock_rejected_writes_nothing(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="FEFO-2", is_lot_tracked=True)
+    supplier = await _create_supplier(client, token)
+    location_id = await _default_location_id(client, token)
+    po_id, line_id = await _create_submitted_po(client, token, item, supplier, qty="5")
+    await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[{"po_line_id": line_id, "quantity": "5", "lot_number": "LOT-SHORT"}],
+        headers=headers,
+    )
+
+    res = await client.post(
+        "/lots/consume-fefo",
+        json={"item_id": item["id"], "location_id": location_id, "quantity": "10"},
+        headers=headers,
+    )
+    assert res.status_code == 409
+
+    lot = (await client.get("/lots", headers=headers)).json()[0]
+    assert lot["quantity_remaining"] == "5.0000"  # rejected request wrote nothing
+
+
+async def test_morning_brief_lot_alerts_flag_on_hold_and_expiring_soon(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="BRIEF-1", is_lot_tracked=True)
+    supplier = await _create_supplier(client, token)
+    po_id, line_id = await _create_submitted_po(client, token, item, supplier, qty="30")
+    await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[
+            # Within the 14-day warning window as of "today" in this test env.
+            {"po_line_id": line_id, "quantity": "5", "lot_number": "LOT-SOON", "expiry_date": "2026-07-15"},
+            # Far enough out to not be flagged.
+            {"po_line_id": line_id, "quantity": "5", "lot_number": "LOT-LATER", "expiry_date": "2027-06-01"},
+            {"po_line_id": line_id, "quantity": "5", "lot_number": "LOT-HOLD"},
+        ],
+        headers=headers,
+    )
+    lots_by_number = {lot["lot_number"]: lot for lot in (await client.get("/lots", headers=headers)).json()}
+    await client.post(f"/lots/{lots_by_number['LOT-HOLD']['id']}/hold", headers=headers)
+
+    res = await client.get("/inventory/morning-brief", headers=headers)
+    assert res.status_code == 200
+    alerts_by_number = {a["lot_number"]: a for a in res.json()["lot_alerts"]}
+    assert set(alerts_by_number) == {"LOT-SOON", "LOT-HOLD"}
+    assert alerts_by_number["LOT-SOON"]["reason"] == "expiring_soon"
+    assert alerts_by_number["LOT-HOLD"]["reason"] == "on_hold"

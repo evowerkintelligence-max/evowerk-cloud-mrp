@@ -52,6 +52,18 @@ variable "db_allocated_storage" {
   default     = 20
 }
 
+variable "db_deletion_protection" {
+  description = "Block accidental RDS deletion via the AWS API/console. Leave true for a real deployment; set false only for a throwaway test env you intend to destroy/recreate on demand."
+  type        = bool
+  default     = true
+}
+
+variable "db_backup_retention_period" {
+  description = "RDS automated backup retention in days. AWS free-tier accounts cap this at 1 - raise it once off free tier."
+  type        = number
+  default     = 7
+}
+
 variable "db_name" {
   type    = string
   default = "evowerk_cloud_mrp"
@@ -63,8 +75,9 @@ variable "db_username" {
 }
 
 variable "domain_name" {
-  description = "Domain the app will be served on (e.g. mrp.customer.com) - used for the ACM cert and CORS_ORIGINS."
+  description = "Domain the app will be served on (e.g. mrp.customer.com) - used for the ACM cert and CORS_ORIGINS. Leave empty to skip HTTPS/ACM entirely and serve plain HTTP on the ALB's own DNS name instead (e.g. for a quick test deploy with no domain)."
   type        = string
+  default     = ""
 }
 
 variable "route53_zone_id" {

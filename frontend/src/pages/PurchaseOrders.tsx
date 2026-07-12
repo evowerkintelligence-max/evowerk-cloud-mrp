@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { ShoppingCart } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { ItemSelect } from "@/components/ItemSelect";
 import { humanize, poStatusVariant } from "@/lib/status";
 
 interface ItemResponse {
@@ -53,7 +53,7 @@ interface PurchaseOrderDetailResponse extends PurchaseOrderResponse {
 const CANCELLABLE_STATUSES = ["draft", "submitted"];
 const RECEIVABLE_STATUSES = ["submitted", "partially_received"];
 
-export function PurchaseOrders() {
+export function PurchaseOrdersPanel() {
   const queryClient = useQueryClient();
   const [selectedPoId, setSelectedPoId] = useState<string | null>(null);
   const [newPoSupplierId, setNewPoSupplierId] = useState("");
@@ -242,11 +242,6 @@ export function PurchaseOrders() {
 
   return (
     <div>
-      <PageHeader
-        title="Purchase Orders"
-        description="Create drafts, submit them to suppliers, and receive stock as it arrives."
-      />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}
@@ -378,21 +373,13 @@ export function PurchaseOrders() {
                 className="grid gap-4 sm:grid-cols-[1fr_140px_140px_auto] sm:items-end"
               >
                 <Field label="Item" htmlFor="po-item">
-                  <Select
+                  <ItemSelect
                     id="po-item"
+                    items={items.data}
                     value={lineItemId}
-                    onChange={(e) => setLineItemId(e.target.value)}
+                    onChange={setLineItemId}
                     required
-                  >
-                    <option value="" disabled>
-                      Select an item
-                    </option>
-                    {items.data?.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.sku} - {item.name}
-                      </option>
-                    ))}
-                  </Select>
+                  />
                 </Field>
                 <Field label="Quantity" htmlFor="po-qty">
                   <Input

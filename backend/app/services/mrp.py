@@ -46,16 +46,35 @@ class MrpPlanLine(BaseModel):
     on_draft: Decimal
     net_requirement: Decimal
     # The stable "how much to order/build" field for API consumers and PO
-    # generation. Currently always equal to net_requirement; it exists as a
-    # distinct field on purpose so that when lot-sizing / MOQ rounding lands it
-    # can diverge (e.g. rounded up to a pack size) without changing the meaning
-    # of net_requirement or the API shape.
+    # generation. Equal to net_requirement, except for purchased items with a
+    # supplier min_order_qty above the net requirement - those round up to the
+    # MOQ. Kept distinct from net_requirement so BOM explosion (which must
+    # stay on the true net - see compute_mrp_plan) never sees the rounded-up
+    # figure.
     suggested_order_quantity: Decimal
+    # Earliest date, within the horizon, that this item's demand must be
+    # covered by - the min forecast period_start reaching it, either directly
+    # (independent demand) or via a parent's own need date propagated down
+    # through explosion. None if unreachable from any dated forecast (shouldn't
+    # happen for a line that made it into the plan, but demand-driven design
+    # elsewhere in this module treats "no source" as equally safe to omit).
+    need_by_date: date | None
+    # need_by_date offset back by the item's lead_time_days - when to actually
+    # place the order so it lands in time. None if there's no lead time on
+    # file (an unset lead time is a real "don't know" - see Item.lead_time_days
+    # - not a same-day default) or the item is manufactured (a build action,
+    # not a purchase, has no supplier lead time to offset by).
+    suggested_order_date: date | None
 
 
 async def _sum_by_item(db: AsyncSession, query) -> dict[uuid.UUID, Decimal]:
     result = await db.execute(query)
     return {item_id: (total or Decimal(0)) for item_id, total in result.all()}
+
+
+async def _min_date_by_item(db: AsyncSession, query) -> dict[uuid.UUID, date]:
+    result = await db.execute(query)
+    return dict(result.all())
 
 
 async def _load_bom_children(
@@ -120,9 +139,26 @@ async def compute_mrp_plan(
     DAG) so an assembly's net is final before it explodes downward.
 
     Demand-driven: items reached by neither a forecast nor an explosion aren't
-    planning actions, so they're omitted. Lot sizing / MOQ / lead-time offset /
-    time-phasing per bucket are intentionally not modelled yet - suggested order
-    quantity is the raw net requirement.
+    planning actions, so they're omitted. Time-phasing per bucket (splitting the
+    horizon into multiple periods rather than netting it as one) and lot-size
+    multiples (rounding to a pack size above the MOQ) are intentionally not
+    modelled yet.
+
+    Lead-time offsetting and MOQ rounding *are* modelled, on top of the netting
+    above:
+    - need_by_date: the earliest in-horizon forecast date reaching this item,
+      propagated down through explosion (a component's need date is its
+      earliest-needing parent's need date - this module doesn't model
+      manufacturing lead time, so a produced parent's own build time isn't
+      subtracted before propagating to its components; only supplier lead time
+      on purchased items is).
+    - suggested_order_date = need_by_date - item.lead_time_days, when both are
+      known and the item is purchased (not manufactured - a build has no
+      supplier lead time to offset by).
+    - suggested_order_quantity rounds net_requirement up to item.min_order_qty
+      for purchased items when the MOQ is higher. Explosion always uses the
+      raw net, never the MOQ-rounded figure, so one item's MOQ can't inflate
+      what its components need.
     """
     independent = await _sum_by_item(
         db,
@@ -136,6 +172,20 @@ async def compute_mrp_plan(
     )
     if not independent:
         return []
+
+    # Earliest in-horizon forecast date per item - seeds need_by below. A
+    # separate query (not reused from `independent`) because this needs MIN,
+    # not SUM, over the same rows.
+    need_by = await _min_date_by_item(
+        db,
+        select(DemandForecast.item_id, func.min(DemandForecast.period_start))
+        .where(
+            DemandForecast.org_id == org_id,
+            DemandForecast.period_start >= horizon_start,
+            DemandForecast.period_start <= horizon_end,
+        )
+        .group_by(DemandForecast.item_id),
+    )
 
     # On-hand comes from two disjoint sources: active lots (lot-tracked items)
     # and inventory_balances (everything else). Merge into one item->qty map.
@@ -241,23 +291,44 @@ async def compute_mrp_plan(
         order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
         draft_qty = max(Decimal(0), on_draft.get(item_id, Decimal(0)))
         net = max(Decimal(0), total_gross - hand - order_qty - draft_qty)
+        due = need_by.get(item_id)
 
-        # Explode the NET (not gross) requirement onto components. Processing in
-        # topological order guarantees total_gross above is already final.
+        # Explode the NET (not gross) requirement onto components, and
+        # propagate this item's own need date down so a component's need_by
+        # is the earliest date any parent actually needs it by. Processing in
+        # topological order guarantees total_gross (and due) above is final
+        # before either propagation happens.
         for child_id, qty_per in children.get(item_id, []):
             gross[child_id] += net * qty_per
+            if due is not None:
+                existing_due = need_by.get(child_id)
+                need_by[child_id] = due if existing_due is None else min(existing_due, due)
 
         if total_gross <= 0:
             # Reached but not actually required (e.g. a component of an assembly
             # fully covered by stock) - nothing to plan.
             continue
         indep = independent.get(item_id, Decimal(0))
+        is_manufactured = item_id in children
+
+        # MOQ rounding and lead-time offset are purchasing concerns, so they
+        # only apply to purchased (not manufactured) items with a real
+        # shortfall - a build has no supplier MOQ or lead time to round/offset
+        # by.
+        suggested_qty = net
+        suggested_date = None
+        if not is_manufactured and net > 0:
+            if item.min_order_qty is not None and item.min_order_qty > net:
+                suggested_qty = item.min_order_qty
+            if due is not None and item.lead_time_days is not None:
+                suggested_date = due - timedelta(days=item.lead_time_days)
+
         lines.append(
             MrpPlanLine(
                 item_id=str(item_id),
                 item_sku=item.sku,
                 item_name=item.name,
-                is_manufactured=item_id in children,
+                is_manufactured=is_manufactured,
                 independent_demand=indep,
                 dependent_demand=total_gross - indep,
                 gross_demand=total_gross,
@@ -265,7 +336,9 @@ async def compute_mrp_plan(
                 on_order=order_qty,
                 on_draft=draft_qty,
                 net_requirement=net,
-                suggested_order_quantity=net,
+                suggested_order_quantity=suggested_qty,
+                need_by_date=due,
+                suggested_order_date=suggested_date,
             )
         )
 

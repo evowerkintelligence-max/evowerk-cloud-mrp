@@ -22,18 +22,29 @@ from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models
+    artifact,
     audit,
+    automl_run,
     bom,
+    dashboard,
     dataset,
     forecast,
     inventory,
     inventory_snapshot,
+    integration,
+    kpi,
     location,
     lot,
+    maintenance_schedule,
     procurement,
+    rca_case,
+    realtime,
+    report_spec,
+    scenario,
     telemetry,
     tenant,
     user,
+    workflow,
 )
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

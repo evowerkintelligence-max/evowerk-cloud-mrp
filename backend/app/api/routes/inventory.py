@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, require_role
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
@@ -75,15 +75,6 @@ class InventoryTransactionResponse(BaseModel):
 
 class InventoryDetailResponse(InventoryItemResponse):
     transactions: list[InventoryTransactionResponse]
-
-
-async def _get_item_or_404(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    item = (
-        await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    ).scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
 
 
 def _reject_lot_tracked(item: Item) -> None:
@@ -162,7 +153,7 @@ async def get_inventory(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     _reject_lot_tracked(item)
     by_location = await _by_location(db, current.org_id, item_id)
 
@@ -198,7 +189,7 @@ async def consume_inventory(
 ):
     if body.quantity <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     _reject_lot_tracked(item)
     location_id = await resolve_location_id(db, current.org_id, body.location_id)
 
@@ -233,7 +224,7 @@ async def adjust_inventory(
 ):
     if body.quantity == 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be a non-zero correction")
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     _reject_lot_tracked(item)
     location_id = await resolve_location_id(db, current.org_id, body.location_id)
 
@@ -273,7 +264,7 @@ async def transfer_inventory(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
     if body.from_location_id == body.to_location_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "from and to locations must differ")
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     _reject_lot_tracked(item)
     from_id = await resolve_location_id(db, current.org_id, body.from_location_id)
     to_id = await resolve_location_id(db, current.org_id, body.to_location_id)

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.kpi import Kpi, KpiValue
@@ -186,13 +186,6 @@ def _compare_item_to_response(i: kpi_service.KpiCompareItem) -> KpiCompareItemRe
     )
 
 
-async def _get_kpi_or_404(db: AsyncSession, org_id: uuid.UUID, kpi_id: uuid.UUID) -> Kpi:
-    kpi = (await db.execute(select(Kpi).where(Kpi.id == kpi_id, Kpi.org_id == org_id))).scalar_one_or_none()
-    if kpi is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "KPI not found")
-    return kpi
-
-
 # -----------------------------
 # KPI definitions
 # -----------------------------
@@ -234,7 +227,7 @@ async def create_kpi(
 async def get_kpi(
     kpi_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    kpi = await _get_kpi_or_404(db, current.org_id, kpi_id)
+    kpi = await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
     return _kpi_to_response(kpi)
 
 
@@ -245,7 +238,7 @@ async def update_kpi(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    kpi = await _get_kpi_or_404(db, current.org_id, kpi_id)
+    kpi = await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
     updates = patch.model_dump(exclude_unset=True)
 
     if "dataset_id" in updates:
@@ -266,7 +259,7 @@ async def update_kpi(
 async def delete_kpi(
     kpi_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    kpi = await _get_kpi_or_404(db, current.org_id, kpi_id)
+    kpi = await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
     await db.delete(kpi)
     await log_event(db, action="kpi.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(kpi_id))
     await db.commit()
@@ -284,7 +277,7 @@ async def kpi_history(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_kpi_or_404(db, current.org_id, kpi_id)
+    await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
     limit = max(1, min(limit, 500))
     rows = await kpi_service.get_history_values(db, current.org_id, kpi_id, dataset_id, limit)
     return [_value_to_response(v) for v in rows]

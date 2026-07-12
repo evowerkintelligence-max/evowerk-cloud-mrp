@@ -13,6 +13,7 @@ import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { ItemSelect } from "@/components/ItemSelect";
 import { humanize, poStatusVariant } from "@/lib/status";
+import { cn } from "@/lib/utils";
 
 interface ItemResponse {
   id: string;
@@ -295,7 +296,7 @@ export function PurchaseOrdersPanel() {
                 <TR
                   key={po.id}
                   onClick={() => setSelectedPoId(po.id)}
-                  className={`cursor-pointer ${selectedPoId === po.id ? "bg-primary/5" : ""}`}
+                  className={cn("cursor-pointer", selectedPoId === po.id && "bg-primary/5")}
                 >
                   <TD className="font-medium">PO-{po.po_number}</TD>
                   <TD>{po.supplier_name}</TD>

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.models.dashboard import Chart, Dashboard
 from app.services import dataset_query as query_service
@@ -102,24 +102,6 @@ def _validate_chart_type(chart_type: str) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"chart_type must be one of {CHART_TYPES}")
 
 
-async def _get_chart_or_404(db: AsyncSession, org_id: uuid.UUID, chart_id: uuid.UUID) -> Chart:
-    chart = (
-        await db.execute(select(Chart).where(Chart.id == chart_id, Chart.org_id == org_id))
-    ).scalar_one_or_none()
-    if chart is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chart not found")
-    return chart
-
-
-async def _get_dashboard_or_404(db: AsyncSession, org_id: uuid.UUID, dashboard_id: uuid.UUID) -> Dashboard:
-    dashboard = (
-        await db.execute(select(Dashboard).where(Dashboard.id == dashboard_id, Dashboard.org_id == org_id))
-    ).scalar_one_or_none()
-    if dashboard is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dashboard not found")
-    return dashboard
-
-
 # ─── Charts ─────────────────────────────────────────────────────────────────
 
 @router.post("/charts/preview", response_model=ChartDataResponse)
@@ -147,7 +129,7 @@ async def create_chart(
     await ds_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
     position = 0
     if req.dashboard_id is not None:
-        await _get_dashboard_or_404(db, current.org_id, req.dashboard_id)
+        await get_or_404(db, Dashboard, current.org_id, req.dashboard_id, "Dashboard not found")
         # Append after the last chart on this dashboard, not always 0 - two
         # charts both at position 0 make the dashboard's move-up/move-down
         # swap a no-op between them.
@@ -180,7 +162,7 @@ async def get_chart_data(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    chart = await _get_chart_or_404(db, current.org_id, chart_id)
+    chart = await get_or_404(db, Chart, current.org_id, chart_id, "Chart not found")
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, chart.dataset_id)
     query = query_service.DatasetQueryRequest.model_validate(chart.query_config)
     result = await query_service.run_query(db, dataset, current.org_id, query)
@@ -197,13 +179,13 @@ async def update_chart(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    chart = await _get_chart_or_404(db, current.org_id, chart_id)
+    chart = await get_or_404(db, Chart, current.org_id, chart_id, "Chart not found")
     # "dashboard_id" in model_fields_set distinguishes an explicit null (detach
     # from any dashboard) from the field being omitted entirely (leave as-is) -
     # both would otherwise collapse to the same `None` value.
     dashboard_id_sent = "dashboard_id" in req.model_fields_set
     if dashboard_id_sent and req.dashboard_id is not None:
-        await _get_dashboard_or_404(db, current.org_id, req.dashboard_id)
+        await get_or_404(db, Dashboard, current.org_id, req.dashboard_id, "Dashboard not found")
     if req.name is not None:
         chart.name = req.name
     if dashboard_id_sent:
@@ -221,7 +203,7 @@ async def delete_chart(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    chart = await _get_chart_or_404(db, current.org_id, chart_id)
+    chart = await get_or_404(db, Chart, current.org_id, chart_id, "Chart not found")
     await db.delete(chart)
     await db.commit()
 
@@ -260,7 +242,7 @@ async def get_dashboard(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    dashboard = await _get_dashboard_or_404(db, current.org_id, dashboard_id)
+    dashboard = await get_or_404(db, Dashboard, current.org_id, dashboard_id, "Dashboard not found")
     charts = (
         await db.execute(
             select(Chart).where(Chart.dashboard_id == dashboard.id).order_by(Chart.position, Chart.created_at)
@@ -277,6 +259,6 @@ async def delete_dashboard(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    dashboard = await _get_dashboard_or_404(db, current.org_id, dashboard_id)
+    dashboard = await get_or_404(db, Dashboard, current.org_id, dashboard_id, "Dashboard not found")
     await db.delete(dashboard)
     await db.commit()

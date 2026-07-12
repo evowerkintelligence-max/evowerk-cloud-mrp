@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { today, plusDays } from "@/lib/date";
 import { useDatasets } from "./analytics/shared";
 
 interface ItemResponse {
@@ -42,16 +43,6 @@ const KINDS: { kind: Kind; label: string; description: string }[] = [
 ];
 
 const DIMENSIONS = ["supplier", "item_type", "abc_class"];
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function plusDays(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
 
 export function Reports() {
   const [kind, setKind] = useState<Kind>("mrp-plan");

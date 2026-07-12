@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
-from app.api.deps import CurrentUser, get_current_user, require_role
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.core.time import ensure_utc
 from app.db.session import get_db
 from app.middleware.audit import log_event
@@ -70,22 +70,6 @@ class BomDetailResponse(BomResponse):
     lines: list[BomLineResponse]
 
 
-async def _get_item_or_404(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    result = await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    item = result.scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
-
-
-async def _get_bom_or_404(db: AsyncSession, org_id: uuid.UUID, bom_id: uuid.UUID) -> Bom:
-    result = await db.execute(select(Bom).where(Bom.id == bom_id, Bom.org_id == org_id))
-    bom = result.scalar_one_or_none()
-    if bom is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "BOM not found")
-    return bom
-
-
 async def _reject_if_cycle(
     db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, component_ids: set[uuid.UUID]
 ) -> None:
@@ -115,7 +99,7 @@ async def _flush_checking_version(db: AsyncSession) -> None:
 
 async def _bom_to_response(db: AsyncSession, bom: Bom, item: Item | None = None) -> BomResponse:
     if item is None:
-        item = await _get_item_or_404(db, bom.org_id, bom.item_id)
+        item = await get_or_404(db, Item, bom.org_id, bom.item_id, "Item not found")
     return BomResponse(
         id=str(bom.id), item_id=str(bom.item_id), item_sku=item.sku, item_name=item.name,
         version=bom.version, status=bom.status, updated_at=bom.updated_at,
@@ -171,7 +155,7 @@ async def create_bom(
         item_id = uuid.UUID(body.item_id)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid item_id") from None
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
 
     for attempt in range(MAX_VERSION_ATTEMPTS):
         max_version = await db.scalar(
@@ -227,8 +211,8 @@ async def get_bom(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    bom = await _get_bom_or_404(db, current.org_id, bom_id)
-    item = await _get_item_or_404(db, current.org_id, bom.item_id)
+    bom = await get_or_404(db, Bom, current.org_id, bom_id, "BOM not found")
+    item = await get_or_404(db, Item, current.org_id, bom.item_id, "Item not found")
 
     lines_result = await db.execute(
         select(BomLine, Item)
@@ -261,7 +245,7 @@ async def update_bom_lines(
     db: AsyncSession = Depends(get_db),
 ):
     lines_in = body.lines
-    bom = await _get_bom_or_404(db, current.org_id, bom_id)
+    bom = await get_or_404(db, Bom, current.org_id, bom_id, "BOM not found")
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be edited")
     if ensure_utc(bom.updated_at) != ensure_utc(body.expected_updated_at):
@@ -333,7 +317,7 @@ async def activate_bom(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    bom = await _get_bom_or_404(db, current.org_id, bom_id)
+    bom = await get_or_404(db, Bom, current.org_id, bom_id, "BOM not found")
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be activated")
 
@@ -379,7 +363,7 @@ async def delete_bom(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    bom = await _get_bom_or_404(db, current.org_id, bom_id)
+    bom = await get_or_404(db, Bom, current.org_id, bom_id, "BOM not found")
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be deleted")
 

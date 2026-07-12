@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, require_role
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
@@ -76,35 +76,11 @@ class PurchaseOrderDetailResponse(PurchaseOrderResponse):
     lines: list[PurchaseOrderLineResponse]
 
 
-async def _get_supplier_or_404(db: AsyncSession, org_id: uuid.UUID, supplier_id: uuid.UUID) -> Supplier:
-    result = await db.execute(select(Supplier).where(Supplier.id == supplier_id, Supplier.org_id == org_id))
-    supplier = result.scalar_one_or_none()
-    if supplier is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Supplier not found")
-    return supplier
-
-
-async def _get_item_or_404(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    result = await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    item = result.scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
-
-
-async def _get_po_or_404(db: AsyncSession, org_id: uuid.UUID, po_id: uuid.UUID) -> PurchaseOrder:
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id, PurchaseOrder.org_id == org_id))
-    po = result.scalar_one_or_none()
-    if po is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Purchase order not found")
-    return po
-
-
 async def _po_to_response(
     db: AsyncSession, po: PurchaseOrder, supplier: Supplier | None = None
 ) -> PurchaseOrderResponse:
     if supplier is None:
-        supplier = await _get_supplier_or_404(db, po.org_id, po.supplier_id)
+        supplier = await get_or_404(db, Supplier, po.org_id, po.supplier_id, "Supplier not found")
     return PurchaseOrderResponse(
         id=str(po.id),
         supplier_id=str(po.supplier_id),
@@ -125,7 +101,7 @@ async def create_purchase_order(
         supplier_id = uuid.UUID(body.supplier_id)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid supplier_id") from None
-    supplier = await _get_supplier_or_404(db, current.org_id, supplier_id)
+    supplier = await get_or_404(db, Supplier, current.org_id, supplier_id, "Supplier not found")
 
     for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
         max_number = await db.scalar(
@@ -188,8 +164,8 @@ async def get_purchase_order(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await _get_po_or_404(db, current.org_id, po_id)
-    supplier = await _get_supplier_or_404(db, current.org_id, po.supplier_id)
+    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
+    supplier = await get_or_404(db, Supplier, current.org_id, po.supplier_id, "Supplier not found")
 
     lines_result = await db.execute(
         select(PurchaseOrderLine, Item)
@@ -223,7 +199,7 @@ async def update_purchase_order_lines(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await _get_po_or_404(db, current.org_id, po_id)
+    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
     if po.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft purchase orders can be edited")
     if not lines_in:
@@ -238,7 +214,7 @@ async def update_purchase_order_lines(
             item_id = uuid.UUID(line_in.item_id)
         except ValueError:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid item_id") from None
-        await _get_item_or_404(db, current.org_id, item_id)
+        await get_or_404(db, Item, current.org_id, item_id, "Item not found")
 
     await db.execute(PurchaseOrderLine.__table__.delete().where(PurchaseOrderLine.po_id == po.id))
     for line_in in lines_in:
@@ -272,7 +248,7 @@ async def submit_purchase_order(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await _get_po_or_404(db, current.org_id, po_id)
+    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
     if po.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft purchase orders can be submitted")
 
@@ -304,7 +280,7 @@ async def receive_purchase_order(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await _get_po_or_404(db, current.org_id, po_id)
+    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
     if po.status not in ("submitted", "partially_received"):
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Only submitted or partially received purchase orders can receive"
@@ -440,7 +416,7 @@ async def cancel_purchase_order(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await _get_po_or_404(db, current.org_id, po_id)
+    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
     # Status alone is authoritative here: it already flips to
     # partially_received the instant any receiving happens, so gating on
     # draft/submitted is sufficient - no separate per-line check needed.

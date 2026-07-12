@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, require_role
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
@@ -165,14 +165,6 @@ def _to_response(fc: DemandForecast, item: Item) -> ForecastResponse:
     )
 
 
-async def _get_item_or_404(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    result = await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    item = result.scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
-
-
 def _parse_item_id(raw: str) -> uuid.UUID:
     try:
         return uuid.UUID(raw)
@@ -288,7 +280,7 @@ async def upsert_forecast(
 ):
     if body.quantity < 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be non-negative")
-    item = await _get_item_or_404(db, current.org_id, _parse_item_id(body.item_id))
+    item = await get_or_404(db, Item, current.org_id, _parse_item_id(body.item_id), "Item not found")
 
     fc, created = await _upsert_forecast(
         db,
@@ -421,7 +413,7 @@ async def get_suggested_forecast(
     forecast via POST /forecasts. Never written anywhere itself."""
     if horizon_days <= 0 or horizon_days > 365:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_days must be between 1 and 365")
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     result = await compute_demand_forecast(db, current.org_id, item_id, horizon_days=horizon_days)
     return SuggestedForecastResponse(
         item_id=str(item.id),

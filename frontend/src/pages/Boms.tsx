@@ -13,6 +13,7 @@ import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { ItemSelect } from "@/components/ItemSelect";
 import { humanize } from "@/lib/status";
+import { cn } from "@/lib/utils";
 
 interface ItemResponse {
   id: string;
@@ -336,7 +337,7 @@ export function Boms() {
                 <TR
                   key={bom.id}
                   onClick={() => setSelectedBomId(bom.id)}
-                  className={`cursor-pointer ${selectedBomId === bom.id ? "bg-primary/5" : ""}`}
+                  className={cn("cursor-pointer", selectedBomId === bom.id && "bg-primary/5")}
                 >
                   <TD className="font-medium">
                     {bom.item_sku} - {bom.item_name}

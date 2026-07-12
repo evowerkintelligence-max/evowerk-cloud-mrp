@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { StatCard } from "@/components/StatCard";
 import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt, money, oeeColor, pct, rankedBarOption } from "./shared";
+import { cn } from "@/lib/utils";
 
 interface TrendPoint {
   date: string;
@@ -358,7 +359,7 @@ function Revenue({ ri }: { ri: RevenueImpact }) {
             <div className="space-y-2">
               {ri.per_machine.map((m, i) => (
                 <div key={m.machine} className="flex items-center gap-3 text-sm">
-                  <span className={`w-40 truncate ${i === 0 ? "font-bold text-rose-400" : "text-muted-foreground"}`}>
+                  <span className={cn("w-40 truncate", i === 0 ? "font-bold text-rose-400" : "text-muted-foreground")}>
                     {m.machine}
                     {i === 0 && (
                       <Badge variant="danger" className="ml-2">

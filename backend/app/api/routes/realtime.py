@@ -15,13 +15,13 @@ import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.integration import Integration
@@ -71,24 +71,6 @@ async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStr
     return snap
 
 
-async def _get_stream_or_404(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUID) -> RealtimeStream:
-    stream = (
-        await db.execute(select(RealtimeStream).where(RealtimeStream.id == stream_id, RealtimeStream.org_id == org_id))
-    ).scalar_one_or_none()
-    if stream is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Stream not found")
-    return stream
-
-
-async def _get_integration_or_404(db: AsyncSession, org_id: uuid.UUID, integration_id: uuid.UUID) -> Integration:
-    integration = (
-        await db.execute(select(Integration).where(Integration.id == integration_id, Integration.org_id == org_id))
-    ).scalar_one_or_none()
-    if integration is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Integration not found")
-    return integration
-
-
 def _start(stream: RealtimeStream, integration: Integration) -> None:
     from app.services.integrations import decrypt_config
 
@@ -111,7 +93,7 @@ def _start(stream: RealtimeStream, integration: Integration) -> None:
 async def create_stream(
     req: StreamCreate, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    integration = await _get_integration_or_404(db, current.org_id, req.integration_id)
+    integration = await get_or_404(db, Integration, current.org_id, req.integration_id, "Integration not found")
 
     stream = RealtimeStream(
         org_id=current.org_id,
@@ -147,7 +129,7 @@ async def list_streams(current: CurrentUser = Depends(get_current_user), db: Asy
 async def stream_snapshot(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    stream = await _get_stream_or_404(db, current.org_id, stream_id)
+    stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     return await _snapshot_for(db, current.org_id, stream)
 
 
@@ -160,7 +142,7 @@ async def stream_history(
 ):
     """Persisted tick history — survives a backend restart and works even
     while the stream isn't currently running in this process."""
-    await _get_stream_or_404(db, current.org_id, stream_id)
+    await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     return {"stream_id": str(stream_id), "points": realtime_service.read_history(str(stream_id), max_points=limit)}
 
 
@@ -168,8 +150,8 @@ async def stream_history(
 async def start_stream(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    stream = await _get_stream_or_404(db, current.org_id, stream_id)
-    integration = await _get_integration_or_404(db, current.org_id, stream.integration_id)
+    stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
+    integration = await get_or_404(db, Integration, current.org_id, stream.integration_id, "Integration not found")
 
     stream.desired_status = "running"
     stream.last_error = None
@@ -183,7 +165,7 @@ async def start_stream(
 async def stop_stream(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    stream = await _get_stream_or_404(db, current.org_id, stream_id)
+    stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     realtime_service.stop_runner(stream.id)
     stream.desired_status = "stopped"
     await db.commit()
@@ -194,7 +176,7 @@ async def stop_stream(
 async def delete_stream(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    stream = await _get_stream_or_404(db, current.org_id, stream_id)
+    stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     realtime_service.stop_runner(stream.id)
     realtime_service.delete_history(str(stream.id))
     await db.delete(stream)
@@ -249,7 +231,7 @@ async def stream_events(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_stream_or_404(db, current.org_id, stream_id)  # 404s before opening the stream if unknown/foreign
+    await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")  # 404s before opening the stream if unknown/foreign
     return StreamingResponse(
         _sse_generator(stream_id, current.org_id, request),
         media_type="text/event-stream",

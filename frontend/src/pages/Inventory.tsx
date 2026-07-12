@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { humanize, inventoryStatusVariant } from "@/lib/status";
+import { cn } from "@/lib/utils";
 
 interface LocationResponse {
   id: string;
@@ -207,7 +208,7 @@ export function InventoryPanel() {
                   <TR
                     key={bal.item_id}
                     onClick={() => setSelectedItemId(bal.item_id)}
-                    className={`cursor-pointer ${selectedItemId === bal.item_id ? "bg-primary/5" : ""}`}
+                    className={cn("cursor-pointer", selectedItemId === bal.item_id && "bg-primary/5")}
                   >
                     <TD className="font-medium">
                       {bal.item_sku} - {bal.item_name}

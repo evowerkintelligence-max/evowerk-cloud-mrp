@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { useDatasets } from "@/pages/analytics/shared";
+import { cn } from "@/lib/utils";
 
 // Ported from the desktop app's renderer/js/alerts.js + routes/alerts.py:
 // threshold rules scanned on demand against a Dataset or a live realtime
@@ -324,9 +325,10 @@ function ScanResults({ scan }: { scan: ScanResponse | null }) {
         {scan.results.map((r) => (
           <div
             key={r.rule_id}
-            className={`rounded-md border px-4 py-3 text-sm ${
-              r.triggered ? "border-amber-500/30 bg-amber-500/10" : "border-border bg-secondary/30"
-            }`}
+            className={cn(
+              "rounded-md border px-4 py-3 text-sm",
+              r.triggered ? "border-amber-500/30 bg-amber-500/10" : "border-border bg-secondary/30",
+            )}
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{r.triggered ? "⚠" : "✓"} {r.rule_name}</span>

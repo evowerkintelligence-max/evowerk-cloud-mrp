@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, require_role
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.audit import AuditLog
@@ -106,15 +106,6 @@ async def _resolve_supplier_id(
     if exists is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Preferred supplier not found")
     return supplier_id
-
-
-async def _get_item_or_404(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    item = (
-        await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    ).scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
 
 
 async def _create_item_row(
@@ -367,7 +358,7 @@ async def update_item(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    item = await _get_item_or_404(db, current.org_id, item_id)
+    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     item.preferred_supplier_id = await _resolve_supplier_id(
         db, current.org_id, body.preferred_supplier_id
     )
@@ -432,7 +423,7 @@ async def get_item_audit_log(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_item_or_404(db, current.org_id, item_id)
+    await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     result = await db.execute(
         select(AuditLog.action, AuditLog.event_metadata, AuditLog.created_at, User.email)
         .outerjoin(User, User.id == AuditLog.actor_user_id)

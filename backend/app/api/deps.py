@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import uuid
+from typing import TypeVar
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_token
+from app.db.base import Base
 from app.db.session import get_db
 from app.models.user import User
+
+ModelT = TypeVar("ModelT", bound=Base)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -54,3 +58,20 @@ def require_role(*roles: str):
         return current
 
     return _check
+
+
+async def get_or_404(
+    db: AsyncSession,
+    model: type[ModelT],
+    org_id: uuid.UUID,
+    obj_id: uuid.UUID,
+    not_found_msg: str,
+    *extra_filters: ColumnElement[bool],
+) -> ModelT:
+    result = await db.execute(
+        select(model).where(model.id == obj_id, model.org_id == org_id, *extra_filters)
+    )
+    obj = result.scalar_one_or_none()
+    if obj is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, not_found_msg)
+    return obj

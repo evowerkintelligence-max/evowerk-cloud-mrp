@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   BarChart3,
+  Bell,
   Boxes,
   Brain,
   CalendarRange,
@@ -72,6 +73,7 @@ const ANALYTICS_NAV = [
   { to: "/mfg-forecast", label: "Manufacturing Forecast", icon: TrendingUp, end: false },
   { to: "/scenarios", label: "Scenarios", icon: SplitSquareHorizontal, end: false },
   { to: "/computer-vision", label: "Computer Vision", icon: Camera, end: false },
+  { to: "/alerts", label: "Alerts", icon: Bell, end: false },
 ];
 
 function Brand() {

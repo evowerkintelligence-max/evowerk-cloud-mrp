@@ -39,6 +39,7 @@ import { Predictive } from "./pages/Predictive";
 import { MfgForecast } from "./pages/MfgForecast";
 import { Scenarios } from "./pages/Scenarios";
 import { ComputerVision } from "./pages/ComputerVision";
+import { Alerts } from "./pages/Alerts";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -102,6 +103,7 @@ export function App() {
         <Route path="/mfg-forecast" element={<MfgForecast />} />
         <Route path="/scenarios" element={<Scenarios />} />
         <Route path="/computer-vision" element={<ComputerVision />} />
+        <Route path="/alerts" element={<Alerts />} />
       </Route>
     </Routes>
   );

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     ai_insights,
+    alerts,
     artifacts,
     automl,
     auth,
@@ -116,6 +117,7 @@ app.include_router(mfg_forecast.router)
 app.include_router(what_if_scenarios.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
+app.include_router(alerts.router)
 
 
 @app.get("/health")

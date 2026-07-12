@@ -26,6 +26,7 @@ from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.integration import Integration
 from app.models.realtime import RealtimeStream
+from app.services import alerts as alerts_service
 from app.services import realtime as realtime_service
 
 router = APIRouter(prefix="/realtime", tags=["realtime"])
@@ -43,27 +44,31 @@ class StreamCreate(BaseModel):
     column_map: dict[str, str] = Field(default_factory=dict)
 
 
-def _snapshot_for(stream: RealtimeStream) -> dict:
+async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStream) -> dict:
     """Live snapshot if this process has a running collector for this stream,
     else a definition-only snapshot (honest about "not running here" rather
     than silently showing stale/blank metrics - see module docstring on the
-    in-memory/multi-replica caveat)."""
+    in-memory/multi-replica caveat). Alarm state from any enabled stream_metric
+    alert rules targeting this stream rides along, same as the desktop app."""
     runner = realtime_service.get_runner(stream.id)
     if runner is not None:
-        return runner.snapshot()
-    return {
-        "ts": None,
-        "stream_id": str(stream.id),
-        "name": stream.name,
-        "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
-        "error": stream.last_error,
-        "rows_in_window": 0,
-        "rows_collected": 0,
-        "duration": None,
-        "duration_s": None,
-        "last_tick_s": None,
-        "metrics": {},
-    }
+        snap = runner.snapshot()
+    else:
+        snap = {
+            "ts": None,
+            "stream_id": str(stream.id),
+            "name": stream.name,
+            "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
+            "error": stream.last_error,
+            "rows_in_window": 0,
+            "rows_collected": 0,
+            "duration": None,
+            "duration_s": None,
+            "last_tick_s": None,
+            "metrics": {},
+        }
+    snap["alerts"] = [vars(a) for a in await alerts_service.stream_alerts(db, org_id, stream.id)]
+    return snap
 
 
 async def _get_stream_or_404(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUID) -> RealtimeStream:
@@ -127,7 +132,7 @@ async def create_stream(
     await db.refresh(stream)
 
     _start(stream, integration)
-    return _snapshot_for(stream)
+    return await _snapshot_for(db, current.org_id, stream)
 
 
 @router.get("/streams")
@@ -135,7 +140,7 @@ async def list_streams(current: CurrentUser = Depends(get_current_user), db: Asy
     rows = (
         await db.execute(select(RealtimeStream).where(RealtimeStream.org_id == current.org_id).order_by(RealtimeStream.name))
     ).scalars().all()
-    return {"streams": [_snapshot_for(s) for s in rows]}
+    return {"streams": [await _snapshot_for(db, current.org_id, s) for s in rows]}
 
 
 @router.get("/streams/{stream_id}/snapshot")
@@ -143,7 +148,7 @@ async def stream_snapshot(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     stream = await _get_stream_or_404(db, current.org_id, stream_id)
-    return _snapshot_for(stream)
+    return await _snapshot_for(db, current.org_id, stream)
 
 
 @router.get("/streams/{stream_id}/history")
@@ -171,7 +176,7 @@ async def start_stream(
     await db.commit()
 
     _start(stream, integration)
-    return _snapshot_for(stream)
+    return await _snapshot_for(db, current.org_id, stream)
 
 
 @router.post("/streams/{stream_id}/stop")
@@ -182,7 +187,7 @@ async def stop_stream(
     realtime_service.stop_runner(stream.id)
     stream.desired_status = "stopped"
     await db.commit()
-    return _snapshot_for(stream)
+    return await _snapshot_for(db, current.org_id, stream)
 
 
 @router.delete("/streams/{stream_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -210,12 +215,16 @@ async def _sse_generator(stream_id: uuid.UUID, org_id: uuid.UUID, request: Reque
                 await db.execute(select(RealtimeStream).where(RealtimeStream.id == stream_id, RealtimeStream.org_id == org_id))
             ).scalar_one_or_none()
 
+    async def _snapshot(stream: RealtimeStream) -> dict:
+        async with db_session.async_session_factory() as db:
+            return await _snapshot_for(db, org_id, stream)
+
     stream = await _load_stream()
     if stream is None:
         yield f"event: error\ndata: {json.dumps({'error': 'stream not found'})}\n\n"
         return
 
-    yield f"data: {json.dumps(_snapshot_for(stream))}\n\n"
+    yield f"data: {json.dumps(await _snapshot(stream))}\n\n"
 
     try:
         while True:
@@ -228,7 +237,7 @@ async def _sse_generator(stream_id: uuid.UUID, org_id: uuid.UUID, request: Reque
             if stream is None:
                 yield f"event: stopped\ndata: {json.dumps({'stream_id': str(stream_id)})}\n\n"
                 break
-            yield f"data: {json.dumps(_snapshot_for(stream))}\n\n"
+            yield f"data: {json.dumps(await _snapshot(stream))}\n\n"
     except asyncio.CancelledError:
         pass
 

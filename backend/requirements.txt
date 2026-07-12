@@ -39,3 +39,15 @@ shap>=0.45.0
 
 # Report exports. PDF only - the HTML and CSV renderers are stdlib.
 reportlab>=4.0.0
+
+# Data integration connectors (app/services/connectors), ported from the desktop
+# app. Each connector degrades gracefully (clear "pip install X" error) if its
+# package is missing, so these are best-effort rather than hard requirements:
+#   - REST/PI Web API: stdlib urllib only, no extra package.
+#   - OPC-DA (connectors/opcda_connector.py): Windows-COM-only (OpenOPC-Python3x
+#     or pywin32) - deliberately NOT listed here, would break the Linux build.
+pyodbc>=5.1.0       # SQL Server - also needs the Microsoft ODBC driver installed
+                    # in the runtime image (see Dockerfile); pip alone isn't enough.
+oracledb>=2.0.0     # Oracle - thin mode, no Oracle Instant Client needed
+paho-mqtt>=1.6.1,<2 # MQTT
+asyncua>=1.1.0      # OPC-UA

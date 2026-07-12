@@ -29,6 +29,9 @@ import { WorkflowBuilder } from "./pages/workflows/WorkflowBuilder";
 import { ReportBuilder } from "./pages/ReportBuilder";
 import { AutoML } from "./pages/AutoML";
 import { AutoMLRun } from "./pages/automl/AutoMLRun";
+import { Kpis } from "./pages/Kpis";
+import { Integrations } from "./pages/Integrations";
+import { Realtime } from "./pages/Realtime";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -82,6 +85,9 @@ export function App() {
         <Route path="/report-builder" element={<ReportBuilder />} />
         <Route path="/automl" element={<AutoML />} />
         <Route path="/automl/:id" element={<AutoMLRun />} />
+        <Route path="/kpis" element={<Kpis />} />
+        <Route path="/integrations" element={<Integrations />} />
+        <Route path="/realtime" element={<Realtime />} />
       </Route>
     </Routes>
   );

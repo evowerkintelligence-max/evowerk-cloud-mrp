@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,9 +14,11 @@ from app.api.routes import (
     datasets,
     downtime,
     forecasts,
+    integrations,
     inventory,
     inventory_analytics,
     items,
+    kpis,
     locations,
     lots,
     oee,
@@ -22,6 +26,7 @@ from app.api.routes import (
     process_mining,
     purchase_orders,
     quality,
+    realtime,
     reports,
     scrap,
     shifts,
@@ -32,13 +37,25 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
+from app.services import realtime as realtime_service
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Re-adopt any realtime stream that was running before this process
+    # started (redeploy/restart/crash) - see app.services.realtime.
+    await realtime_service.resume_all_streams()
+    yield
+    realtime_service.stop_all_runners()
+
 
 app = FastAPI(
     title="EvoWerk Cloud MRP",
     docs_url="/docs" if settings.env != "production" else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(TelemetryMiddleware)
@@ -79,6 +96,9 @@ app.include_router(reports.router)
 app.include_router(bi.router)
 app.include_router(workflows.router)
 app.include_router(automl.router)
+app.include_router(kpis.router)
+app.include_router(integrations.router)
+app.include_router(realtime.router)
 
 
 @app.get("/health")

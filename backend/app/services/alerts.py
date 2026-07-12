@@ -118,8 +118,8 @@ def _sum2_by_group(
     con, rel: str, col_a: str, col_b: str, group_col: str, where_sql: str,
 ) -> list[tuple[str, float, float]]:
     gq = ds_service.qi(group_col)
-    sql = (  # nosec B608
-        f"SELECT CAST({gq} AS VARCHAR), SUM({val_expr(col_a)}), SUM({val_expr(col_b)}) "
+    sql = (
+        f"SELECT CAST({gq} AS VARCHAR), SUM({val_expr(col_a)}), SUM({val_expr(col_b)}) "  # nosec B608
         f"FROM {rel}{where_sql} GROUP BY 1"
     )
     return [(str(row[0]), float(row[1] or 0.0), float(row[2] or 0.0)) for row in con.execute(sql).fetchall()]

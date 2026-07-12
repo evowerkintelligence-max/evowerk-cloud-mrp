@@ -232,9 +232,10 @@ async def delete_query_history_entry(
 
 @router.delete("/query-history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_query_history(
+    action: str | None = Query(None),
     current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    await history_service.clear_query_history(db, current.org_id)
+    await history_service.clear_query_history(db, current.org_id, action=action)
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetailResponse)

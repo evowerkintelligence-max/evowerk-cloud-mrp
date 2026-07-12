@@ -95,19 +95,11 @@ def _to_response(lot: Lot, item: Item, location: Location) -> LotResponse:
 
 
 async def _get_location(db: AsyncSession, org_id: uuid.UUID, location_id: uuid.UUID) -> Location:
-    result = await db.execute(select(Location).where(Location.id == location_id, Location.org_id == org_id))
-    location = result.scalar_one_or_none()
-    if location is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Location not found")
-    return location
+    return await get_or_404(db, Location, org_id, location_id, "Location not found")
 
 
 async def _get_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    result = await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    item = result.scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
+    return await get_or_404(db, Item, org_id, item_id, "Item not found")
 
 
 LOT_STATUSES = ("active", "on_hold", "depleted")

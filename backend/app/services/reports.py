@@ -54,7 +54,12 @@ _FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 def _excel_safe(cell: str) -> str:
-    return "'" + cell if cell.startswith(_FORMULA_PREFIXES) else cell
+    # A leading "-" or "+" is also how a real negative/positive number renders
+    # (see _num) - only quote-prefix cells that AREN'T plain numbers, so a
+    # legitimate "-5.20" isn't turned into text.
+    if cell.startswith(_FORMULA_PREFIXES) and not _is_numeric(cell):
+        return "'" + cell
+    return cell
 
 
 @dataclass
@@ -723,7 +728,7 @@ def render_csv(report: Report) -> bytes:
         w.writerow([])
         w.writerow(["Summary"])
         for label, value in report.kpis:
-            w.writerow([label, value])
+            w.writerow([_excel_safe(label), _excel_safe(value)])
 
     for section in report.sections:
         w.writerow([])
@@ -1082,7 +1087,7 @@ def render_xlsx(report: Report) -> bytes:
         ws = wb.create_sheet(_sheet_name("Summary"))
         ws.append(["Metric", "Value"])
         for label, value in report.kpis:
-            ws.append([label, value])
+            ws.append([_excel_safe(label), _excel_safe(value)])
 
     used_names: set[str] = set()
     for section in report.sections:

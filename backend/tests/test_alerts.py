@@ -136,6 +136,61 @@ async def test_scan_reports_missing_column_without_failing_whole_scan(client):
     assert "duration" in body["message"]
 
 
+async def test_scan_one_handles_blank_required_column_without_500(client):
+    """A rule saved with an empty duration_col (the RuleForm's "required" flag
+    is cosmetic - it doesn't block saving) used to reach DuckDB with an empty
+    quoted identifier and 500 on the single-rule Test scan, even though the
+    same case scanned fine via /alerts/scan. Both must fail gracefully now."""
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token, DOWNTIME_CSV)
+
+    create = await client.post(
+        "/alerts/rules", headers=_h(token),
+        json={
+            "name": "Blank column", "type": "machine_downtime", "dataset_id": dataset_id,
+            "config": {"duration_col": "", "threshold": 60},
+        },
+    )
+    rule_id = create.json()["id"]
+
+    result = await client.post(f"/alerts/scan/{rule_id}", headers=_h(token))
+    assert result.status_code == 200
+    assert result.json()["triggered"] is False
+
+
+async def test_two_rules_on_the_same_dataset_scan_independently(client):
+    """scan_all now materializes each scanned dataset once and shares that
+    connection across every rule targeting it (see alerts.py's _materialize) -
+    this checks that sharing doesn't cross-contaminate two different rules'
+    results for the same dataset."""
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token, DOWNTIME_CSV)
+
+    await client.post(
+        "/alerts/rules", headers=_h(token),
+        json={
+            "name": "Low threshold", "type": "machine_downtime", "dataset_id": dataset_id,
+            "config": {"duration_col": "downtime_minutes", "machine_col": "machine", "threshold": 5},
+        },
+    )
+    await client.post(
+        "/alerts/rules", headers=_h(token),
+        json={
+            "name": "High threshold", "type": "machine_downtime", "dataset_id": dataset_id,
+            "config": {"duration_col": "downtime_minutes", "machine_col": "machine", "threshold": 1000},
+        },
+    )
+
+    res = await client.post("/alerts/scan", headers=_h(token))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["evaluated_count"] == 2
+    by_name = {r["rule_name"]: r for r in body["results"]}
+    assert by_name["Low threshold"]["triggered"] is True
+    assert by_name["Low threshold"]["offenders"] == ["M1", "M2"]
+    assert by_name["High threshold"]["triggered"] is False
+
+
 async def test_alert_rule_not_found(client):
     token = await _register_and_login(client)
     res = await client.get("/alerts/rules", headers=_h(token))

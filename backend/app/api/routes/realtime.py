@@ -44,7 +44,7 @@ class StreamCreate(BaseModel):
     column_map: dict[str, str] = Field(default_factory=dict)
 
 
-async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStream) -> dict:
+def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
     """Live snapshot if this process has a running collector for this stream,
     else a definition-only snapshot (honest about "not running here" rather
     than silently showing stale/blank metrics - see module docstring on the
@@ -67,8 +67,13 @@ async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStr
             "last_tick_s": None,
             "metrics": {},
         }
-    snap["alerts"] = [vars(a) for a in await alerts_service.stream_alerts(db, org_id, stream.id)]
+    snap["alerts"] = [vars(a) for a in alerts]
     return snap
+
+
+async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStream) -> dict:
+    alerts = await alerts_service.stream_alerts(db, org_id, stream.id)
+    return _snapshot_dict(stream, alerts)
 
 
 def _start(stream: RealtimeStream, integration: Integration) -> None:
@@ -122,7 +127,9 @@ async def list_streams(current: CurrentUser = Depends(get_current_user), db: Asy
     rows = (
         await db.execute(select(RealtimeStream).where(RealtimeStream.org_id == current.org_id).order_by(RealtimeStream.name))
     ).scalars().all()
-    return {"streams": [await _snapshot_for(db, current.org_id, s) for s in rows]}
+    # One query for every stream's alert rules instead of one per stream.
+    alerts_by_stream = await alerts_service.stream_alerts_bulk(db, current.org_id, [s.id for s in rows])
+    return {"streams": [_snapshot_dict(s, alerts_by_stream.get(str(s.id), [])) for s in rows]}
 
 
 @router.get("/streams/{stream_id}/snapshot")

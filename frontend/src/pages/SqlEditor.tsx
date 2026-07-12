@@ -68,7 +68,7 @@ export function SqlEditor() {
   });
 
   const clearHistory = useMutation({
-    mutationFn: () => apiFetch("/datasets/query-history", { method: "DELETE" }),
+    mutationFn: () => apiFetch("/datasets/query-history?action=dataset.sql_query", { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["query-history"] }),
   });
 

@@ -32,14 +32,6 @@ async def list_rules(db: AsyncSession, org_id: uuid.UUID) -> list[AlertRule]:
     return list(result.scalars().all())
 
 
-async def get_rule_or_404(db: AsyncSession, org_id: uuid.UUID, rule_id: uuid.UUID) -> AlertRule:
-    result = await db.execute(select(AlertRule).where(AlertRule.org_id == org_id, AlertRule.id == rule_id))
-    rule = result.scalar_one_or_none()
-    if rule is None:
-        raise ValueError("Alert rule not found")
-    return rule
-
-
 async def create_rule(
     db: AsyncSession, *, org_id: uuid.UUID, created_by: uuid.UUID, name: str, type: str, severity: str,
     dataset_id: uuid.UUID | None, config: dict, enabled: bool = True,
@@ -54,8 +46,7 @@ async def create_rule(
     return rule
 
 
-async def update_rule(db: AsyncSession, org_id: uuid.UUID, rule_id: uuid.UUID, patch: dict) -> AlertRule:
-    rule = await get_rule_or_404(db, org_id, rule_id)
+async def update_rule(db: AsyncSession, rule: AlertRule, patch: dict) -> AlertRule:
     for key, value in patch.items():
         setattr(rule, key, value)
     await db.commit()
@@ -63,8 +54,7 @@ async def update_rule(db: AsyncSession, org_id: uuid.UUID, rule_id: uuid.UUID, p
     return rule
 
 
-async def delete_rule(db: AsyncSession, org_id: uuid.UUID, rule_id: uuid.UUID) -> None:
-    rule = await get_rule_or_404(db, org_id, rule_id)
+async def delete_rule(db: AsyncSession, rule: AlertRule) -> None:
     await db.delete(rule)
     await db.commit()
 
@@ -86,9 +76,11 @@ class AlertTrigger:
 
 
 def _missing_columns(dataset: Dataset, cols: dict[str, str | None]) -> str | None:
-    known = {c["name"] for c in dataset.columns}
-    missing = [label for label, col in cols.items() if col and col not in known]
-    return f"Column(s) not found in dataset: {', '.join(missing)}" if missing else None
+    """A soft warning (not an HTTPException) - an alert rule with a stale/unset
+    column mapping should show up as a failed trigger, not 500 the scan."""
+    missing = set(ds_service.missing_columns(dataset, cols.values()))
+    labels = [label for label, col in cols.items() if col in missing]
+    return f"Column(s) not found in dataset: {', '.join(labels)}" if labels else None
 
 
 def _time_filter_sql(cfg: dict) -> str:
@@ -137,7 +129,7 @@ def _offenders_suffix(offenders: list[str]) -> str:
 
 # ─── Evaluators ─────────────────────────────────────────────────────────────
 
-def _eval_machine_downtime(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
+def _eval_machine_downtime(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
     cfg = rule.config
     duration_col = cfg.get("duration_col", "")
     machine_col = cfg.get("machine_col") or ""
@@ -147,21 +139,16 @@ def _eval_machine_downtime(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     if col_warn:
         return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, col_warn)
 
-    rel = ds_service.dataset_relation(dataset)
     where_sql = _time_filter_sql(cfg)
-    con = ds_service.open_con()
-    try:
-        if machine_col:
-            by_machine = _sum_by_group(con, rel, duration_col, machine_col, where_sql)
-            offenders = sorted(m for m, total in by_machine if total > threshold)
-            value = max((total for _, total in by_machine), default=0.0)
-            message = f"Max downtime {value:.1f} min (threshold: {threshold:.1f} min)"
-        else:
-            value = _sum_total(con, rel, duration_col, where_sql)
-            offenders = [] if value <= threshold else ["All"]
-            message = f"Total downtime {value:.1f} min (threshold: {threshold:.1f} min)"
-    finally:
-        con.close()
+    if machine_col:
+        by_machine = _sum_by_group(con, rel, duration_col, machine_col, where_sql)
+        offenders = sorted(m for m, total in by_machine if total > threshold)
+        value = max((total for _, total in by_machine), default=0.0)
+        message = f"Max downtime {value:.1f} min (threshold: {threshold:.1f} min)"
+    else:
+        value = _sum_total(con, rel, duration_col, where_sql)
+        offenders = [] if value <= threshold else ["All"]
+        message = f"Total downtime {value:.1f} min (threshold: {threshold:.1f} min)"
 
     return AlertTrigger(
         str(rule.id), rule.name, rule.type, rule.severity, bool(offenders), round(value, 2), threshold,
@@ -169,7 +156,7 @@ def _eval_machine_downtime(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     )
 
 
-def _eval_quality(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
+def _eval_quality(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
     cfg = rule.config
     good_col = cfg.get("good_units_col", "")
     total_col = cfg.get("total_units_col", "")
@@ -180,21 +167,16 @@ def _eval_quality(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     if col_warn:
         return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold_pct, col_warn)
 
-    rel = ds_service.dataset_relation(dataset)
     where_sql = _time_filter_sql(cfg)
-    con = ds_service.open_con()
-    try:
-        if machine_col:
-            by_m = _sum2_by_group(con, rel, good_col, total_col, machine_col, where_sql)
-            rates = {m: (1 - g / t) * 100 if t > 0 else 0.0 for m, g, t in by_m}
-            offenders = sorted(m for m, rate in rates.items() if rate > threshold_pct)
-            value = max(rates.values(), default=0.0)
-        else:
-            total_good, total_all = _sum2_total(con, rel, good_col, total_col, where_sql)
-            value = (1 - total_good / total_all) * 100 if total_all > 0 else 0.0
-            offenders = [] if value <= threshold_pct else ["All"]
-    finally:
-        con.close()
+    if machine_col:
+        by_m = _sum2_by_group(con, rel, good_col, total_col, machine_col, where_sql)
+        rates = {m: (1 - g / t) * 100 if t > 0 else 0.0 for m, g, t in by_m}
+        offenders = sorted(m for m, rate in rates.items() if rate > threshold_pct)
+        value = max(rates.values(), default=0.0)
+    else:
+        total_good, total_all = _sum2_total(con, rel, good_col, total_col, where_sql)
+        value = (1 - total_good / total_all) * 100 if total_all > 0 else 0.0
+        offenders = [] if value <= threshold_pct else ["All"]
 
     message = f"Defect rate {value:.1f}% (threshold: {threshold_pct:.1f}%)" + _offenders_suffix(offenders)
     return AlertTrigger(
@@ -203,7 +185,7 @@ def _eval_quality(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     )
 
 
-def _eval_inventory(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
+def _eval_inventory(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
     cfg = rule.config
     qty_col = cfg.get("quantity_col", "")
     item_col = cfg.get("item_col") or ""
@@ -213,21 +195,16 @@ def _eval_inventory(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     if col_warn:
         return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, col_warn)
 
-    rel = ds_service.dataset_relation(dataset)
     where_sql = _time_filter_sql(cfg)
-    con = ds_service.open_con()
-    try:
-        if item_col:
-            by_item = _sum_by_group(con, rel, qty_col, item_col, where_sql)
-            offenders = sorted(i for i, qty in by_item if qty < threshold)
-            value = min((qty for _, qty in by_item), default=0.0)
-        else:
-            value = _sum_total(con, rel, qty_col, where_sql)
-            offenders = [] if value >= threshold else ["All"]
-    finally:
-        con.close()
+    if item_col:
+        by_item = _sum_by_group(con, rel, qty_col, item_col, where_sql)
+        offenders = sorted(i for i, qty in by_item if qty < threshold)
+        value = min((qty for _, qty in by_item), default=0.0)
+    else:
+        value = _sum_total(con, rel, qty_col, where_sql)
+        offenders = [] if value >= threshold else ["All"]
 
-    suffix = f" — below threshold: {', '.join(offenders[:_MAX_OFFENDERS_SHOWN])}" if offenders else ""
+    suffix = _offenders_suffix(offenders)
     message = f"Min stock {value:.0f} units (threshold: {threshold:.0f})" + suffix
     return AlertTrigger(
         str(rule.id), rule.name, rule.type, rule.severity, bool(offenders), round(value, 2), threshold,
@@ -235,7 +212,7 @@ def _eval_inventory(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     )
 
 
-def _eval_production_target(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
+def _eval_production_target(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
     cfg = rule.config
     actual_col = cfg.get("actual_col", "")
     target_col = cfg.get("target_col") or ""
@@ -253,32 +230,27 @@ def _eval_production_target(rule: AlertRule, dataset: Dataset) -> AlertTrigger:
     if col_warn:
         return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, miss_threshold, col_warn)
 
-    rel = ds_service.dataset_relation(dataset)
     where_sql = _time_filter_sql(cfg)
-    con = ds_service.open_con()
-    try:
-        if group_col:
-            rows = (
-                _sum2_by_group(con, rel, actual_col, target_col, group_col, where_sql) if target_col
-                else [(g, actual, 0.0) for g, actual in _sum_by_group(con, rel, actual_col, group_col, where_sql)]
-            )
-            offenders: list[str] = []
-            worst = 0.0
-            for g, actual, tgt in rows:
-                t = tgt if target_col else float(target_value or 0)
-                if t > 0:
-                    miss = (1 - actual / t) * 100
-                    worst = max(worst, miss)
-                    if miss > miss_threshold:
-                        offenders.append(g)
-            value = worst
-        else:
-            total_actual = _sum_total(con, rel, actual_col, where_sql)
-            total_target = _sum_total(con, rel, target_col, where_sql) if target_col else float(target_value or 0)
-            value = (1 - total_actual / total_target) * 100 if total_target > 0 else 0.0
-            offenders = [] if value <= miss_threshold else ["All"]
-    finally:
-        con.close()
+    if group_col:
+        rows = (
+            _sum2_by_group(con, rel, actual_col, target_col, group_col, where_sql) if target_col
+            else [(g, actual, 0.0) for g, actual in _sum_by_group(con, rel, actual_col, group_col, where_sql)]
+        )
+        offenders: list[str] = []
+        worst = 0.0
+        for g, actual, tgt in rows:
+            t = tgt if target_col else float(target_value or 0)
+            if t > 0:
+                miss = (1 - actual / t) * 100
+                worst = max(worst, miss)
+                if miss > miss_threshold:
+                    offenders.append(g)
+        value = worst
+    else:
+        total_actual = _sum_total(con, rel, actual_col, where_sql)
+        total_target = _sum_total(con, rel, target_col, where_sql) if target_col else float(target_value or 0)
+        value = (1 - total_actual / total_target) * 100 if total_target > 0 else 0.0
+        offenders = [] if value <= miss_threshold else ["All"]
 
     message = f"Production {value:.1f}% below target (threshold: {miss_threshold:.1f}%)" + _offenders_suffix(offenders)
     return AlertTrigger(
@@ -335,7 +307,19 @@ _DATASET_EVALUATORS = {
 }
 
 
-async def evaluate_rule(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
+def _materialize(con, dataset: Dataset) -> str:
+    """Read a dataset's file into an in-memory table once per connection, so N
+    rules sharing one dataset in a single scan_all call don't each re-parse
+    the file from disk via their own read_csv_auto/read_parquet query."""
+    rel = ds_service.dataset_relation(dataset)
+    con.execute(f"CREATE TEMP TABLE ds AS SELECT * FROM {rel}")  # nosec B608 - rel is dataset_relation()'s quote-escaped relation string
+    return "ds"
+
+
+async def evaluate_rule(
+    db: AsyncSession, org_id: uuid.UUID, rule: AlertRule,
+    *, dataset: Dataset | None = None, con=None, rel: str | None = None,
+) -> AlertTrigger:
     if rule.type == "stream_metric":
         return eval_stream_metric(rule)
     evaluator = _DATASET_EVALUATORS.get(rule.type)
@@ -343,20 +327,61 @@ async def evaluate_rule(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) ->
         raise ValueError(f"Unknown alert type: {rule.type}")
     if rule.dataset_id is None:
         return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, "No dataset configured.")
-    dataset = await ds_service.get_dataset_or_404(db, org_id, rule.dataset_id)
-    return evaluator(rule, dataset)
+    if dataset is None:
+        dataset = await ds_service.get_dataset_or_404(db, org_id, rule.dataset_id)
+    if con is not None:
+        return evaluator(rule, dataset, con, rel)
+    con = ds_service.open_con()
+    try:
+        return evaluator(rule, dataset, con, ds_service.dataset_relation(dataset))
+    finally:
+        con.close()
+
+
+async def evaluate_rule_safe(
+    db: AsyncSession, org_id: uuid.UUID, rule: AlertRule,
+    *, dataset: Dataset | None = None, con=None, rel: str | None = None,
+) -> AlertTrigger:
+    """evaluate_rule, with a bad/stale rule config (e.g. a required column left
+    unset) turned into a failed AlertTrigger instead of a raised exception -
+    shared by scan_all and the single-rule "Test" scan so both give the same
+    graceful result instead of one of them 500ing."""
+    try:
+        return await evaluate_rule(db, org_id, rule, dataset=dataset, con=con, rel=rel)
+    except Exception as exc:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, f"Error: {exc}")
 
 
 async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
     rules = [r for r in await list_rules(db, org_id) if r.enabled]
-    results = []
+
+    # Group dataset-backed rules by dataset so N rules sharing one dataset
+    # read its file from disk once instead of N times.
+    by_dataset: dict[uuid.UUID, list[AlertRule]] = {}
+    solo: list[AlertRule] = []
     for rule in rules:
+        if rule.type != "stream_metric" and rule.dataset_id is not None:
+            by_dataset.setdefault(rule.dataset_id, []).append(rule)
+        else:
+            solo.append(rule)
+
+    results = [await evaluate_rule_safe(db, org_id, rule) for rule in solo]
+
+    for dataset_id, dataset_rules in by_dataset.items():
         try:
-            results.append(await evaluate_rule(db, org_id, rule))
+            dataset = await ds_service.get_dataset_or_404(db, org_id, dataset_id)
+            con = ds_service.open_con()
+            try:
+                rel = _materialize(con, dataset)
+                for rule in dataset_rules:
+                    results.append(await evaluate_rule_safe(db, org_id, rule, dataset=dataset, con=con, rel=rel))
+            finally:
+                con.close()
         except Exception as exc:
-            results.append(AlertTrigger(
-                str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, f"Error: {exc}",
-            ))
+            for rule in dataset_rules:
+                results.append(AlertTrigger(
+                    str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, f"Error: {exc}",
+                ))
     return results
 
 
@@ -365,9 +390,32 @@ async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUI
     by realtime.py's SSE feed to attach alarm state to each tick snapshot."""
     result = await db.execute(
         select(AlertRule).where(
-            AlertRule.org_id == org_id, AlertRule.enabled.is_(True), AlertRule.type == "stream_metric",
+            AlertRule.org_id == org_id,
+            AlertRule.enabled.is_(True),
+            AlertRule.type == "stream_metric",
+            AlertRule.config["stream_id"].as_string() == str(stream_id),
         )
     )
-    sid = str(stream_id)
-    rules = [r for r in result.scalars().all() if r.config.get("stream_id") == sid]
-    return [eval_stream_metric(r) for r in rules]
+    return [eval_stream_metric(r) for r in result.scalars().all()]
+
+
+async def stream_alerts_bulk(
+    db: AsyncSession, org_id: uuid.UUID, stream_ids: list[uuid.UUID],
+) -> dict[str, list[AlertTrigger]]:
+    """stream_alerts for N streams in one query - used by realtime.py's
+    list_streams so listing streams isn't a query per stream."""
+    if not stream_ids:
+        return {}
+    sids = [str(s) for s in stream_ids]
+    result = await db.execute(
+        select(AlertRule).where(
+            AlertRule.org_id == org_id,
+            AlertRule.enabled.is_(True),
+            AlertRule.type == "stream_metric",
+            AlertRule.config["stream_id"].as_string().in_(sids),
+        )
+    )
+    by_stream: dict[str, list[AlertTrigger]] = {}
+    for rule in result.scalars().all():
+        by_stream.setdefault(rule.config.get("stream_id"), []).append(eval_stream_metric(rule))
+    return by_stream

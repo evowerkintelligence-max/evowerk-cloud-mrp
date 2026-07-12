@@ -70,8 +70,9 @@ async def delete_query_history_entry(db: AsyncSession, org_id: uuid.UUID, entry_
     await db.commit()
 
 
-async def clear_query_history(db: AsyncSession, org_id: uuid.UUID) -> None:
-    await db.execute(
-        delete(AuditLog).where(AuditLog.org_id == org_id, AuditLog.action.in_(QUERY_ACTIONS))
-    )
+async def clear_query_history(db: AsyncSession, org_id: uuid.UUID, *, action: str | None = None) -> None:
+    stmt = delete(AuditLog).where(AuditLog.org_id == org_id, AuditLog.action.in_(QUERY_ACTIONS))
+    if action is not None:
+        stmt = stmt.where(AuditLog.action == action)
+    await db.execute(stmt)
     await db.commit()

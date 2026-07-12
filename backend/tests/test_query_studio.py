@@ -106,6 +106,29 @@ async def test_history_filters_by_dataset_and_deletes(client):
     assert (await client.get("/datasets/query-history", headers=_h(token))).json() == []
 
 
+async def test_clear_history_scoped_to_action_leaves_other_action_intact(client):
+    """SqlEditor's "Clear all" only clears SQL history (?action=dataset.sql_query)
+    - it must not also wipe dataset.query (query-builder) history, a different
+    feature not shown on that page."""
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+
+    await client.post(f"/datasets/{dataset_id}/query", headers=_h(token), json=_base_query())
+    await client.post(
+        f"/datasets/{dataset_id}/sql", headers=_h(token), json={"sql": "SELECT * FROM dataset LIMIT 5"}
+    )
+    assert len((await client.get("/datasets/query-history", headers=_h(token))).json()) == 2
+
+    cleared = await client.delete(
+        "/datasets/query-history", params={"action": "dataset.sql_query"}, headers=_h(token)
+    )
+    assert cleared.status_code == 204
+
+    remaining = (await client.get("/datasets/query-history", headers=_h(token))).json()
+    assert len(remaining) == 1
+    assert remaining[0]["action"] == "dataset.query"
+
+
 async def test_delete_unknown_history_entry_404s(client):
     token = await _register_and_login(client)
     res = await client.delete(

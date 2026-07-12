@@ -416,6 +416,7 @@ export function Alerts() {
 
       {showForm && (
         <RuleForm
+          key={editing?.id ?? "new"}
           editing={editing}
           onDone={() => {
             setShowForm(false);

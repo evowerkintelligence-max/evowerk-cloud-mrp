@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
+from app.models.alert import AlertRule
 from app.services import alerts as service
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -69,10 +70,6 @@ class ScanResponse(BaseModel):
     evaluated_count: int
 
 
-def _wrap_not_found(exc: ValueError) -> HTTPException:
-    return HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
-
-
 # ─── Rule CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("/rules", response_model=list[AlertRuleResponse])
@@ -100,20 +97,16 @@ async def update_rule(
     db: AsyncSession = Depends(get_db),
 ):
     patch = payload.model_dump(exclude_unset=True)
-    try:
-        return await service.update_rule(db, current.org_id, rule_id, patch)
-    except ValueError as exc:
-        raise _wrap_not_found(exc) from exc
+    rule = await get_or_404(db, AlertRule, current.org_id, rule_id, "Alert rule not found")
+    return await service.update_rule(db, rule, patch)
 
 
 @router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_rule(
     rule_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    try:
-        await service.delete_rule(db, current.org_id, rule_id)
-    except ValueError as exc:
-        raise _wrap_not_found(exc) from exc
+    rule = await get_or_404(db, AlertRule, current.org_id, rule_id, "Alert rule not found")
+    await service.delete_rule(db, rule)
 
 
 # ─── Scan ───────────────────────────────────────────────────────────────────
@@ -132,15 +125,12 @@ async def scan_all(current: CurrentUser = Depends(get_current_user), db: AsyncSe
 async def scan_one(
     rule_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    try:
-        rule = await service.get_rule_or_404(db, current.org_id, rule_id)
-    except ValueError as exc:
-        raise _wrap_not_found(exc) from exc
+    rule = await get_or_404(db, AlertRule, current.org_id, rule_id, "Alert rule not found")
     if not rule.enabled:
         return AlertTriggerResponse(
             rule_id=str(rule.id), rule_name=rule.name, type=rule.type, severity=rule.severity,
             triggered=False, value=0.0, threshold=0.0, message="Rule is disabled — enable it to evaluate.",
             evaluated_at=datetime.now(timezone.utc).isoformat(),
         )
-    result = await service.evaluate_rule(db, current.org_id, rule)
+    result = await service.evaluate_rule_safe(db, current.org_id, rule)
     return AlertTriggerResponse(**vars(result))

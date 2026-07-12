@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from app.services.reports import _excel_safe
+
 pytestmark = pytest.mark.asyncio
+
+
+def test_excel_safe_quotes_formulas_but_not_negative_numbers():
+    assert _excel_safe("=cmd|'/c calc'!A0") == "'=cmd|'/c calc'!A0"
+    assert _excel_safe("-5.20") == "-5.20"
+    assert _excel_safe("-1,234.56") == "-1,234.56"
+    assert _excel_safe("+15.0") == "+15.0"
 
 PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit  # pragma: allowlist secret
 

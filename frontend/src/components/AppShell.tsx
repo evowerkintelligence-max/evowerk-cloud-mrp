@@ -8,6 +8,7 @@ import {
   CalendarRange,
   Database,
   FileStack,
+  FlaskConical,
   Gauge,
   LayoutDashboard,
   LayoutGrid,
@@ -18,6 +19,7 @@ import {
   Radio,
   ShoppingCart,
   Target,
+  Terminal,
   TimerOff,
   Users,
   Warehouse,
@@ -45,6 +47,7 @@ const NAV = [
 
 const ANALYTICS_NAV = [
   { to: "/datasets", label: "Datasets", icon: Database, end: false },
+  { to: "/sql-editor", label: "SQL Editor", icon: Terminal, end: false },
   { to: "/analytics/oee", label: "OEE", icon: Gauge, end: false },
   { to: "/analytics/downtime", label: "Downtime", icon: TimerOff, end: false },
   { to: "/analytics/throughput", label: "Throughput", icon: BarChart3, end: false },
@@ -58,6 +61,7 @@ const ANALYTICS_NAV = [
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
   { to: "/report-builder", label: "Report Builder", icon: FileStack, end: false },
   { to: "/automl", label: "AutoML", icon: Brain, end: false },
+  { to: "/simulation", label: "Simulation", icon: FlaskConical, end: false },
 ];
 
 function Brand() {

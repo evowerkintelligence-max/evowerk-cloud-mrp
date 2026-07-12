@@ -30,6 +30,7 @@ from app.api.routes import (
     reports,
     scrap,
     shifts,
+    simulation,
     spc,
     suppliers,
     throughput,
@@ -88,6 +89,7 @@ app.include_router(downtime.router)
 app.include_router(throughput.router)
 app.include_router(scrap.router)
 app.include_router(shifts.router)
+app.include_router(simulation.router)
 app.include_router(spc.router)
 app.include_router(quality.router)
 app.include_router(process_mining.router)

@@ -13,6 +13,8 @@ import { Warehouse } from "./pages/Warehouse";
 import { Planning } from "./pages/Planning";
 import { Datasets } from "./pages/analytics/Datasets";
 import { DatasetDetail } from "./pages/analytics/DatasetDetail";
+import { SqlEditor } from "./pages/SqlEditor";
+import { Simulation } from "./pages/Simulation";
 import { Oee } from "./pages/analytics/Oee";
 import { Downtime } from "./pages/analytics/Downtime";
 import { Throughput } from "./pages/analytics/Throughput";
@@ -75,6 +77,8 @@ export function App() {
         <Route path="/analytics/spc" element={<Spc />} />
         <Route path="/datasets" element={<Datasets />} />
         <Route path="/datasets/:id" element={<DatasetDetail />} />
+        <Route path="/sql-editor" element={<SqlEditor />} />
+        <Route path="/simulation" element={<Simulation />} />
         <Route path="/ask" element={<Ask />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/bi" element={<BiDashboards />} />

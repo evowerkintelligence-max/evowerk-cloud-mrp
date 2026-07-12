@@ -89,10 +89,12 @@ async def test_render_custom_report_all_formats(client):
     created = await client.post("/reports/custom", headers=headers, json=_report_body(dataset_id, chart_id))
     report_id = created.json()["id"]
 
-    for fmt in ("html", "csv", "pdf"):
+    for fmt in ("html", "csv", "pdf", "xlsx"):
         res = await client.get(f"/reports/custom/{report_id}/render?format={fmt}", headers=headers)
         assert res.status_code == 200, res.text
         assert len(res.content) > 0
+    xlsx_res = await client.get(f"/reports/custom/{report_id}/render?format=xlsx", headers=headers)
+    assert xlsx_res.content.startswith(b"PK\x03\x04")
 
     html_body = (await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)).content
     assert b"Weekly ops summary" in html_body
@@ -137,6 +139,97 @@ async def test_bi_chart_section_with_unknown_chart_404s_on_render(client):
     report_id = created.json()["id"]
 
     res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 404
+
+
+async def test_table_section_escapes_formula_injection_in_csv_and_xlsx(client):
+    """A dataset cell starting with =/+/-/@ opens as a live formula in Excel
+    on double-click (e.g. "=cmd|'/c calc'!A0") - both exporters must neutralize
+    it with a leading quote rather than passing it through verbatim."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(
+        client, token, content=b"sku,note\nA-1,=cmd|'/c calc'!A0\n", filename="formulas.csv"
+    )
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "Formula check",
+            "sections": [{
+                "type": "table", "title": "Rows", "dataset_id": dataset_id,
+                "query": {"select": [{"column": "sku"}, {"column": "note"}]},
+            }],
+        },
+    )
+    report_id = created.json()["id"]
+
+    csv_res = await client.get(f"/reports/custom/{report_id}/render?format=csv", headers=headers)
+    assert b",=cmd" not in csv_res.content  # must be quote-prefixed, not raw after the delimiter
+    assert b",'=cmd" in csv_res.content
+
+    xlsx_res = await client.get(f"/reports/custom/{report_id}/render?format=xlsx", headers=headers)
+    assert xlsx_res.status_code == 200
+    assert xlsx_res.content.startswith(b"PK\x03\x04")
+
+
+async def test_narrate_custom_report_falls_back_without_llm_key(client):
+    """No GEMINI_API_KEY is configured in tests, so narration always takes the
+    deterministic fallback path - a real assertion on grounded, non-empty
+    text without needing to mock the LLM."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+    chart_id = await _create_chart(client, token, dataset_id)
+
+    created = await client.post("/reports/custom", headers=headers, json=_report_body(dataset_id, chart_id))
+    report_id = created.json()["id"]
+
+    res = await client.post(f"/reports/custom/{report_id}/narrate", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["executive_summary"]
+    assert len(body["sections"]) == 5
+    assert body["sections"][0]["title"] == "Overview"
+    assert all(s["narrative"] for s in body["sections"])
+
+
+async def test_narrate_custom_report_rejects_unknown_style(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "Empty", "sections": [{"type": "text", "text": "hi"}]},
+    )
+    report_id = created.json()["id"]
+
+    res = await client.post(
+        f"/reports/custom/{report_id}/narrate", params={"style": "haiku"}, headers=headers
+    )
+    assert res.status_code == 400
+
+
+async def test_narrate_report_kind(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post("/reports/inventory-analytics/narrate", headers=headers)
+    assert res.status_code == 200, res.text
+    assert res.json()["executive_summary"]
+
+
+async def test_narrate_custom_report_cross_org_isolation(client):
+    token_a = await _register_and_login(client, email="na@example.com", org_name="NarrateOrgA")
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    created = await client.post(
+        "/reports/custom", headers=headers_a,
+        json={"name": "OrgA report", "sections": [{"type": "text", "text": "secret"}]},
+    )
+    report_id = created.json()["id"]
+
+    token_b = await _register_and_login(client, email="nb@example.com", org_name="NarrateOrgB")
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+    res = await client.post(f"/reports/custom/{report_id}/narrate", headers=headers_b)
     assert res.status_code == 404
 
 

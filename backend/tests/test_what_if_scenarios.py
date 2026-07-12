@@ -79,6 +79,67 @@ async def test_scenario_execute_with_param_override(client):
     assert run_m1.json()[0]["result"]["rows"][0]["total_units"] == 30
 
 
+async def test_list_and_export_scenario_runs(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+
+    create = await client.post(
+        "/scenarios", headers=_h(token),
+        json={"name": "Base case", "dataset_id": dataset_id, "base_query": _base_query()},
+    )
+    scenario_id = create.json()["id"]
+
+    exec_res = await client.post(f"/scenarios/{scenario_id}/execute", headers=_h(token), json={"param_sets": [{}]})
+    assert exec_res.status_code == 200, exec_res.text
+
+    listed = await client.get(f"/scenarios/{scenario_id}/runs", headers=_h(token))
+    assert listed.status_code == 200, listed.text
+    runs = listed.json()
+    assert len(runs) == 1
+    run_id = runs[0]["id"]
+    assert runs[0]["result"]["rows"][0]["total_units"] == 42
+
+    csv_res = await client.get(f"/scenarios/{scenario_id}/runs/{run_id}/export", headers=_h(token))
+    assert csv_res.status_code == 200, csv_res.text
+    assert csv_res.headers["content-type"].startswith("text/csv")
+    assert b"total_units" in csv_res.content
+    assert b"42" in csv_res.content
+
+    xlsx_res = await client.get(
+        f"/scenarios/{scenario_id}/runs/{run_id}/export", params={"fmt": "xlsx"}, headers=_h(token)
+    )
+    assert xlsx_res.status_code == 200, xlsx_res.text
+    assert xlsx_res.content.startswith(b"PK\x03\x04")
+
+    bad_fmt = await client.get(
+        f"/scenarios/{scenario_id}/runs/{run_id}/export", params={"fmt": "pdf"}, headers=_h(token)
+    )
+    assert bad_fmt.status_code == 400
+
+    missing_run = "00000000-0000-0000-0000-000000000000"
+    not_found = await client.get(f"/scenarios/{scenario_id}/runs/{missing_run}/export", headers=_h(token))
+    assert not_found.status_code == 404
+
+
+async def test_scenario_run_export_tenant_isolation(client):
+    token_a = await _register_and_login(client, email="runa@example.com", org_name="RunOrgA")
+    dataset_id = await _upload(client, token_a)
+    create = await client.post(
+        "/scenarios", headers=_h(token_a),
+        json={"name": "Base case", "dataset_id": dataset_id, "base_query": _base_query()},
+    )
+    scenario_id = create.json()["id"]
+    exec_res = await client.post(f"/scenarios/{scenario_id}/execute", headers=_h(token_a), json={"param_sets": [{}]})
+    run_id = (await client.get(f"/scenarios/{scenario_id}/runs", headers=_h(token_a))).json()[0]["id"]
+    assert exec_res.status_code == 200
+
+    token_b = await _register_and_login(client, email="runb@example.com", org_name="RunOrgB")
+    res = await client.get(f"/scenarios/{scenario_id}/runs/{run_id}/export", headers=_h(token_b))
+    assert res.status_code == 404
+    res_list = await client.get(f"/scenarios/{scenario_id}/runs", headers=_h(token_b))
+    assert res_list.status_code == 404
+
+
 async def test_scenario_compare(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

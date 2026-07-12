@@ -59,7 +59,15 @@ def _params(kind: str, item_id: str) -> dict:
 
 
 @pytest.mark.parametrize("kind", ALL_KINDS)
-@pytest.mark.parametrize("fmt,media_type", [("html", "text/html"), ("csv", "text/csv"), ("pdf", "application/pdf")])
+@pytest.mark.parametrize(
+    "fmt,media_type",
+    [
+        ("html", "text/html"),
+        ("csv", "text/csv"),
+        ("pdf", "application/pdf"),
+        ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ],
+)
 async def test_every_kind_renders_in_every_format(client, kind, fmt, media_type):
     _, headers = await _register_and_login(client)
     item = await _create_item(client, headers, "WIDGET-1", "Widget", lead_time_days=7)
@@ -79,6 +87,9 @@ async def test_every_kind_renders_in_every_format(client, kind, fmt, media_type)
     if fmt == "csv":
         # utf-8-sig BOM so Excel on Windows reads it as UTF-8.
         assert res.content.startswith(b"\xef\xbb\xbf")
+    if fmt == "xlsx":
+        # xlsx is a zip archive - PK magic bytes confirm openpyxl wrote a real workbook.
+        assert res.content.startswith(b"PK\x03\x04")
 
 
 async def test_mrp_plan_report_contains_the_shortfall(client):
@@ -241,7 +252,7 @@ async def test_unknown_kind_and_format_are_rejected(client):
     _, headers = await _register_and_login(client)
     assert (await client.get("/reports/nope", headers=headers)).status_code == 404
     assert (
-        await client.get("/reports/rca", params={"format": "xlsx"}, headers=headers)
+        await client.get("/reports/rca", params={"format": "docx"}, headers=headers)
     ).status_code == 400
 
 

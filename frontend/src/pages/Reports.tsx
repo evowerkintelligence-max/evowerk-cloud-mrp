@@ -11,7 +11,7 @@ interface ItemResponse {
 }
 
 type Kind = "mrp-plan" | "inventory-analytics" | "rca" | "scenario" | "dataset";
-type Format = "pdf" | "csv" | "html";
+type Format = "pdf" | "csv" | "html" | "xlsx";
 
 const KINDS: { kind: Kind; label: string; description: string }[] = [
   {
@@ -253,6 +253,9 @@ export function Reports() {
         </button>{" "}
         <button onClick={() => download("html")} disabled={!ready}>
           Download HTML
+        </button>{" "}
+        <button onClick={() => download("xlsx")} disabled={!ready}>
+          Download XLSX
         </button>
       </section>
 

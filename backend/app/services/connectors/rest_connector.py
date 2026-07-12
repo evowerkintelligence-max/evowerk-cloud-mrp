@@ -148,7 +148,8 @@ class RestConnector:
         import urllib.error
         req = self._build_request(url)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            # nosec B310 - base_url's scheme is restricted to http/https in __init__ above.
+            with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
                 body = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")

@@ -58,6 +58,16 @@ class PiConnector:
 
         if not self.base_url:
             raise ValueError("base_url is required for PI Web API connector (e.g. https://piserver/piwebapi)")
+
+        # Every _get() call below feeds this into urllib.request.urlopen() - restrict to
+        # http(s) so a config can't point the server at file://, ftp://, etc. (same
+        # guard as connectors/rest_connector.py's RestConnector.__init__).
+        from urllib.parse import urlparse
+
+        scheme = (urlparse(self.base_url).scheme or "").lower()
+        if scheme not in ("http", "https"):
+            raise ValueError(f"base_url must use http or https (got '{scheme or 'no scheme'}')")
+
         if not self.tag_names:
             raise ValueError("tags is required — comma-separated PI tag names")
 
@@ -75,7 +85,8 @@ class PiConnector:
         req.add_header("Accept", "application/json")
         ctx = self._ssl_ctx()
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+            # nosec B310 - base_url's scheme is restricted to http/https in __init__ above.
+            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:  # nosec B310
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")

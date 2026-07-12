@@ -71,7 +71,10 @@ class OracleConnector:
 
     def preview(self, n: int = 10) -> list[dict[str, Any]]:
         eng = self._engine()
-        limited = f"SELECT * FROM ({self.query}) WHERE ROWNUM <= {n}"
+        # nosec B608 - self.query is admin-configured connector config, not per-request
+        # user input; it's already executed unwrapped in iter_rows/fetch_all below, so
+        # this preview wrapper grants no privilege the connector doesn't already have.
+        limited = f"SELECT * FROM ({self.query}) WHERE ROWNUM <= {n}"  # nosec B608
         with eng.connect() as conn:
             result = conn.execute(text(limited))
             cols = list(result.keys())

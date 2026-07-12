@@ -52,6 +52,12 @@ class Settings(BaseSettings):
         "csv", "tsv", "xlsx", "xls", "json", "jsonl", "ndjson", "parquet",
     ]
 
+    # Gemini client for LLM-backed features (data chat, computer vision, report
+    # narration). Optional: unset means every caller uses its deterministic
+    # fallback path instead of a live model call - see app/services/llm.py.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+
 
 @lru_cache
 def get_settings() -> Settings:

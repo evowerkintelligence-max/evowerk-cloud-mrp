@@ -136,11 +136,10 @@ async def _items_relation_sql(db: AsyncSession, con: duckdb.DuckDBPyConnection, 
     con.execute(f"CREATE TEMP VIEW items AS SELECT * FROM (VALUES {rows}) AS t({', '.join(col_names)})")  # nosec B608
 
 
-async def run_query(db: AsyncSession, dataset: Dataset, org_id: uuid.UUID, req: DatasetQueryRequest) -> dict:
-    join_enabled = req.join_items_on is not None
-    if join_enabled:
-        ds_service.validate_columns(dataset, [req.join_items_on])
-
+def _build_sql(dataset: Dataset, req: DatasetQueryRequest, *, join_enabled: bool) -> str:
+    """Compile a DatasetQueryRequest to its SQL text - the same builder
+    run_query executes, split out so explain_query can show it without
+    opening a connection or touching data (see app/api/routes for /explain)."""
     select_sql: list[str] = []
     used_aliases: set[str] = set()
     for idx, f in enumerate(req.select):
@@ -172,24 +171,45 @@ async def run_query(db: AsyncSession, dataset: Dataset, org_id: uuid.UUID, req: 
     where_sql = [_filter_sql(dataset, f, join_enabled=join_enabled) for f in req.filters]
 
     rel = ds_service.dataset_relation(dataset)
+    from_sql = f"{rel} d"
+    if join_enabled:
+        join_col_sql = _column_sql(dataset, req.join_items_on, join_enabled=False)
+        # TRIM both sides: real spreadsheets routinely have padded sku cells,
+        # and an exact-match join would silently drop those rows to NULL.
+        from_sql += f' LEFT JOIN items i ON TRIM(CAST({join_col_sql} AS VARCHAR)) = TRIM(i."sku")'
+
+    sql = f"SELECT {', '.join(select_sql)} FROM {from_sql}"  # nosec B608 - select_sql/from_sql built entirely from qi()-quoted, allow-listed columns above
+    if where_sql:
+        sql += f" WHERE {' AND '.join(where_sql)}"
+    if group_by_sql:
+        sql += f" GROUP BY {', '.join(group_by_sql)}"
+    if order_by_sql:
+        sql += f" ORDER BY {order_by_sql} {'DESC' if req.order_desc else 'ASC'}"
+    sql += f" LIMIT {req.limit}"
+    return sql
+
+
+def explain_query(dataset: Dataset, req: DatasetQueryRequest) -> str:
+    """The SQL a run_query call would execute for this request, without
+    executing it - lets a query-builder UI show "what will actually run"
+    before spending a real query against the dataset."""
+    join_enabled = req.join_items_on is not None
+    if join_enabled:
+        ds_service.validate_columns(dataset, [req.join_items_on])
+    return _build_sql(dataset, req, join_enabled=join_enabled)
+
+
+async def run_query(db: AsyncSession, dataset: Dataset, org_id: uuid.UUID, req: DatasetQueryRequest) -> dict:
+    join_enabled = req.join_items_on is not None
+    if join_enabled:
+        ds_service.validate_columns(dataset, [req.join_items_on])
+
+    sql = _build_sql(dataset, req, join_enabled=join_enabled)
+
     con = ds_service.open_con()
     try:
-        from_sql = f"{rel} d"
         if join_enabled:
             await _items_relation_sql(db, con, org_id)
-            join_col_sql = _column_sql(dataset, req.join_items_on, join_enabled=False)
-            # TRIM both sides: real spreadsheets routinely have padded sku cells,
-            # and an exact-match join would silently drop those rows to NULL.
-            from_sql += f' LEFT JOIN items i ON TRIM(CAST({join_col_sql} AS VARCHAR)) = TRIM(i."sku")'
-
-        sql = f"SELECT {', '.join(select_sql)} FROM {from_sql}"  # nosec B608 - select_sql/from_sql built entirely from qi()-quoted, allow-listed columns above
-        if where_sql:
-            sql += f" WHERE {' AND '.join(where_sql)}"
-        if group_by_sql:
-            sql += f" GROUP BY {', '.join(group_by_sql)}"
-        if order_by_sql:
-            sql += f" ORDER BY {order_by_sql} {'DESC' if req.order_desc else 'ASC'}"
-        sql += f" LIMIT {req.limit}"
 
         try:
             cur = con.execute(sql)

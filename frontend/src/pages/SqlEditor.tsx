@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Alert } from "@/components/ui/alert";
@@ -16,15 +16,34 @@ interface QueryResult {
   rows: Record<string, unknown>[];
 }
 
+interface HistoryEntry {
+  id: string;
+  action: string;
+  dataset_id: string | null;
+  sql: string | null;
+  created_at: string;
+}
+
 const DEFAULT_SQL = "SELECT * FROM dataset LIMIT 100";
 
 export function SqlEditor() {
+  const qc = useQueryClient();
   const datasets = useDatasets();
   const [datasetId, setDatasetId] = useState("");
   const [sql, setSql] = useState(DEFAULT_SQL);
 
   const activeDataset = datasets.data?.find((d) => d.id === datasetId) ?? datasets.data?.[0];
   const effectiveDatasetId = datasetId || activeDataset?.id || "";
+
+  const history = useQuery<HistoryEntry[]>({
+    queryKey: ["query-history"],
+    queryFn: async () => {
+      const res = await apiFetch("/datasets/query-history?limit=20");
+      if (!res.ok) throw new Error("Failed to load history");
+      return res.json();
+    },
+  });
+  const sqlHistory = (history.data ?? []).filter((h) => h.action === "dataset.sql_query");
 
   const query = useMutation({
     mutationFn: async () => {
@@ -35,6 +54,22 @@ export function SqlEditor() {
       if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
       return res.json() as Promise<QueryResult>;
     },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["query-history"] }),
+  });
+
+  function rerun(entry: HistoryEntry) {
+    if (entry.dataset_id) setDatasetId(entry.dataset_id);
+    if (entry.sql) setSql(entry.sql);
+  }
+
+  const deleteEntry = useMutation({
+    mutationFn: (id: string) => apiFetch(`/datasets/query-history/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["query-history"] }),
+  });
+
+  const clearHistory = useMutation({
+    mutationFn: () => apiFetch("/datasets/query-history", { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["query-history"] }),
   });
 
   return (
@@ -130,6 +165,38 @@ export function SqlEditor() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>History</CardTitle>
+          {sqlHistory.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => clearHistory.mutate()}>
+              Clear all
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {sqlHistory.length === 0 && (
+            <p className="text-sm text-muted-foreground">Queries you run will show up here for quick rerun.</p>
+          )}
+          {sqlHistory.map((h) => (
+            <div key={h.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+              <div className="min-w-0">
+                <code className="block truncate text-xs">{h.sql}</code>
+                <span className="text-xs text-muted-foreground">{new Date(h.created_at).toLocaleString()}</span>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <Button variant="secondary" size="sm" onClick={() => rerun(h)}>
+                  Rerun
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => deleteEntry.mutate(h.id)}>
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
     </div>
   );
 }

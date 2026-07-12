@@ -34,13 +34,6 @@ interface AutoMLSchema {
   categorical_known_values: Record<string, string[]>;
 }
 
-const STATUS_VARIANT: Record<string, "neutral" | "success" | "danger" | "info"> = {
-  queued: "neutral",
-  running: "info",
-  success: "success",
-  failed: "danger",
-};
-
 function confusionMatrixOption(labels: string[], matrix: number[][]): echarts.EChartsOption {
   const data: [number, number, number][] = [];
   let max = 0;
@@ -55,8 +48,13 @@ function confusionMatrixOption(labels: string[], matrix: number[][]): echarts.EC
       backgroundColor: "#1e293b",
       borderColor: "#334155",
       textStyle: { color: "#e2e8f0", fontSize: 12 },
-      formatter: (p: { data: [number, number, number] }) =>
-        `actual ${labels[p.data[1]]} → predicted ${labels[p.data[0]]}: ${p.data[2]}`,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' formatter param type
+      // (CallbackDataParams) doesn't narrow per series type; heatmap always calls this with
+      // `data: [number, number, number]` (see the `data.push([j, i, v])` above).
+      formatter: (p: any) => {
+        const d = (p.data ?? [0, 0, 0]) as [number, number, number];
+        return `actual ${labels[d[1]]} → predicted ${labels[d[0]]}: ${d[2]}`;
+      },
     },
     grid: { top: 24, bottom: 64, left: 96, right: 24 },
     xAxis: { type: "category", data: labels, name: "Predicted", nameLocation: "middle", nameGap: 36, axisLabel: AXIS_LABEL },

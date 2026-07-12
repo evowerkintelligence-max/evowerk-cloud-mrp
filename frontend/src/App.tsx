@@ -34,6 +34,11 @@ import { AutoMLRun } from "./pages/automl/AutoMLRun";
 import { Kpis } from "./pages/Kpis";
 import { Integrations } from "./pages/Integrations";
 import { Realtime } from "./pages/Realtime";
+import { RcaCases } from "./pages/RcaCases";
+import { Predictive } from "./pages/Predictive";
+import { MfgForecast } from "./pages/MfgForecast";
+import { Scenarios } from "./pages/Scenarios";
+import { ComputerVision } from "./pages/ComputerVision";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -92,6 +97,11 @@ export function App() {
         <Route path="/kpis" element={<Kpis />} />
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/realtime" element={<Realtime />} />
+        <Route path="/rca-cases" element={<RcaCases />} />
+        <Route path="/predictive" element={<Predictive />} />
+        <Route path="/mfg-forecast" element={<MfgForecast />} />
+        <Route path="/scenarios" element={<Scenarios />} />
+        <Route path="/computer-vision" element={<ComputerVision />} />
       </Route>
     </Routes>
   );

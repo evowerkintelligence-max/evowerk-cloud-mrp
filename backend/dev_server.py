@@ -23,6 +23,7 @@ from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models on the metadata
+    artifact,
     audit,
     bom,
     dashboard,
@@ -34,9 +35,12 @@ from app.models import (  # noqa: F401 - register models on the metadata
     kpi,
     location,
     lot,
+    maintenance_schedule,
     procurement,
+    rca_case,
     realtime,
     report_spec,
+    scenario,
     telemetry,
     tenant,
     user,

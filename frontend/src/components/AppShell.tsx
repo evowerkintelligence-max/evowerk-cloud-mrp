@@ -17,6 +17,11 @@ import {
   PackageX,
   Plug,
   Radio,
+  Camera,
+  Search,
+  SplitSquareHorizontal,
+  TrendingUp,
+  Wrench,
   ShoppingCart,
   Target,
   Terminal,
@@ -62,6 +67,11 @@ const ANALYTICS_NAV = [
   { to: "/report-builder", label: "Report Builder", icon: FileStack, end: false },
   { to: "/automl", label: "AutoML", icon: Brain, end: false },
   { to: "/simulation", label: "Simulation", icon: FlaskConical, end: false },
+  { to: "/rca-cases", label: "Root Cause Analysis", icon: Search, end: false },
+  { to: "/predictive", label: "Predictive Maintenance", icon: Wrench, end: false },
+  { to: "/mfg-forecast", label: "Manufacturing Forecast", icon: TrendingUp, end: false },
+  { to: "/scenarios", label: "Scenarios", icon: SplitSquareHorizontal, end: false },
+  { to: "/computer-vision", label: "Computer Vision", icon: Camera, end: false },
 ];
 
 function Brand() {

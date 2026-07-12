@@ -12,6 +12,8 @@ from app.api.routes import (
     auth,
     bi,
     boms,
+    computer_vision,
+    data_chat,
     datasets,
     downtime,
     forecasts,
@@ -22,11 +24,14 @@ from app.api.routes import (
     kpis,
     locations,
     lots,
+    mfg_forecast,
     oee,
     orgs,
+    predictive,
     process_mining,
     purchase_orders,
     quality,
+    rca_cases,
     realtime,
     reports,
     scrap,
@@ -35,6 +40,7 @@ from app.api.routes import (
     spc,
     suppliers,
     throughput,
+    what_if_scenarios,
     workflows,
 )
 from app.core.config import get_settings
@@ -103,6 +109,13 @@ app.include_router(kpis.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
 app.include_router(artifacts.router)
+app.include_router(rca_cases.router)
+app.include_router(predictive.analyze_router)
+app.include_router(predictive.router)
+app.include_router(mfg_forecast.router)
+app.include_router(what_if_scenarios.router)
+app.include_router(computer_vision.router)
+app.include_router(data_chat.router)
 
 
 @app.get("/health")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -15,7 +15,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.core.time import ensure_utc
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.bom import Bom, BomLine, Item
+from app.models.bom import Bom, BomLine, Item, ItemUnit
 
 router = APIRouter(prefix="/boms", tags=["boms"])
 
@@ -43,6 +43,12 @@ class BomLineInput(BaseModel):
     # User-set expected material loss for this component, as a percent - see
     # BomLine.scrap_pct for how MRP applies it.
     scrap_pct: Decimal = Decimal(0)
+    # Optional: author this line in a unit other than the component's base
+    # unit. Both null means "quantity is already in the base unit" - the
+    # server ignores `quantity` and recomputes it from unit_quantity *
+    # the unit's factor_to_base whenever unit_id is set.
+    unit_id: str | None = None
+    unit_quantity: Decimal | None = None
 
 
 class BomLinesUpdateRequest(BaseModel):
@@ -63,6 +69,9 @@ class BomLineResponse(BaseModel):
     quantity: Decimal
     sequence: int
     scrap_pct: Decimal
+    unit_id: str | None
+    unit_quantity: Decimal | None
+    unit_code: str | None
 
 
 class BomCreateRequest(BaseModel):
@@ -228,8 +237,9 @@ async def get_bom(
     item = await get_or_404(db, Item, current.org_id, bom.item_id, "Item not found")
 
     lines_result = await db.execute(
-        select(BomLine, Item)
+        select(BomLine, Item, ItemUnit)
         .join(Item, Item.id == BomLine.component_item_id)
+        .outerjoin(ItemUnit, ItemUnit.id == BomLine.unit_id)
         .where(BomLine.bom_id == bom.id)
         .order_by(BomLine.sequence)
     )
@@ -240,11 +250,14 @@ async def get_bom(
             component_sku=component.sku,
             component_name=component.name,
             unit_of_measure=component.unit_of_measure,
-            quantity=line.quantity,
+            quantity=line.quantity.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
             sequence=line.sequence,
-            scrap_pct=line.scrap_pct,
+            scrap_pct=line.scrap_pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            unit_id=str(line.unit_id) if line.unit_id else None,
+            unit_quantity=line.unit_quantity.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP) if line.unit_quantity else None,
+            unit_code=unit.code if unit else None,
         )
-        for line, component in lines_result.all()
+        for line, component, unit in lines_result.all()
     ]
 
     base = await _bom_to_response(db, bom, item)
@@ -271,11 +284,9 @@ async def update_bom_lines(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A BOM needs at least one line")
 
     component_ids: set[uuid.UUID] = set()
+    unit_ids: set[uuid.UUID] = set()
+    parsed: list[tuple[BomLineInput, uuid.UUID, uuid.UUID | None]] = []
     for line_in in lines_in:
-        if line_in.quantity <= 0:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
-        if line_in.quantity > MAX_LINE_QUANTITY:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"quantity must not exceed {MAX_LINE_QUANTITY}")
         if line_in.scrap_pct < 0 or line_in.scrap_pct > MAX_SCRAP_PCT:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"scrap_pct must be between 0 and {MAX_SCRAP_PCT}")
         try:
@@ -286,6 +297,19 @@ async def update_bom_lines(
             raise HTTPException(status.HTTP_409_CONFLICT, "A BOM can't list its own item as a component")
         component_ids.add(component_id)
 
+        unit_uuid: uuid.UUID | None = None
+        if line_in.unit_id is not None:
+            if line_in.unit_quantity is None or line_in.unit_quantity <= 0:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "unit_quantity must be positive when unit_id is set"
+                )
+            try:
+                unit_uuid = uuid.UUID(line_in.unit_id)
+            except ValueError:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid unit_id") from None
+            unit_ids.add(unit_uuid)
+        parsed.append((line_in, component_id, unit_uuid))
+
     # One query for every distinct component instead of one per line - a BOM
     # with dozens of lines was otherwise issuing that many item lookups.
     found_result = await db.execute(
@@ -294,24 +318,58 @@ async def update_bom_lines(
     if {row[0] for row in found_result.all()} != component_ids:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
 
+    units_by_id: dict[uuid.UUID, ItemUnit] = {}
+    if unit_ids:
+        units_result = await db.execute(
+            select(ItemUnit).where(ItemUnit.org_id == current.org_id, ItemUnit.id.in_(unit_ids))
+        )
+        units_by_id = {u.id: u for u in units_result.scalars().all()}
+        if set(units_by_id) != unit_ids:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Unit not found")
+
     # Same check activate() runs, surfaced here so a cycle is caught the moment
     # it's drafted rather than after the user has finished building the BOM.
     # activate() re-checks anyway, since the active-BOM graph can shift between
     # this save and that activation.
     await _reject_if_cycle(db, current.org_id, bom.item_id, component_ids)
 
-    await db.execute(BomLine.__table__.delete().where(BomLine.bom_id == bom.id))
-    for line_in in lines_in:
-        db.add(
+    final_lines: list[BomLine] = []
+    for line_in, component_id, unit_uuid in parsed:
+        if unit_uuid is not None:
+            unit = units_by_id[unit_uuid]
+            if unit.item_id != component_id:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "Unit does not belong to this line's component item"
+                )
+            quantity = (line_in.unit_quantity * unit.factor_to_base).quantize(
+                Decimal("0.0001"), rounding=ROUND_HALF_UP
+            )
+        else:
+            quantity = line_in.quantity
+        if quantity <= 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
+        if quantity > MAX_LINE_QUANTITY:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"quantity must not exceed {MAX_LINE_QUANTITY}")
+        final_lines.append(
             BomLine(
                 org_id=current.org_id,
                 bom_id=bom.id,
-                component_item_id=uuid.UUID(line_in.component_item_id),
-                quantity=line_in.quantity,
+                component_item_id=component_id,
+                quantity=quantity,
                 sequence=line_in.sequence,
                 scrap_pct=line_in.scrap_pct,
+                unit_id=unit_uuid,
+                unit_quantity=(
+                    line_in.unit_quantity.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+                    if unit_uuid is not None
+                    else None
+                ),
             )
         )
+
+    await db.execute(BomLine.__table__.delete().where(BomLine.bom_id == bom.id))
+    for line in final_lines:
+        db.add(line)
     # bom_lines is a separate table, so nothing here dirties the boms row on
     # its own - bump updated_at explicitly or the CAS check above would never
     # actually detect this edit on a subsequent PATCH.

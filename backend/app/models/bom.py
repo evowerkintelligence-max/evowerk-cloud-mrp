@@ -162,3 +162,12 @@ class BomLine(Base):
     # planning short. Additive, not yield-based (dividing by (1 - scrap_pct/100)),
     # to keep 100%+ loss representable without a divide-by-zero at 100.
     scrap_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal(0))
+    # Optional authoring convenience: the line's quantity as typed in a unit
+    # other than the component's base unit (e.g. "500" in unit "g" on a
+    # kg-based item). `quantity` above is always the converted, canonical
+    # base-unit figure - MRP/cost rollups never need to know units exist.
+    # Both null together means "authored directly in the base unit".
+    unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("item_units.id"), nullable=True
+    )
+    unit_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)

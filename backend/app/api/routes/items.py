@@ -15,7 +15,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.audit import AuditLog
-from app.models.bom import Item
+from app.models.bom import BomLine, Item, ItemUnit
 from app.models.procurement import Supplier
 from app.models.user import User
 from app.services import datasets as ds_service
@@ -86,6 +86,26 @@ def _to_response(item: Item) -> ItemResponse:
         is_active=item.is_active,
         description=item.description,
         barcode=item.barcode,
+    )
+
+
+class ItemUnitCreateRequest(BaseModel):
+    code: str
+    factor_to_base: Decimal
+
+
+class ItemUnitResponse(BaseModel):
+    id: str
+    item_id: str
+    code: str
+    factor_to_base: Decimal
+
+
+def _unit_to_response(unit: ItemUnit) -> ItemUnitResponse:
+    # Format factor_to_base with 6 decimal places to match Numeric(18, 6) precision
+    factor_str = f"{unit.factor_to_base:.6f}"
+    return ItemUnitResponse(
+        id=str(unit.id), item_id=str(unit.item_id), code=unit.code, factor_to_base=Decimal(factor_str)
     )
 
 
@@ -440,3 +460,63 @@ async def get_item_audit_log(
         )
         for action, event_metadata, created_at, actor_email in result.all()
     ]
+
+
+@router.post("/{item_id}/units", response_model=ItemUnitResponse, status_code=status.HTTP_201_CREATED)
+async def create_item_unit(
+    item_id: uuid.UUID,
+    body: ItemUnitCreateRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_or_404(db, Item, current.org_id, item_id, "Item not found")
+    code = body.code.strip()
+    if not code:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "code is required")
+    if body.factor_to_base <= 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "factor_to_base must be positive")
+
+    unit = ItemUnit(org_id=current.org_id, item_id=item_id, code=code, factor_to_base=body.factor_to_base)
+    db.add(unit)
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f'Unit "{code}" already exists for this item'
+        ) from None
+    await db.commit()
+    return _unit_to_response(unit)
+
+
+@router.get("/{item_id}/units", response_model=list[ItemUnitResponse])
+async def list_item_units(
+    item_id: uuid.UUID,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_or_404(db, Item, current.org_id, item_id, "Item not found")
+    result = await db.execute(
+        select(ItemUnit)
+        .where(ItemUnit.org_id == current.org_id, ItemUnit.item_id == item_id)
+        .order_by(ItemUnit.code)
+    )
+    return [_unit_to_response(u) for u in result.scalars().all()]
+
+
+@router.delete("/{item_id}/units/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item_unit(
+    item_id: uuid.UUID,
+    unit_id: uuid.UUID,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    unit = await get_or_404(db, ItemUnit, current.org_id, unit_id, "Unit not found")
+    if unit.item_id != item_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unit not found")
+    in_use = await db.scalar(select(BomLine.id).where(BomLine.unit_id == unit_id).limit(1))
+    if in_use is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This unit is used by a BOM line and can't be deleted"
+        )
+    await db.delete(unit)
+    await db.commit()

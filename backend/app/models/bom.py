@@ -75,6 +75,25 @@ class Item(Base):
     )
 
 
+class ItemUnit(Base):
+    __tablename__ = "item_units"
+    __table_args__ = (UniqueConstraint("item_id", "code", name="uq_item_units_item_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # A label the recipe author picks, e.g. "box", "g" - only meaningful
+    # together with factor_to_base, and only for this specific item (a box of
+    # screws and a box of bolts don't hold the same count).
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    # 1 of this unit = factor_to_base * the item's own base unit_of_measure.
+    factor_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+
+
 class Bom(Base):
     __tablename__ = "boms"
     __table_args__ = (UniqueConstraint("org_id", "item_id", "version", name="uq_boms_org_item_version"),)

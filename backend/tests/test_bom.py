@@ -395,3 +395,85 @@ async def test_rbac_blocks_non_owner_from_mutations(client, test_engine):
     # Reads are still open to non-owners.
     read = await client.get("/items", headers={"Authorization": f"Bearer {member_token}"})
     assert read.status_code == 200
+
+
+async def test_item_unit_create_list_and_duplicate_rejected(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-1", name="Screws", item_type="raw_material")
+
+    create = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "100"}, headers=headers
+    )
+    assert create.status_code == 201
+    body = create.json()
+    assert body["code"] == "box"
+    assert body["factor_to_base"] == "100.000000"
+
+    listed = await client.get(f"/items/{item['id']}/units", headers=headers)
+    assert listed.status_code == 200
+    assert [u["code"] for u in listed.json()] == ["box"]
+
+    dupe = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "50"}, headers=headers
+    )
+    assert dupe.status_code == 409
+
+
+async def test_item_unit_rejects_non_positive_factor(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-2", name="Bolts", item_type="raw_material")
+
+    res = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "0"}, headers=headers
+    )
+    assert res.status_code == 400
+
+
+async def test_item_unit_delete_blocked_when_in_use(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="UNIT-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="UNIT-3", name="Screws", item_type="raw_material")
+
+    unit = await client.post(
+        f"/items/{comp['id']}/units", json={"code": "box", "factor_to_base": "100"}, headers=headers
+    )
+    unit_id = unit.json()["id"]
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {
+                    "component_item_id": comp["id"],
+                    "quantity": "1",
+                    "sequence": 0,
+                    "unit_id": unit_id,
+                    "unit_quantity": "1",
+                }
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+
+    delete = await client.delete(f"/items/{comp['id']}/units/{unit_id}", headers=headers)
+    assert delete.status_code == 409
+
+
+async def test_item_unit_delete_succeeds_when_unused(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-4", name="Nuts", item_type="raw_material")
+
+    unit = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "100"}, headers=headers
+    )
+    unit_id = unit.json()["id"]
+
+    delete = await client.delete(f"/items/{item['id']}/units/{unit_id}", headers=headers)
+    assert delete.status_code == 204

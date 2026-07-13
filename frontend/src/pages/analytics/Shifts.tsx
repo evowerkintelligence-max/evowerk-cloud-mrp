@@ -70,9 +70,9 @@ export function Shifts() {
         return (
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-              <StatCard label="Best shift" value={<span style={{ color: C.green }}>{r.best_shift ?? "—"}</span>} />
-              <StatCard label="Worst shift" value={<span style={{ color: C.red }}>{r.worst_shift ?? "—"}</span>} />
-              <StatCard label="Rows analyzed" value={fmt(r.row_count)} />
+              <StatCard label="Best shift" value={<span style={{ color: C.green }}>{r.best_shift ?? "—"}</span>} tone="success" />
+              <StatCard label="Worst shift" value={<span style={{ color: C.red }}>{r.worst_shift ?? "—"}</span>} tone="warning" />
+              <StatCard label="Rows analyzed" value={fmt(r.row_count)} tone="primary" />
             </div>
 
             {primary && (

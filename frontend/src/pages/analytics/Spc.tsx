@@ -1,6 +1,6 @@
 import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { StatCard } from "@/components/StatCard";
+import { STAT_TONES, StatCard } from "@/components/StatCard";
 import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt } from "./shared";
 
 interface SpcPoint {
@@ -92,14 +92,15 @@ export function Spc() {
           )}
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <StatCard label="Chart" value={r.chart_type === "xbar_r" ? "X̄-R" : "I-MR"} hint={`subgroup n=${r.subgroup_size}`} />
-            <StatCard label="Centerline" value={fmt(r.centerline)} />
-            <StatCard label="UCL" value={fmt(r.ucl)} />
-            <StatCard label="LCL" value={fmt(r.lcl)} />
+            <StatCard label="Chart" value={r.chart_type === "xbar_r" ? "X̄-R" : "I-MR"} hint={`subgroup n=${r.subgroup_size}`} tone="primary" />
+            <StatCard label="Centerline" value={fmt(r.centerline)} tone="accent" />
+            <StatCard label="UCL" value={fmt(r.ucl)} tone="success" />
+            <StatCard label="LCL" value={fmt(r.lcl)} tone="warning" />
             <StatCard
               label="Out of control"
               value={<span style={{ color: r.out_of_control_count > 0 ? C.red : C.green }}>{r.out_of_control_count}</span>}
               hint={`${fmt(r.row_count)} points`}
+              tone="primary"
             />
           </div>
 
@@ -139,7 +140,7 @@ export function Spc() {
                     ["Pp", r.capability.pp],
                     ["Ppk", r.capability.ppk],
                   ] as [string, number | null][]
-                ).map(([label, v]) => (
+                ).map(([label, v], i) => (
                   <StatCard
                     key={label}
                     label={label}
@@ -147,6 +148,7 @@ export function Spc() {
                       v === null ? "—" : <span style={{ color: v >= 1.33 ? C.green : v >= 1 ? C.amber : C.red }}>{v}</span>
                     }
                     hint={v === null ? undefined : v >= 1.33 ? "capable" : v >= 1 ? "marginal" : "not capable"}
+                    tone={STAT_TONES[i % STAT_TONES.length]}
                   />
                 ))}
               </CardContent>

@@ -196,14 +196,15 @@ export function PlantSummary() {
                   {r.oee}%{r.performance_estimated ? "*" : ""}
                 </span>
               }
+              tone="primary"
             />
-            <StatCard label="Availability" value={pct(r.availability)} />
-            <StatCard label="Performance" value={pct(r.performance)} />
-            <StatCard label="Quality" value={pct(r.quality)} />
-            <StatCard label="Total units" value={fmt(r.total_units)} />
-            {r.scrap_rate_pct !== null && <StatCard label="Scrap rate" value={pct(r.scrap_rate_pct)} />}
-            {r.fpq_pct !== null && <StatCard label="First Pass Quality" value={pct(r.fpq_pct)} />}
-            {r.defect_rate_per_1000 !== null && <StatCard label="Defects / 1000" value={fmt(r.defect_rate_per_1000)} />}
+            <StatCard label="Availability" value={pct(r.availability)} tone="accent" />
+            <StatCard label="Performance" value={pct(r.performance)} tone="success" />
+            <StatCard label="Quality" value={pct(r.quality)} tone="warning" />
+            <StatCard label="Total units" value={fmt(r.total_units)} tone="primary" />
+            {r.scrap_rate_pct !== null && <StatCard label="Scrap rate" value={pct(r.scrap_rate_pct)} tone="accent" />}
+            {r.fpq_pct !== null && <StatCard label="First Pass Quality" value={pct(r.fpq_pct)} tone="success" />}
+            {r.defect_rate_per_1000 !== null && <StatCard label="Defects / 1000" value={fmt(r.defect_rate_per_1000)} tone="warning" />}
           </div>
 
           {r.trend.length > 1 && <Trend trend={r.trend} />}

@@ -6,7 +6,7 @@ import { subscribeToSSE } from "../lib/sse";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
-import { StatCard } from "@/components/StatCard";
+import { STAT_TONES, StatCard } from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -81,15 +81,20 @@ function LiveMetrics({ streamId, initial }: { streamId: string; initial: StreamS
         {snap.error && <span className="text-sm text-destructive">{snap.error}</span>}
       </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Rows collected" value={snap.rows_collected} />
-        <StatCard label="Rows in window" value={snap.rows_in_window} />
-        <StatCard label="Duration" value={snap.duration ?? "—"} />
-        <StatCard label="Last tick" value={snap.last_tick_s != null ? `${snap.last_tick_s}s ago` : "—"} />
+        <StatCard label="Rows collected" value={snap.rows_collected} tone="primary" />
+        <StatCard label="Rows in window" value={snap.rows_in_window} tone="accent" />
+        <StatCard label="Duration" value={snap.duration ?? "—"} tone="success" />
+        <StatCard label="Last tick" value={snap.last_tick_s != null ? `${snap.last_tick_s}s ago` : "—"} tone="warning" />
       </div>
       {metricEntries.length > 0 && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {metricEntries.map(([key, value]) => (
-            <StatCard key={key} label={key.replace(/_/g, " ")} value={value} />
+          {metricEntries.map(([key, value], i) => (
+            <StatCard
+              key={key}
+              label={key.replace(/_/g, " ")}
+              value={value}
+              tone={STAT_TONES[i % STAT_TONES.length]}
+            />
           ))}
         </div>
       )}

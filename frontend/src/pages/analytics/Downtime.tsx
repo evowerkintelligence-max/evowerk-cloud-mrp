@@ -46,10 +46,10 @@ export function Downtime() {
       {(r) => (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard label="Incidents" value={fmt(r.total_incidents)} />
-            <StatCard label="Total downtime" value={hours(r.total_minutes)} />
-            <StatCard label="MTTR" value={`${r.mttr_minutes} min`} hint="mean time to repair" />
-            <StatCard label="Top category" value={r.top_category ?? "—"} />
+            <StatCard label="Incidents" value={fmt(r.total_incidents)} tone="primary" />
+            <StatCard label="Total downtime" value={hours(r.total_minutes)} tone="accent" />
+            <StatCard label="MTTR" value={`${r.mttr_minutes} min`} hint="mean time to repair" tone="success" />
+            <StatCard label="Top category" value={r.top_category ?? "—"} tone="warning" />
           </div>
 
           {r.by_category.length > 0 && (

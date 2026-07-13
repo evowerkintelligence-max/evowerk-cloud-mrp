@@ -25,6 +25,9 @@ const TONE = {
   },
 } as const;
 
+/** Cycled by index across a row of StatCards so it reads as multi-color, not monochrome. */
+export const STAT_TONES = Object.keys(TONE) as (keyof typeof TONE)[];
+
 export function StatCard({
   label,
   value,

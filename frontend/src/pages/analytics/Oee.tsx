@@ -471,10 +471,11 @@ export function Oee() {
                   {r.oee}%{r.performance_estimated ? "*" : ""}
                 </span>
               }
+              tone="primary"
             />
-            <StatCard label="Availability" value={pct(r.availability)} />
-            <StatCard label="Performance" value={pct(r.performance)} />
-            <StatCard label="Quality" value={pct(r.quality)} />
+            <StatCard label="Availability" value={pct(r.availability)} tone="accent" />
+            <StatCard label="Performance" value={pct(r.performance)} tone="success" />
+            <StatCard label="Quality" value={pct(r.quality)} tone="warning" />
           </div>
 
           {r.revenue_impact && <Revenue ri={r.revenue_impact} />}

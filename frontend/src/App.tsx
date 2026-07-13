@@ -16,6 +16,7 @@ import { DatasetDetail } from "./pages/analytics/DatasetDetail";
 import { SqlEditor } from "./pages/SqlEditor";
 import { Simulation } from "./pages/Simulation";
 import { Oee } from "./pages/analytics/Oee";
+import { PlantSummary } from "./pages/analytics/PlantSummary";
 import { Downtime } from "./pages/analytics/Downtime";
 import { Throughput } from "./pages/analytics/Throughput";
 import { Scrap } from "./pages/analytics/Scrap";
@@ -35,6 +36,7 @@ import { Kpis } from "./pages/Kpis";
 import { Integrations } from "./pages/Integrations";
 import { Realtime } from "./pages/Realtime";
 import { RcaCases } from "./pages/RcaCases";
+import { RunHistory } from "./pages/workflows/RunHistory";
 import { Predictive } from "./pages/Predictive";
 import { MfgForecast } from "./pages/MfgForecast";
 import { Scenarios } from "./pages/Scenarios";
@@ -76,6 +78,7 @@ export function App() {
         <Route path="/planning" element={<Planning />} />
         <Route path="/analytics" element={<Navigate to="/analytics/oee" replace />} />
         <Route path="/analytics/oee" element={<Oee />} />
+        <Route path="/analytics/plant-summary" element={<PlantSummary />} />
         <Route path="/analytics/downtime" element={<Downtime />} />
         <Route path="/analytics/throughput" element={<Throughput />} />
         <Route path="/analytics/scrap" element={<Scrap />} />
@@ -92,6 +95,7 @@ export function App() {
         <Route path="/bi/:id" element={<BiDashboardDetail />} />
         <Route path="/workflows" element={<Workflows />} />
         <Route path="/workflows/:id" element={<WorkflowBuilder />} />
+        <Route path="/runs" element={<RunHistory />} />
         <Route path="/report-builder" element={<ReportBuilder />} />
         <Route path="/automl" element={<AutoML />} />
         <Route path="/automl/:id" element={<AutoMLRun />} />

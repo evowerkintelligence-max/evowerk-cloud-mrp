@@ -24,12 +24,13 @@ from app.analytics.oee_calc import (
     revenue_loss_ideal,
 )
 
-router = APIRouter(prefix="/datasets/{dataset_id}/oee", tags=["oee"])
+router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 # ─── Request / response models ─────────────────────────────────────────────
 
 class OeeComputeRequest(BaseModel):
+    dataset_id: uuid.UUID
     planned_time_col: str = Field(..., min_length=1)
     operating_time_col: str = Field(..., min_length=1)
     total_units_col: str = Field(..., min_length=1)
@@ -150,6 +151,7 @@ class OeeComputeResponse(BaseModel):
 
 
 class OeeRcaRequest(BaseModel):
+    dataset_id: uuid.UUID
     planned_time_col: str = Field(..., min_length=1)
     operating_time_col: str = Field(..., min_length=1)
     total_units_col: str = Field(..., min_length=1)
@@ -343,14 +345,13 @@ async def _get_dataset(db: AsyncSession, current: CurrentUser, dataset_id: uuid.
 
 # ─── Routes ─────────────────────────────────────────────────────────────────
 
-@router.post("/compute", response_model=OeeComputeResponse)
+@router.post("/oee", response_model=OeeComputeResponse)
 async def oee_compute(
-    dataset_id: uuid.UUID,
     req: OeeComputeRequest,
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> OeeComputeResponse:
-    dataset = await _get_dataset(db, current, dataset_id)
+    dataset = await _get_dataset(db, current, req.dataset_id)
     ds_service.validate_columns(dataset, [
         req.planned_time_col, req.operating_time_col, req.total_units_col, req.good_units_col,
         req.date_col, req.machine_col, req.unplanned_downtime_col, req.planned_downtime_col,
@@ -520,14 +521,13 @@ async def oee_compute(
     )
 
 
-@router.post("/rca", response_model=OeeRcaResponse)
+@router.post("/oee/rca", response_model=OeeRcaResponse)
 async def oee_rca(
-    dataset_id: uuid.UUID,
     req: OeeRcaRequest,
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> OeeRcaResponse:
-    dataset = await _get_dataset(db, current, dataset_id)
+    dataset = await _get_dataset(db, current, req.dataset_id)
     ds_service.validate_columns(dataset, [
         req.planned_time_col, req.operating_time_col, req.total_units_col, req.good_units_col,
         req.date_col, req.machine_col, req.shift_col, req.operator_col, req.material_batch_col,

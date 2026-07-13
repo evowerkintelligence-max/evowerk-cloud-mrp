@@ -59,6 +59,10 @@ class RunDetailResponse(RunResponse):
     events: list[RunEventResponse]
 
 
+class RunWithWorkflowResponse(RunResponse):
+    workflow_name: str
+
+
 def _workflow_to_response(w: Workflow) -> WorkflowResponse:
     return WorkflowResponse(
         id=str(w.id),
@@ -117,6 +121,34 @@ async def create_workflow(
     await db.commit()
     await db.refresh(workflow)
     return _workflow_to_response(workflow)
+
+
+@router.get("/runs", response_model=list[RunWithWorkflowResponse])
+async def list_all_runs(
+    status: str | None = None,
+    limit: int = 50,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run history across every workflow in the org - the audit view a plant
+    manager checks, as opposed to /{workflow_id}/runs which is scoped to one
+    workflow's builder page. Declared before /{workflow_id} below so "runs"
+    isn't swallowed by that route's plain-string path converter."""
+    limit = max(1, min(limit, 200))
+    stmt = (
+        select(WorkflowRun, Workflow.name)
+        .join(Workflow, Workflow.id == WorkflowRun.workflow_id)
+        .where(WorkflowRun.org_id == current.org_id)
+        .order_by(WorkflowRun.created_at.desc())
+        .limit(limit)
+    )
+    if status:
+        stmt = stmt.where(WorkflowRun.status == status)
+    rows = (await db.execute(stmt)).all()
+    return [
+        RunWithWorkflowResponse(**_run_to_response(r).model_dump(), workflow_name=name)
+        for r, name in rows
+    ]
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)

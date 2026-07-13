@@ -26,6 +26,12 @@ router = APIRouter(prefix="/boms", tags=["boms"])
 # uses the identical pattern for po_number - see create_purchase_order).
 MAX_VERSION_ATTEMPTS = 3
 
+# BomLine.quantity is NUMERIC(12,4) - 8 integer digits max. Postgres raises an
+# unhandled numeric-overflow error on insert past this (uncaught here - only
+# StaleDataError is - and sqlite's test backend doesn't enforce it at all, so
+# nothing else would catch this), so reject it explicitly with a clean 400.
+MAX_LINE_QUANTITY = Decimal("99999999.9999")
+
 
 class BomLineInput(BaseModel):
     component_item_id: str
@@ -260,6 +266,8 @@ async def update_bom_lines(
     for line_in in lines_in:
         if line_in.quantity <= 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
+        if line_in.quantity > MAX_LINE_QUANTITY:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"quantity must not exceed {MAX_LINE_QUANTITY}")
         try:
             component_id = uuid.UUID(line_in.component_item_id)
         except ValueError:

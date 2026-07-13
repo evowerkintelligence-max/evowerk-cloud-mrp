@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { ChevronDown, ChevronRight, Layers, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, GripVertical, Layers, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
@@ -47,6 +47,11 @@ interface BomDetailResponse extends BomResponse {
   lines: BomLineResponse[];
 }
 
+// BomLine.quantity is NUMERIC(12,4) server-side (8 integer digits max) -
+// mirrored here so a typo gets instant browser feedback instead of a round
+// trip to the 400 the backend now also enforces.
+const MAX_LINE_QUANTITY = 99999999.9999;
+
 function bomStatusVariant(status: string) {
   if (status === "active") return "success" as const;
   if (status === "archived") return "neutral" as const;
@@ -62,15 +67,40 @@ function BomLineRow({
   allBoms,
   onRemove,
   removePending,
+  draggable,
+  onDropLine,
+  onMove,
+  canMoveUp,
+  canMoveDown,
 }: {
   line: BomLineResponse;
   depth: number;
   allBoms: BomResponse[];
   onRemove?: (lineId: string) => void;
   removePending?: boolean;
+  draggable?: boolean;
+  onDropLine?: (draggedId: string, targetId: string) => void;
+  onMove?: (lineId: string, direction: "up" | "down") => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const queryClient = useQueryClient();
   const childBom = allBoms.find((b) => b.item_id === line.component_item_id && b.status === "active");
+
+  function prefetchChild() {
+    if (!childBom) return;
+    // Warms the cache on hover so the click that follows usually finds it
+    // already there instead of waiting on a fresh round trip.
+    queryClient.prefetchQuery({
+      queryKey: ["boms", childBom.id],
+      queryFn: async () => {
+        const res = await apiFetch(`/boms/${childBom.id}`);
+        if (!res.ok) throw new Error("Failed to load BOM");
+        return res.json();
+      },
+    });
+  }
 
   const childDetail = useQuery<BomDetailResponse>({
     queryKey: ["boms", childBom?.id],
@@ -84,13 +114,58 @@ function BomLineRow({
 
   return (
     <>
-      <TR>
+      <TR
+        onDragOver={(e) => {
+          if (draggable) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          if (!draggable) return;
+          e.preventDefault();
+          const draggedId = e.dataTransfer.getData("text/plain");
+          onDropLine?.(draggedId, line.id);
+        }}
+      >
+        {onRemove && (
+          <TD
+            className="w-6 cursor-move text-muted-foreground"
+            draggable
+            onDragStart={(e) => e.dataTransfer.setData("text/plain", line.id)}
+            title="Drag to reorder"
+          >
+            <span className="inline-flex items-center gap-0.5">
+              <GripVertical className="size-4" />
+              {/* Keyboard/screen-reader alternative to the drag handle above -
+                  native HTML5 drag-and-drop has no keyboard equivalent. */}
+              <span className="flex flex-col">
+                <button
+                  type="button"
+                  disabled={!canMoveUp}
+                  onClick={() => onMove?.(line.id, "up")}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  title="Move up"
+                >
+                  <ChevronUp className="size-3" />
+                </button>
+                <button
+                  type="button"
+                  disabled={!canMoveDown}
+                  onClick={() => onMove?.(line.id, "down")}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  title="Move down"
+                >
+                  <ChevronDown className="size-3" />
+                </button>
+              </span>
+            </span>
+          </TD>
+        )}
         <TD className="font-medium">
           <span className="inline-flex items-center gap-1" style={{ paddingLeft: `${depth * 1.25}rem` }}>
             {childBom ? (
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
+                onMouseEnter={prefetchChild}
                 className="text-muted-foreground hover:text-foreground"
                 title={expanded ? "Collapse" : "Show this component's own BOM"}
               >
@@ -134,6 +209,8 @@ export function Boms() {
   const [lineComponentId, setLineComponentId] = useState("");
   const [lineQuantity, setLineQuantity] = useState("1");
   const [error, setError] = useState<string | null>(null);
+  const [showBulk, setShowBulk] = useState(false);
+  const [bulkText, setBulkText] = useState("");
 
   const items = useQuery<ItemResponse[]>({
     queryKey: ["items"],
@@ -196,12 +273,14 @@ export function Boms() {
       const existingLines = bomDetail.data.lines.map((l) => ({
         component_item_id: l.component_item_id,
         quantity: l.quantity,
-        sequence: l.sequence,
       }));
-      const res = await patchLines([
-        ...existingLines,
-        { component_item_id: lineComponentId, quantity: lineQuantity, sequence: existingLines.length },
-      ]);
+      // Renumber contiguously (not just append at existingLines.length) - a
+      // prior remove can leave gaps, and `sequence` has no uniqueness guard
+      // server-side, so appending at a stale length can collide.
+      const merged = [...existingLines, { component_item_id: lineComponentId, quantity: lineQuantity }].map(
+        (l, i) => ({ ...l, sequence: i }),
+      );
+      const res = await patchLines(merged);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail ?? "Failed to update lines");
@@ -221,10 +300,10 @@ export function Boms() {
       if (!bomDetail.data) throw new Error("No BOM selected");
       const remaining = bomDetail.data.lines
         .filter((l) => l.id !== lineId)
-        .map((l) => ({
+        .map((l, i) => ({
           component_item_id: l.component_item_id,
           quantity: l.quantity,
-          sequence: l.sequence,
+          sequence: i,
         }));
       if (remaining.length === 0) throw new Error("A BOM needs at least one line - delete the draft instead");
       const res = await patchLines(remaining);
@@ -236,6 +315,97 @@ export function Boms() {
     },
     onSuccess: () => {
       setError(null);
+      queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const reorderLines = useMutation({
+    mutationFn: async (lines: BomLineResponse[]) => {
+      const res = await patchLines(
+        lines.map((l, i) => ({ component_item_id: l.component_item_id, quantity: l.quantity, sequence: i })),
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to reorder lines");
+      }
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] }),
+    onError: (e: Error) => setError(e.message),
+  });
+
+  function onLineDrop(draggedId: string, targetId: string) {
+    if (!bomDetail.data || draggedId === targetId) return;
+    const lines = [...bomDetail.data.lines];
+    const fromIndex = lines.findIndex((l) => l.id === draggedId);
+    const toIndex = lines.findIndex((l) => l.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const [moved] = lines.splice(fromIndex, 1);
+    lines.splice(toIndex, 0, moved);
+    setError(null);
+    reorderLines.mutate(lines);
+  }
+
+  function onMoveLine(lineId: string, direction: "up" | "down") {
+    if (!bomDetail.data) return;
+    const lines = [...bomDetail.data.lines];
+    const index = lines.findIndex((l) => l.id === lineId);
+    const swapWith = direction === "up" ? index - 1 : index + 1;
+    if (index === -1 || swapWith < 0 || swapWith >= lines.length) return;
+    [lines[index], lines[swapWith]] = [lines[swapWith], lines[index]];
+    setError(null);
+    reorderLines.mutate(lines);
+  }
+
+  const bulkAddLines = useMutation({
+    mutationFn: async () => {
+      if (!bomDetail.data) throw new Error("No BOM selected");
+      const bySku = new Map((items.data ?? []).map((i) => [i.sku.toLowerCase(), i]));
+      const parsed: { component_item_id: string; quantity: string; sequence: number }[] = [];
+      const notFound: string[] = [];
+      const badQuantity: string[] = [];
+      // Reject non-numeric/non-positive quantities here rather than letting
+      // FastAPI's 422 validation error reach the catch below - that error's
+      // `detail` is a list of objects, not a string, so surfacing it via
+      // `body.detail` would show the user a useless "[object Object]".
+      for (const row of bulkText.split("\n").map((r) => r.trim()).filter(Boolean)) {
+        const [skuRaw, qtyRaw] = row.split(/[,\t]/).map((v) => v?.trim());
+        const item = skuRaw ? bySku.get(skuRaw.toLowerCase()) : undefined;
+        if (!item) {
+          notFound.push(skuRaw || row);
+          continue;
+        }
+        const quantity = qtyRaw || "1";
+        const quantityNum = Number(quantity);
+        if (!/^\d+(\.\d+)?$/.test(quantity) || quantityNum <= 0 || quantityNum > MAX_LINE_QUANTITY) {
+          badQuantity.push(row);
+          continue;
+        }
+        parsed.push({ component_item_id: item.id, quantity, sequence: 0 });
+      }
+      if (notFound.length > 0) throw new Error(`SKU(s) not found: ${notFound.join(", ")}`);
+      if (badQuantity.length > 0) {
+        throw new Error(`Quantity must be a positive number - check: ${badQuantity.join(" | ")}`);
+      }
+      if (parsed.length === 0) throw new Error('Paste rows as "SKU, quantity" - one per line');
+
+      const existingLines = bomDetail.data.lines.map((l) => ({
+        component_item_id: l.component_item_id,
+        quantity: l.quantity,
+        sequence: l.sequence,
+      }));
+      const merged = [...existingLines, ...parsed].map((l, i) => ({ ...l, sequence: i }));
+      const res = await patchLines(merged);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to import lines");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setBulkText("");
+      setShowBulk(false);
       queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
     },
     onError: (e: Error) => setError(e.message),
@@ -393,6 +563,7 @@ export function Boms() {
               <Table>
                 <THead>
                   <TR>
+                    {bomDetail.data.status === "draft" && <TH />}
                     <TH>Component</TH>
                     <TH>Quantity</TH>
                     <TH>UoM</TH>
@@ -400,7 +571,7 @@ export function Boms() {
                   </TR>
                 </THead>
                 <TBody>
-                  {bomDetail.data.lines.map((line) => (
+                  {bomDetail.data.lines.map((line, index) => (
                     <BomLineRow
                       key={line.id}
                       line={line}
@@ -408,6 +579,11 @@ export function Boms() {
                       allBoms={boms.data ?? []}
                       onRemove={bomDetail.data!.status === "draft" ? (id) => removeLine.mutate(id) : undefined}
                       removePending={removeLine.isPending}
+                      draggable={bomDetail.data!.status === "draft"}
+                      onDropLine={onLineDrop}
+                      onMove={onMoveLine}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < bomDetail.data!.lines.length - 1}
                     />
                   ))}
                 </TBody>
@@ -415,32 +591,64 @@ export function Boms() {
             </TableWrap>
 
             {bomDetail.data.status === "draft" && (
-              <form onSubmit={onAddLine} className="grid gap-4 sm:grid-cols-[1fr_160px_auto] sm:items-end">
-                <Field label="Component" htmlFor="component">
-                  <ItemSelect
-                    id="component"
-                    items={items.data}
-                    value={lineComponentId}
-                    onChange={setLineComponentId}
-                    excludeId={bomDetail.data.item_id}
-                    required
-                  />
-                </Field>
-                <Field label="Quantity" htmlFor="qty">
-                  <Input
-                    id="qty"
-                    type="number"
-                    step="0.0001"
-                    min="0.0001"
-                    value={lineQuantity}
-                    onChange={(e) => setLineQuantity(e.target.value)}
-                    required
-                  />
-                </Field>
-                <Button type="submit" variant="secondary" loading={addLine.isPending}>
-                  Add line
-                </Button>
-              </form>
+              <>
+                <form onSubmit={onAddLine} className="grid gap-4 sm:grid-cols-[1fr_160px_auto] sm:items-end">
+                  <Field label="Component" htmlFor="component">
+                    <ItemSelect
+                      id="component"
+                      items={items.data}
+                      value={lineComponentId}
+                      onChange={setLineComponentId}
+                      excludeId={bomDetail.data.item_id}
+                      required
+                    />
+                  </Field>
+                  <Field label="Quantity" htmlFor="qty">
+                    <Input
+                      id="qty"
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      max={MAX_LINE_QUANTITY}
+                      value={lineQuantity}
+                      onChange={(e) => setLineQuantity(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Button type="submit" variant="secondary" loading={addLine.isPending}>
+                    Add line
+                  </Button>
+                </form>
+
+                <div>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setShowBulk((v) => !v)}>
+                    {showBulk ? "Hide" : "Paste from spreadsheet"}
+                  </Button>
+                  {showBulk && (
+                    <div className="mt-2 space-y-2">
+                      <textarea
+                        className="w-full rounded-md border bg-background p-2 text-sm"
+                        rows={4}
+                        placeholder={"SKU, quantity - one per line\ne.g.\nWIDGET-1, 4\nWIDGET-2, 2"}
+                        value={bulkText}
+                        onChange={(e) => setBulkText(e.target.value)}
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        loading={bulkAddLines.isPending}
+                        onClick={() => {
+                          setError(null);
+                          bulkAddLines.mutate();
+                        }}
+                      >
+                        Import lines
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

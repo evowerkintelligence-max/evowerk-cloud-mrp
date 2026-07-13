@@ -136,34 +136,10 @@ async def compute_mrp_plan(
       order removes the shortfall and a repeat generation can't double-order),
       but reported separately so submitted vs still-a-draft stays visible.
 
-    This is *netted* explosion, not gross: each assembly is netted against its
-    own on-hand/on-order first, and only the resulting net requirement explodes
-    to its components. Finished-good and sub-assembly stock therefore correctly
-    reduces how much of each raw component you actually need to buy. Items are
-    processed parents-before-components (topological order over the active-BOM
-    DAG) so an assembly's net is final before it explodes downward.
-
-    Demand-driven: items reached by neither a forecast nor an explosion aren't
-    planning actions, so they're omitted. Time-phasing per bucket (splitting the
-    horizon into multiple periods rather than netting it as one) and lot-size
-    multiples (rounding to a pack size above the MOQ) are intentionally not
-    modelled yet.
-
-    Lead-time offsetting and MOQ rounding *are* modelled, on top of the netting
-    above:
-    - need_by_date: the earliest in-horizon forecast date reaching this item,
-      propagated down through explosion (a component's need date is its
-      earliest-needing parent's need date - this module doesn't model
-      manufacturing lead time, so a produced parent's own build time isn't
-      subtracted before propagating to its components; only supplier lead time
-      on purchased items is).
-    - suggested_order_date = need_by_date - item.lead_time_days, when both are
-      known and the item is purchased (not manufactured - a build has no
-      supplier lead time to offset by).
-    - suggested_order_quantity rounds net_requirement up to item.min_order_qty
-      for purchased items when the MOQ is higher. Explosion always uses the
-      raw net, never the MOQ-rounded figure, so one item's MOQ can't inflate
-      what its components need.
+    The explosion/netting engine itself lives in _explode_and_net, seeded here
+    from DemandForecast rows - see that function for the full algorithm.
+    Reused as-is (different seed) by services.mrp.compute_build_plan for the
+    build calculator, which has no forecast rows to read.
     """
     independent = await _sum_by_item(
         db,
@@ -191,17 +167,50 @@ async def compute_mrp_plan(
         )
         .group_by(DemandForecast.item_id),
     )
+    return await _explode_and_net(db, org_id, independent, need_by)
 
-    # On-hand comes from two disjoint sources: active lots (lot-tracked items)
-    # and inventory_balances (everything else). Merge into one item->qty map.
+
+async def _explode_and_net(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    seed_gross: dict[uuid.UUID, Decimal],
+    seed_due: dict[uuid.UUID, date] | None,
+) -> list[MrpPlanLine]:
+    """The shared explosion/netting core behind compute_mrp_plan (seeded from
+    forecasts) and compute_build_plan (seeded from a single build quantity).
+
+    This is *netted* explosion, not gross: each assembly is netted against its
+    own on-hand/on-order first, and only the resulting net requirement explodes
+    to its components. Finished-good and sub-assembly stock therefore correctly
+    reduces how much of each raw component you actually need to buy. Items are
+    processed parents-before-components (topological order over the active-BOM
+    DAG) so an assembly's net is final before it explodes downward.
+
+    Demand-driven: items reached by neither `seed_gross` nor an explosion
+    aren't planning actions, so they're omitted.
+
+    Lead-time offsetting and MOQ rounding are modelled on top of the netting
+    above:
+    - need_by_date: the earliest date (from seed_due) reaching this item,
+      propagated down through explosion. None if seed_due is None/empty or
+      this item is never reached by a dated seed (e.g. every build-calculator
+      call, which has no dates at all).
+    - suggested_order_date = need_by_date - item.lead_time_days, when both are
+      known and the item is purchased (not manufactured).
+    - suggested_order_quantity rounds net_requirement up to item.min_order_qty
+      for purchased items when the MOQ is higher. Explosion always uses the
+      raw net, never the MOQ-rounded figure.
+    """
+    if not seed_gross:
+        return []
+    need_by = dict(seed_due) if seed_due else {}
+
     on_hand = await _sum_by_item(
         db,
         select(Lot.item_id, func.sum(Lot.quantity_remaining))
         .where(Lot.org_id == org_id, Lot.status == "active")
         .group_by(Lot.item_id),
     )
-    # Sum a non-lot-tracked item's on-hand across all its locations - MRP plans
-    # against total org availability, not per location.
     inventory_on_hand = await _sum_by_item(
         db,
         select(InventoryBalance.item_id, func.sum(InventoryBalance.quantity_on_hand))
@@ -220,11 +229,6 @@ async def compute_mrp_plan(
         .where(PurchaseOrder.org_id == org_id, PurchaseOrder.status.in_(OPEN_PO_STATUSES))
         .group_by(PurchaseOrderLine.item_id),
     )
-    # Draft POs are planned-but-uncommitted supply: they offset the net
-    # requirement (so drafting an order, then re-planning or re-generating,
-    # doesn't double-count the shortfall) but stay a distinct bucket from
-    # submitted on_order. A draft's quantity_received is always 0, but the same
-    # outstanding expression is used for uniformity.
     on_draft = await _sum_by_item(
         db,
         select(
@@ -237,10 +241,8 @@ async def compute_mrp_plan(
     )
     children = await _load_bom_children(db, org_id)
 
-    # Every item touched by the plan: the forecast items plus everything
-    # reachable from them through the manufacturing graph.
     relevant: set[uuid.UUID] = set()
-    stack = list(independent.keys())
+    stack = list(seed_gross.keys())
     while stack:
         node = stack.pop()
         if node in relevant:
@@ -249,8 +251,6 @@ async def compute_mrp_plan(
         for child_id, _ in children.get(node, []):
             stack.append(child_id)
 
-    # Topological order, parents before components (Kahn). Active BOMs are
-    # acyclic (enforced at activation), so this consumes every relevant node.
     indegree: dict[uuid.UUID, int] = dict.fromkeys(relevant, 0)
     for parent_id in relevant:
         for child_id, _ in children.get(parent_id, []):
@@ -267,8 +267,6 @@ async def compute_mrp_plan(
                 if indegree[child_id] == 0:
                     queue.append(child_id)
     if len(order) != len(relevant):
-        # A cycle slipped past activation's guard (shouldn't happen). Surface
-        # the leftovers un-exploded rather than dropping them or looping.
         order.extend(node for node in relevant if node not in set(order))
 
     items = {
@@ -279,30 +277,21 @@ async def compute_mrp_plan(
     }
 
     gross: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
-    for item_id, qty in independent.items():
+    for item_id, qty in seed_gross.items():
         gross[item_id] += qty
 
     lines: list[MrpPlanLine] = []
     for item_id in order:
         item = items.get(item_id)
         if item is None:
-            # BOM/forecast referencing a deleted item - skip rather than 500.
             continue
         total_gross = gross[item_id]
         hand = on_hand.get(item_id, Decimal(0))
-        # Clamp: a fully-received line contributes 0; the aggregate can't
-        # legitimately go negative, but guard against a data quirk manufacturing
-        # phantom supply.
         order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
         draft_qty = max(Decimal(0), on_draft.get(item_id, Decimal(0)))
         net = max(Decimal(0), total_gross - hand - order_qty - draft_qty)
         due = need_by.get(item_id)
 
-        # Explode the NET (not gross) requirement onto components, and
-        # propagate this item's own need date down so a component's need_by
-        # is the earliest date any parent actually needs it by. Processing in
-        # topological order guarantees total_gross (and due) above is final
-        # before either propagation happens.
         for child_id, qty_per in children.get(item_id, []):
             gross[child_id] += net * qty_per
             if due is not None:
@@ -310,16 +299,10 @@ async def compute_mrp_plan(
                 need_by[child_id] = due if existing_due is None else min(existing_due, due)
 
         if total_gross <= 0:
-            # Reached but not actually required (e.g. a component of an assembly
-            # fully covered by stock) - nothing to plan.
             continue
-        indep = independent.get(item_id, Decimal(0))
+        indep = seed_gross.get(item_id, Decimal(0))
         is_manufactured = item_id in children
 
-        # MOQ rounding and lead-time offset are purchasing concerns, so they
-        # only apply to purchased (not manufactured) items with a real
-        # shortfall - a build has no supplier MOQ or lead time to round/offset
-        # by.
         suggested_qty = net
         suggested_date = None
         if not is_manufactured and net > 0:
@@ -347,6 +330,5 @@ async def compute_mrp_plan(
             )
         )
 
-    # Most urgent first (biggest shortfall), then a stable sku tiebreak.
     lines.sort(key=lambda ln: (-ln.net_requirement, ln.item_sku))
     return lines

@@ -41,6 +41,7 @@ interface BomLineResponse {
   unit_of_measure: string;
   quantity: string;
   sequence: number;
+  scrap_pct: string;
 }
 
 interface BomDetailResponse extends BomResponse {
@@ -51,6 +52,7 @@ interface BomDetailResponse extends BomResponse {
 // mirrored here so a typo gets instant browser feedback instead of a round
 // trip to the 400 the backend now also enforces.
 const MAX_LINE_QUANTITY = 99999999.9999;
+const MAX_SCRAP_PCT = 100;
 
 function bomStatusVariant(status: string) {
   if (status === "active") return "success" as const;
@@ -179,6 +181,7 @@ function BomLineRow({
         </TD>
         <TD>{line.quantity}</TD>
         <TD className="text-muted-foreground">{line.unit_of_measure}</TD>
+        <TD className="text-muted-foreground">{Number(line.scrap_pct) > 0 ? `${line.scrap_pct}%` : "-"}</TD>
         {onRemove && (
           <TD>
             <Button
@@ -208,6 +211,7 @@ export function Boms() {
   const [newBomItemId, setNewBomItemId] = useState("");
   const [lineComponentId, setLineComponentId] = useState("");
   const [lineQuantity, setLineQuantity] = useState("1");
+  const [lineScrapPct, setLineScrapPct] = useState("0");
   const [error, setError] = useState<string | null>(null);
   const [showBulk, setShowBulk] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -259,7 +263,9 @@ export function Boms() {
     onError: (e: Error) => setError(e.message),
   });
 
-  function patchLines(lines: { component_item_id: string; quantity: string; sequence: number }[]) {
+  function patchLines(
+    lines: { component_item_id: string; quantity: string; sequence: number; scrap_pct: string }[],
+  ) {
     if (!bomDetail.data) throw new Error("No BOM selected");
     return apiFetch(`/boms/${selectedBomId}`, {
       method: "PATCH",
@@ -273,13 +279,15 @@ export function Boms() {
       const existingLines = bomDetail.data.lines.map((l) => ({
         component_item_id: l.component_item_id,
         quantity: l.quantity,
+        scrap_pct: l.scrap_pct,
       }));
       // Renumber contiguously (not just append at existingLines.length) - a
       // prior remove can leave gaps, and `sequence` has no uniqueness guard
       // server-side, so appending at a stale length can collide.
-      const merged = [...existingLines, { component_item_id: lineComponentId, quantity: lineQuantity }].map(
-        (l, i) => ({ ...l, sequence: i }),
-      );
+      const merged = [
+        ...existingLines,
+        { component_item_id: lineComponentId, quantity: lineQuantity, scrap_pct: lineScrapPct || "0" },
+      ].map((l, i) => ({ ...l, sequence: i }));
       const res = await patchLines(merged);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -290,6 +298,7 @@ export function Boms() {
     onSuccess: () => {
       setLineComponentId("");
       setLineQuantity("1");
+      setLineScrapPct("0");
       queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
     },
     onError: (e: Error) => setError(e.message),
@@ -303,6 +312,7 @@ export function Boms() {
         .map((l, i) => ({
           component_item_id: l.component_item_id,
           quantity: l.quantity,
+          scrap_pct: l.scrap_pct,
           sequence: i,
         }));
       if (remaining.length === 0) throw new Error("A BOM needs at least one line - delete the draft instead");
@@ -323,7 +333,12 @@ export function Boms() {
   const reorderLines = useMutation({
     mutationFn: async (lines: BomLineResponse[]) => {
       const res = await patchLines(
-        lines.map((l, i) => ({ component_item_id: l.component_item_id, quantity: l.quantity, sequence: i })),
+        lines.map((l, i) => ({
+          component_item_id: l.component_item_id,
+          quantity: l.quantity,
+          scrap_pct: l.scrap_pct,
+          sequence: i,
+        })),
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -362,15 +377,16 @@ export function Boms() {
     mutationFn: async () => {
       if (!bomDetail.data) throw new Error("No BOM selected");
       const bySku = new Map((items.data ?? []).map((i) => [i.sku.toLowerCase(), i]));
-      const parsed: { component_item_id: string; quantity: string; sequence: number }[] = [];
+      const parsed: { component_item_id: string; quantity: string; scrap_pct: string; sequence: number }[] = [];
       const notFound: string[] = [];
       const badQuantity: string[] = [];
+      const badScrapPct: string[] = [];
       // Reject non-numeric/non-positive quantities here rather than letting
       // FastAPI's 422 validation error reach the catch below - that error's
       // `detail` is a list of objects, not a string, so surfacing it via
       // `body.detail` would show the user a useless "[object Object]".
       for (const row of bulkText.split("\n").map((r) => r.trim()).filter(Boolean)) {
-        const [skuRaw, qtyRaw] = row.split(/[,\t]/).map((v) => v?.trim());
+        const [skuRaw, qtyRaw, scrapRaw] = row.split(/[,\t]/).map((v) => v?.trim());
         const item = skuRaw ? bySku.get(skuRaw.toLowerCase()) : undefined;
         if (!item) {
           notFound.push(skuRaw || row);
@@ -382,17 +398,27 @@ export function Boms() {
           badQuantity.push(row);
           continue;
         }
-        parsed.push({ component_item_id: item.id, quantity, sequence: 0 });
+        const scrapPct = scrapRaw || "0";
+        const scrapPctNum = Number(scrapPct);
+        if (!/^\d+(\.\d+)?$/.test(scrapPct) || scrapPctNum < 0 || scrapPctNum > MAX_SCRAP_PCT) {
+          badScrapPct.push(row);
+          continue;
+        }
+        parsed.push({ component_item_id: item.id, quantity, scrap_pct: scrapPct, sequence: 0 });
       }
       if (notFound.length > 0) throw new Error(`SKU(s) not found: ${notFound.join(", ")}`);
       if (badQuantity.length > 0) {
         throw new Error(`Quantity must be a positive number - check: ${badQuantity.join(" | ")}`);
+      }
+      if (badScrapPct.length > 0) {
+        throw new Error(`Scrap % must be between 0 and ${MAX_SCRAP_PCT} - check: ${badScrapPct.join(" | ")}`);
       }
       if (parsed.length === 0) throw new Error('Paste rows as "SKU, quantity" - one per line');
 
       const existingLines = bomDetail.data.lines.map((l) => ({
         component_item_id: l.component_item_id,
         quantity: l.quantity,
+        scrap_pct: l.scrap_pct,
         sequence: l.sequence,
       }));
       const merged = [...existingLines, ...parsed].map((l, i) => ({ ...l, sequence: i }));
@@ -567,6 +593,7 @@ export function Boms() {
                     <TH>Component</TH>
                     <TH>Quantity</TH>
                     <TH>UoM</TH>
+                    <TH>Scrap %</TH>
                     {bomDetail.data.status === "draft" && <TH />}
                   </TR>
                 </THead>
@@ -592,7 +619,10 @@ export function Boms() {
 
             {bomDetail.data.status === "draft" && (
               <>
-                <form onSubmit={onAddLine} className="grid gap-4 sm:grid-cols-[1fr_160px_auto] sm:items-end">
+                <form
+                  onSubmit={onAddLine}
+                  className="grid gap-4 sm:grid-cols-[1fr_140px_140px_auto] sm:items-end"
+                >
                   <Field label="Component" htmlFor="component">
                     <ItemSelect
                       id="component"
@@ -615,6 +645,18 @@ export function Boms() {
                       required
                     />
                   </Field>
+                  <Field label="Scrap %" htmlFor="scrap-pct">
+                    <Input
+                      id="scrap-pct"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max={MAX_SCRAP_PCT}
+                      value={lineScrapPct}
+                      onChange={(e) => setLineScrapPct(e.target.value)}
+                      title="Expected material loss for this component - MRP orders this much extra"
+                    />
+                  </Field>
                   <Button type="submit" variant="secondary" loading={addLine.isPending}>
                     Add line
                   </Button>
@@ -629,7 +671,9 @@ export function Boms() {
                       <textarea
                         className="w-full rounded-md border bg-background p-2 text-sm"
                         rows={4}
-                        placeholder={"SKU, quantity - one per line\ne.g.\nWIDGET-1, 4\nWIDGET-2, 2"}
+                        placeholder={
+                          "SKU, quantity, scrap % (optional) - one per line\ne.g.\nWIDGET-1, 4\nWIDGET-2, 2, 5"
+                        }
                         value={bulkText}
                         onChange={(e) => setBulkText(e.target.value)}
                       />

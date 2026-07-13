@@ -137,3 +137,9 @@ class BomLine(Base):
     # never disagree with its own component's base unit.
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Expected material loss for this component, as a percentage (0-100) - the
+    # user's own scrap/failure leeway. MRP orders quantity * (1 + scrap_pct/100)
+    # of this component per unit of parent built, so a lossy step doesn't leave
+    # planning short. Additive, not yield-based (dividing by (1 - scrap_pct/100)),
+    # to keep 100%+ loss representable without a divide-by-zero at 100.
+    scrap_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal(0))

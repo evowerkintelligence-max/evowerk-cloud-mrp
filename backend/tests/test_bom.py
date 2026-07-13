@@ -88,6 +88,38 @@ async def test_bom_create_edit_lines_and_activate(client):
     assert edit_after_activate.status_code == 409
 
 
+async def test_bom_line_scrap_pct_saved_and_validated(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    parent = await _create_item(client, token, sku="FG-SCRAP", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="RAW-SCRAP", name="Bolt", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+
+    lines = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0, "scrap_pct": "12.5"}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert lines.status_code == 200
+    assert lines.json()["lines"][0]["scrap_pct"] == "12.50"
+
+    rejected = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0, "scrap_pct": "101"}],
+            "expected_updated_at": lines.json()["updated_at"],
+        },
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+
+
 async def test_bom_patch_rejects_stale_updated_at(client):
     """Two editors load the same draft; the second one's PATCH must be
     rejected as stale instead of silently clobbering the first one's lines."""

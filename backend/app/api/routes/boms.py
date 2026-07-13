@@ -32,11 +32,17 @@ MAX_VERSION_ATTEMPTS = 3
 # nothing else would catch this), so reject it explicitly with a clean 400.
 MAX_LINE_QUANTITY = Decimal("99999999.9999")
 
+# scrap_pct is NUMERIC(5,2) - matches the 0-100 range enforced below.
+MAX_SCRAP_PCT = Decimal("100")
+
 
 class BomLineInput(BaseModel):
     component_item_id: str
     quantity: Decimal
     sequence: int = 0
+    # User-set expected material loss for this component, as a percent - see
+    # BomLine.scrap_pct for how MRP applies it.
+    scrap_pct: Decimal = Decimal(0)
 
 
 class BomLinesUpdateRequest(BaseModel):
@@ -56,6 +62,7 @@ class BomLineResponse(BaseModel):
     unit_of_measure: str
     quantity: Decimal
     sequence: int
+    scrap_pct: Decimal
 
 
 class BomCreateRequest(BaseModel):
@@ -235,6 +242,7 @@ async def get_bom(
             unit_of_measure=component.unit_of_measure,
             quantity=line.quantity,
             sequence=line.sequence,
+            scrap_pct=line.scrap_pct,
         )
         for line, component in lines_result.all()
     ]
@@ -268,6 +276,8 @@ async def update_bom_lines(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
         if line_in.quantity > MAX_LINE_QUANTITY:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"quantity must not exceed {MAX_LINE_QUANTITY}")
+        if line_in.scrap_pct < 0 or line_in.scrap_pct > MAX_SCRAP_PCT:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"scrap_pct must be between 0 and {MAX_SCRAP_PCT}")
         try:
             component_id = uuid.UUID(line_in.component_item_id)
         except ValueError:
@@ -299,6 +309,7 @@ async def update_bom_lines(
                 component_item_id=uuid.UUID(line_in.component_item_id),
                 quantity=line_in.quantity,
                 sequence=line_in.sequence,
+                scrap_pct=line_in.scrap_pct,
             )
         )
     # bom_lines is a separate table, so nothing here dirties the boms row on

@@ -84,15 +84,20 @@ async def _load_bom_children(
     (component_item_id, quantity_per_unit). Draft/archived BOMs are ignored -
     only the currently-active BOM defines how an item is really built, and
     activation already enforces one-active-per-item and acyclicity.
+
+    quantity_per_unit already folds in the line's scrap_pct (the user's own
+    failure leeway for that component) - qty * (1 + scrap_pct/100) - so every
+    caller of this map explodes against the real, order-enough figure without
+    having to know scrap exists.
     """
     rows = await db.execute(
-        select(Bom.item_id, BomLine.component_item_id, BomLine.quantity)
+        select(Bom.item_id, BomLine.component_item_id, BomLine.quantity, BomLine.scrap_pct)
         .join(BomLine, BomLine.bom_id == Bom.id)
         .where(Bom.org_id == org_id, Bom.status == "active")
     )
     children: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] = defaultdict(list)
-    for parent_id, child_id, qty in rows.all():
-        children[parent_id].append((child_id, qty))
+    for parent_id, child_id, qty, scrap_pct in rows.all():
+        children[parent_id].append((child_id, qty * (1 + scrap_pct / 100)))
     return children
 
 

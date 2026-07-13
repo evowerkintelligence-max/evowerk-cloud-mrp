@@ -47,8 +47,8 @@ async def _create_item(
 
 
 async def _create_active_bom(client, token, produced_item, lines):
-    """lines: list of (component_item, qty_per). Creates a draft BOM, sets its
-    lines, and activates it."""
+    """lines: list of (component_item, qty_per) or (component_item, qty_per,
+    scrap_pct). Creates a draft BOM, sets its lines, and activates it."""
     headers = {"Authorization": f"Bearer {token}"}
     bom = await client.post("/boms", json={"item_id": produced_item["id"]}, headers=headers)
     assert bom.status_code == 201
@@ -58,8 +58,13 @@ async def _create_active_bom(client, token, produced_item, lines):
         f"/boms/{bom_id}",
         json={
             "lines": [
-                {"component_item_id": comp["id"], "quantity": str(qty), "sequence": i}
-                for i, (comp, qty) in enumerate(lines)
+                {
+                    "component_item_id": line[0]["id"],
+                    "quantity": str(line[1]),
+                    "sequence": i,
+                    "scrap_pct": str(line[2]) if len(line) > 2 else "0",
+                }
+                for i, line in enumerate(lines)
             ],
             "expected_updated_at": bom_data["updated_at"],
         },
@@ -371,6 +376,24 @@ async def test_moq_below_net_requirement_is_a_no_op(client):
     lines = _by_sku(plan.json())
     assert _dec(lines["ROD"]["net_requirement"]) == Decimal("200")
     assert _dec(lines["ROD"]["suggested_order_quantity"]) == Decimal("200")
+
+
+async def test_scrap_pct_inflates_component_explosion(client):
+    """A component's user-set scrap % (failure leeway) is extra material
+    ordered on top of the raw BOM quantity, not a separate planning step."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    fg = await _create_item(client, token, "FG", "Widget")
+    rod = await _create_item(client, token, "ROD", "Steel Rod")
+    # 2 rods per FG, plus 10% expected scrap -> 2.2 rods/FG.
+    await _create_active_bom(client, token, fg, [(rod, 2, 10)])
+
+    await _forecast(client, token, fg, 100)  # -> 220 rods required, not 200
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert _dec(lines["ROD"]["dependent_demand"]) == Decimal("220")
+    assert _dec(lines["ROD"]["net_requirement"]) == Decimal("220")
 
 
 async def test_manufactured_item_ignores_lead_time_and_moq(client):

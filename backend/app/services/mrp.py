@@ -332,3 +332,43 @@ async def _explode_and_net(
 
     lines.sort(key=lambda ln: (-ln.net_requirement, ln.item_sku))
     return lines
+
+
+async def compute_build_plan(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    item_id: uuid.UUID,
+    build_quantity: Decimal,
+    yield_loss_pct: Decimal,
+) -> list[MrpPlanLine]:
+    """The build calculator: 'I'm about to build build_quantity of item_id -
+    what do I need to buy'. Reuses _explode_and_net (the same engine
+    compute_mrp_plan uses) seeded from a single ad hoc quantity instead of
+    demand forecasts - so it nets against real on-hand/on-order/on-draft
+    stock exactly like planning does, and each component's own recipe-level
+    scrap_pct (see BomLine.scrap_pct / _load_bom_children) still applies.
+
+    yield_loss_pct is a *different* scrap concept from BomLine.scrap_pct:
+    it's the expected fraction of finished-good ATTEMPTS that fail entirely
+    (QA rejects, scrapped builds), so it inflates the build quantity itself
+    before exploding through the recipe - "I need build_quantity GOOD units,
+    but only (1 - yield_loss_pct) of what I attempt will pass QA, so attempt
+    build_quantity / (1 - yield_loss_pct/100)".
+
+    No seed_due is passed - an ad hoc build has no forecast date, so every
+    resulting line's need_by_date/suggested_order_date is None.
+    """
+    if build_quantity <= 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "build_quantity must be positive")
+    if yield_loss_pct < 0 or yield_loss_pct >= 100:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "yield_loss_pct must be at least 0 and less than 100"
+        )
+    has_active_bom = await db.scalar(
+        select(Bom.id).where(Bom.org_id == org_id, Bom.item_id == item_id, Bom.status == "active")
+    )
+    if has_active_bom is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item has no active BOM - nothing to build")
+
+    attempted_qty = build_quantity / (1 - yield_loss_pct / 100)
+    return await _explode_and_net(db, org_id, {item_id: attempted_qty}, None)

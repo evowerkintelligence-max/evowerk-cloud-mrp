@@ -12,20 +12,60 @@ import {
   ShieldCheck,
   ShoppingCart,
   Sparkles,
+  Sunrise,
   Truck,
   Warehouse,
 } from "lucide-react";
 import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { humanize, inventoryStatusVariant } from "@/lib/status";
+import { cn } from "@/lib/utils";
 
 interface OrgResponse {
   id: string;
   name: string;
 }
+
+interface BriefLine {
+  item_id: string;
+  item_sku: string;
+  item_name: string;
+  status: string;
+  days_of_supply: number | null;
+  days_of_supply_delta: number | null;
+  is_new_this_week: boolean;
+}
+
+interface LotAlert {
+  lot_id: string;
+  item_sku: string;
+  lot_number: string;
+  location_code: string;
+  days_until_expiry: number | null;
+  reason: string; // "on_hold" | "expiring_soon"
+}
+
+interface MorningBriefResponse {
+  lines: BriefLine[];
+  lot_alerts: LotAlert[];
+}
+
+const STATUS_BORDER: Record<string, string> = {
+  stockout: "border-l-rose-500",
+  low: "border-l-amber-500",
+  excess: "border-l-sky-500",
+  slow_moving: "border-l-slate-500",
+};
+
+const REASON_BORDER: Record<string, string> = {
+  on_hold: "border-l-amber-500",
+  expiring_soon: "border-l-rose-500",
+};
 
 function useCount(key: string, path: string) {
   return useQuery<unknown[]>({
@@ -66,6 +106,16 @@ export function Dashboard() {
   const pos = useCount("purchase-orders", "/purchase-orders");
   const boms = useCount("boms", "/boms");
 
+  const brief = useQuery<MorningBriefResponse>({
+    queryKey: ["morning-brief"],
+    queryFn: async () => {
+      const res = await apiFetch("/inventory/morning-brief");
+      if (!res.ok) throw new Error("Failed to load morning brief");
+      return res.json();
+    },
+  });
+  const briefEmpty = !brief.data || (brief.data.lines.length === 0 && brief.data.lot_alerts.length === 0);
+
   const stats = [
     { label: "Items", query: items, icon: <Package /> },
     { label: "BOMs", query: boms, icon: <Layers /> },
@@ -105,6 +155,80 @@ export function Dashboard() {
           />
         ))}
       </div>
+
+      <Card className="mt-8">
+        <CardHeader className="flex-row items-center gap-2">
+          <Sunrise className="size-5 text-primary" />
+          <div>
+            <CardTitle>Morning Brief</CardTitle>
+            <CardDescription>Items and lots needing attention, vs. 7 days ago</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {brief.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : brief.isError ? (
+            <p className="text-sm text-muted-foreground">Couldn't load the Morning Brief.</p>
+          ) : briefEmpty ? (
+            <p className="text-sm text-muted-foreground">Nothing needs attention today.</p>
+          ) : (
+            <div className="space-y-2">
+              {brief.data!.lines.map((line) => (
+                <Link
+                  key={line.item_id}
+                  to="/warehouse"
+                  className={cn(
+                    "flex items-center justify-between gap-3 rounded-md border-l-4 bg-secondary/20 px-3 py-2 text-sm transition-colors hover:bg-secondary/40",
+                    STATUS_BORDER[line.status] ?? "border-l-border",
+                  )}
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {line.item_sku} — {line.item_name}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {line.days_of_supply != null
+                        ? `${line.days_of_supply.toFixed(1)} days of supply`
+                        : "No demand history"}
+                      {line.days_of_supply_delta != null &&
+                        ` · ${line.days_of_supply_delta >= 0 ? "+" : ""}${line.days_of_supply_delta.toFixed(1)}d vs last week`}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {line.is_new_this_week && <Badge variant="danger">New</Badge>}
+                    <Badge variant={inventoryStatusVariant(line.status)}>{humanize(line.status)}</Badge>
+                  </div>
+                </Link>
+              ))}
+              {brief.data!.lot_alerts.map((alert) => (
+                <Link
+                  key={alert.lot_id}
+                  to="/lots"
+                  className={cn(
+                    "flex items-center justify-between gap-3 rounded-md border-l-4 bg-secondary/20 px-3 py-2 text-sm transition-colors hover:bg-secondary/40",
+                    REASON_BORDER[alert.reason] ?? "border-l-border",
+                  )}
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {alert.item_sku} — Lot {alert.lot_number}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {alert.location_code}
+                      {alert.reason === "expiring_soon" && alert.days_until_expiry != null
+                        ? ` · expires in ${alert.days_until_expiry}d`
+                        : " · on QA hold"}
+                    </p>
+                  </div>
+                  <Badge variant={alert.reason === "on_hold" ? "warning" : "danger"}>
+                    {alert.reason === "on_hold" ? "On Hold" : "Expiring"}
+                  </Badge>
+                </Link>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <h2 className="mb-4 mt-10 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Explore

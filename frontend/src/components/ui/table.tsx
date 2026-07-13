@@ -6,7 +6,10 @@ export const TableWrap = React.forwardRef<HTMLDivElement, React.HTMLAttributes<H
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("w-full overflow-x-auto rounded-lg border border-border", className)}
+      className={cn(
+        "w-full overflow-x-auto rounded-lg border border-border bg-card/60 shadow-card",
+        className,
+      )}
       {...props}
     />
   ),
@@ -24,7 +27,11 @@ export const THead = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("bg-secondary/50", className)} {...props} />
+  <thead
+    ref={ref}
+    className={cn("border-b border-border bg-secondary/40", className)}
+    {...props}
+  />
 ));
 THead.displayName = "THead";
 
@@ -51,7 +58,7 @@ export const TH = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-11 px-4 text-left align-middle text-xs font-semibold uppercase tracking-wide text-muted-foreground",
+      "h-10 px-4 text-left align-middle text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground",
       className,
     )}
     {...props}
@@ -63,6 +70,6 @@ export const TD = React.forwardRef<
   HTMLTableCellElement,
   React.TdHTMLAttributes<HTMLTableCellElement>
 >(({ className, ...props }, ref) => (
-  <td ref={ref} className={cn("px-4 py-3 align-middle", className)} {...props} />
+  <td ref={ref} className={cn("tabular px-4 py-3 align-middle", className)} {...props} />
 ));
 TD.displayName = "TD";

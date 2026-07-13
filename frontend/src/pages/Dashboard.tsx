@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  ArrowUpRight,
   BarChart3,
   Boxes,
   CalendarRange,
@@ -91,6 +92,25 @@ const LINKS = [
   { to: "/reports", label: "Reports", description: "Export PDF/CSV reports", icon: FileText },
 ];
 
+/** Cycled per explore-card index so the grid reads as multi-color, not monochrome. */
+const EXPLORE_TONES = [
+  {
+    card: "hover:border-primary/40 hover:shadow-glow-sm",
+    icon: "bg-primary/10 text-primary ring-primary/20",
+    title: "group-hover:text-primary",
+  },
+  {
+    card: "hover:border-accent/40 hover:shadow-[0_0_18px_-4px_hsl(var(--accent)/0.45)]",
+    icon: "bg-accent/10 text-accent ring-accent/20",
+    title: "group-hover:text-accent",
+  },
+  {
+    card: "hover:border-success/40 hover:shadow-[0_0_18px_-4px_hsl(var(--success)/0.45)]",
+    icon: "bg-success/10 text-success ring-success/20",
+    title: "group-hover:text-success",
+  },
+] as const;
+
 export function Dashboard() {
   const org = useQuery<OrgResponse>({
     queryKey: ["org-me"],
@@ -117,16 +137,32 @@ export function Dashboard() {
   const briefEmpty = !brief.data || (brief.data.lines.length === 0 && brief.data.lot_alerts.length === 0);
 
   const stats = [
-    { label: "Items", query: items, icon: <Package /> },
-    { label: "BOMs", query: boms, icon: <Layers /> },
-    { label: "Suppliers", query: suppliers, icon: <Truck /> },
-    { label: "Purchase Orders", query: pos, icon: <ShoppingCart /> },
+    { label: "Items", query: items, icon: <Package />, tone: "primary" as const },
+    { label: "BOMs", query: boms, icon: <Layers />, tone: "accent" as const },
+    { label: "Suppliers", query: suppliers, icon: <Truck />, tone: "success" as const },
+    { label: "Purchase Orders", query: pos, icon: <ShoppingCart />, tone: "warning" as const },
   ];
 
   return (
     <div>
       <PageHeader
-        title={org.data ? `Welcome, ${org.data.name}` : "Welcome"}
+        eyebrow={new Date().toLocaleDateString(undefined, {
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+        })}
+        title={
+          org.data ? (
+            <>
+              Welcome back,{" "}
+              <span className="brand-gradient-animate bg-clip-text text-transparent">
+                {org.data.name}
+              </span>
+            </>
+          ) : (
+            "Welcome back"
+          )
+        }
         description="Your production-planning workspace — track items, stock, and procurement in one place."
         actions={
           <Link to="/mfa">
@@ -143,6 +179,7 @@ export function Dashboard() {
             key={s.label}
             label={s.label}
             icon={s.icon}
+            tone={s.tone}
             value={
               s.query.isLoading ? (
                 <Skeleton className="h-7 w-10" />
@@ -156,9 +193,12 @@ export function Dashboard() {
         ))}
       </div>
 
-      <Card className="mt-8">
-        <CardHeader className="flex-row items-center gap-2">
-          <Sunrise className="size-5 text-primary" />
+      <Card className="relative mt-8 overflow-hidden">
+        <div aria-hidden className="absolute inset-x-0 top-0 h-[2px] brand-gradient-animate" />
+        <CardHeader className="flex-row items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-warning/10 text-warning ring-1 ring-inset ring-warning/20">
+            <Sunrise className="size-4" />
+          </div>
           <div>
             <CardTitle>Morning Brief</CardTitle>
             <CardDescription>Items and lots needing attention, vs. 7 days ago</CardDescription>
@@ -178,12 +218,12 @@ export function Dashboard() {
                   key={line.item_id}
                   to="/warehouse"
                   className={cn(
-                    "flex items-center justify-between gap-3 rounded-md border-l-4 bg-secondary/20 px-3 py-2 text-sm transition-colors hover:bg-secondary/40",
+                    "flex items-center justify-between gap-3 rounded-md border-l-[6px] bg-secondary/20 px-3 py-2 text-sm transition-colors hover:translate-x-0.5 hover:bg-secondary/40",
                     STATUS_BORDER[line.status] ?? "border-l-border",
                   )}
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-medium">
+                    <p className="truncate font-semibold">
                       {line.item_sku} — {line.item_name}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
@@ -205,12 +245,12 @@ export function Dashboard() {
                   key={alert.lot_id}
                   to="/lots"
                   className={cn(
-                    "flex items-center justify-between gap-3 rounded-md border-l-4 bg-secondary/20 px-3 py-2 text-sm transition-colors hover:bg-secondary/40",
+                    "flex items-center justify-between gap-3 rounded-md border-l-[6px] bg-secondary/20 px-3 py-2 text-sm transition-colors hover:translate-x-0.5 hover:bg-secondary/40",
                     REASON_BORDER[alert.reason] ?? "border-l-border",
                   )}
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-medium">
+                    <p className="truncate font-semibold">
                       {alert.item_sku} — Lot {alert.lot_number}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
@@ -234,21 +274,37 @@ export function Dashboard() {
         Explore
       </h2>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {LINKS.map((l) => (
-          <Link key={l.to} to={l.to} className="group rounded-lg focus-visible:outline-none">
-            <Card className="h-full transition-colors hover:border-primary/40 group-focus-visible:ring-2 group-focus-visible:ring-ring">
-              <CardContent className="flex items-start gap-4 p-5">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary [&_svg]:size-5">
-                  <l.icon />
-                </div>
-                <div className="space-y-1">
-                  <CardTitle className="text-base">{l.label}</CardTitle>
-                  <CardDescription>{l.description}</CardDescription>
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
+        {LINKS.map((l, i) => {
+          const t = EXPLORE_TONES[i % EXPLORE_TONES.length];
+          return (
+            <Link key={l.to} to={l.to} className="group rounded-lg focus-visible:outline-none">
+              <Card
+                className={cn(
+                  "relative h-full transition-all duration-300 hover:-translate-y-1 group-focus-visible:ring-2 group-focus-visible:ring-ring",
+                  t.card,
+                )}
+              >
+                <ArrowUpRight className="absolute right-4 top-4 size-4 text-muted-foreground opacity-0 transition-all duration-300 group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:opacity-100" />
+                <CardContent className="flex items-start gap-4 p-5">
+                  <div
+                    className={cn(
+                      "flex size-11 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset transition-transform duration-300 group-hover:scale-110 [&_svg]:size-5",
+                      t.icon,
+                    )}
+                  >
+                    <l.icon />
+                  </div>
+                  <div className="space-y-1">
+                    <CardTitle className={cn("text-base transition-colors", t.title)}>
+                      {l.label}
+                    </CardTitle>
+                    <CardDescription>{l.description}</CardDescription>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          );
+        })}
       </div>
     </div>
   );

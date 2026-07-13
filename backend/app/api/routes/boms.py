@@ -434,6 +434,74 @@ async def activate_bom(
     return await _bom_to_response(db, bom)
 
 
+@router.post("/{bom_id}/revise", response_model=BomDetailResponse, status_code=status.HTTP_201_CREATED)
+async def revise_bom(
+    bom_id: uuid.UUID,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clone an active BOM's lines into a new draft version, so revising a
+    recipe doesn't mean re-entering every line from scratch. The source BOM
+    stays active and untouched - a past production run still points at
+    exactly the recipe it used. Same version allocation as create_bom."""
+    source = await get_or_404(db, Bom, current.org_id, bom_id, "BOM not found")
+    if source.status != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only an active BOM can be revised")
+
+    source_lines_result = await db.execute(
+        select(BomLine).where(BomLine.bom_id == source.id).order_by(BomLine.sequence)
+    )
+    source_lines = source_lines_result.scalars().all()
+
+    for attempt in range(MAX_VERSION_ATTEMPTS):
+        max_version = await db.scalar(
+            select(func.max(Bom.version)).where(Bom.org_id == current.org_id, Bom.item_id == source.item_id)
+        )
+        new_bom = Bom(
+            org_id=current.org_id,
+            item_id=source.item_id,
+            version=(max_version or 0) + 1,
+            status="draft",
+            created_by=current.id,
+        )
+        db.add(new_bom)
+        try:
+            await db.flush()
+            break
+        except IntegrityError:
+            await db.rollback()
+            if attempt == MAX_VERSION_ATTEMPTS - 1:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "Could not allocate a BOM version, please retry"
+                ) from None
+
+    for line in source_lines:
+        db.add(
+            BomLine(
+                org_id=current.org_id,
+                bom_id=new_bom.id,
+                component_item_id=line.component_item_id,
+                quantity=line.quantity,
+                sequence=line.sequence,
+                scrap_pct=line.scrap_pct,
+                unit_id=line.unit_id,
+                unit_quantity=line.unit_quantity,
+            )
+        )
+    await db.flush()
+
+    await log_event(
+        db,
+        action="bom.revised",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(new_bom.id),
+        metadata={"source_bom_id": str(source.id), "item_id": str(source.item_id), "version": new_bom.version},
+    )
+    await db.commit()
+    return await get_bom(new_bom.id, current, db)
+
+
 @router.delete("/{bom_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bom(
     bom_id: uuid.UUID,

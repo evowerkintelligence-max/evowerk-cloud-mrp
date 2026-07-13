@@ -548,3 +548,50 @@ async def test_bom_line_unit_must_belong_to_its_component(client):
         headers=headers,
     )
     assert res.status_code == 400
+
+
+async def test_revise_active_bom_copies_lines_into_new_draft(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="REV-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="REV-1", name="Bolt", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {"component_item_id": comp["id"], "quantity": "4.5", "sequence": 0, "scrap_pct": "5"}
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    activate = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+    assert activate.status_code == 200
+
+    revise = await client.post(f"/boms/{bom_data['id']}/revise", headers=headers)
+    assert revise.status_code == 201
+    revised = revise.json()
+    assert revised["status"] == "draft"
+    assert revised["version"] == 2
+    assert len(revised["lines"]) == 1
+    assert revised["lines"][0]["component_sku"] == "REV-1"
+    assert revised["lines"][0]["quantity"] == "4.5000"
+    assert revised["lines"][0]["scrap_pct"] == "5.00"
+
+    # Original active version is untouched.
+    original = await client.get(f"/boms/{bom_data['id']}", headers=headers)
+    assert original.json()["status"] == "active"
+    assert len(original.json()["lines"]) == 1
+
+
+async def test_revise_rejects_non_active_bom(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="REV-2", name="Draft Only", item_type="finished_good")
+    bom = await client.post("/boms", json={"item_id": item["id"]}, headers=headers)
+
+    revise = await client.post(f"/boms/{bom.json()['id']}/revise", headers=headers)
+    assert revise.status_code == 409

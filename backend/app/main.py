@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     ai_insights,
     alerts,
-    artifacts,
     automl,
     auth,
     bi,
@@ -109,7 +108,6 @@ app.include_router(automl.router)
 app.include_router(kpis.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
-app.include_router(artifacts.router)
 app.include_router(rca_cases.router)
 app.include_router(predictive.analyze_router)
 app.include_router(predictive.router)

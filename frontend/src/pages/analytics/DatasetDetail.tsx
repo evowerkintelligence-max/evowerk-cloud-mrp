@@ -49,12 +49,68 @@ interface Health {
   warnings: string[];
 }
 
-const TABS = ["overview", "schema", "preview", "health", "query", "sql", "clean", "transform"] as const;
+const TABS = ["overview", "schema", "preview", "health", "query", "sql", "clean", "transform", "quality", "process"] as const;
 type Tab = (typeof TABS)[number];
 
 interface QueryResult {
   columns: string[];
   rows: Record<string, unknown>[];
+}
+
+interface QualityBatchStat {
+  batch_id: string;
+  total_records: number;
+  defect_rate: number;
+}
+
+interface QualityCorrelation {
+  feature: string;
+  correlation: number;
+  direction: string;
+  strength: string;
+}
+
+interface QualityAnalyzeResponse {
+  summary: {
+    total_records: number;
+    total_defects: number;
+    metric_label: string;
+    metric_suffix: string;
+    defect_metric: number;
+    worst_batch: string;
+  };
+  batch_stats: QualityBatchStat[];
+  correlations: QualityCorrelation[];
+}
+
+interface ProcessActivity {
+  name: string;
+  cases: number;
+  executions: number;
+  avg_duration_min: number;
+  avg_wait_min: number;
+}
+
+interface ProcessBottleneck extends ProcessActivity {
+  severity: string;
+}
+
+interface ProcessMiningResponse {
+  summary: {
+    total_cases: number;
+    total_activities: number;
+    avg_case_duration_min: number;
+    longest_bottleneck: string;
+  };
+  activities: ProcessActivity[];
+  bottlenecks: ProcessBottleneck[];
+  conformance: {
+    reference_sequence: string[];
+    conformance_pct: number;
+    conforming_cases: number;
+    deviating_cases: number;
+  };
+  warnings: string[];
 }
 
 function Overview({ d }: { d: DatasetDetail }) {
@@ -557,6 +613,266 @@ function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: (id: st
   );
 }
 
+function QualityPanel({ d }: { d: DatasetDetail }) {
+  const names = d.columns.map((c) => c.name);
+  const [defectColumn, setDefectColumn] = useState("");
+  const [batchColumn, setBatchColumn] = useState("");
+
+  const quality = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, string> = { defect_column: defectColumn };
+      if (batchColumn) body.batch_column = batchColumn;
+      const res = await apiFetch(`/datasets/${d.id}/quality/analyze`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Quality analysis failed");
+      return res.json() as Promise<QualityAnalyzeResponse>;
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Quality analytics</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Defect column (0/1 flag or count, required)">
+              <Select value={defectColumn} onChange={(e) => setDefectColumn(e.target.value)}>
+                <option value="">Select column…</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Batch/lot column (optional)">
+              <Select value={batchColumn} onChange={(e) => setBatchColumn(e.target.value)}>
+                <option value="">(none)</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Button disabled={!defectColumn} loading={quality.isPending} onClick={() => quality.mutate()}>
+            Analyze quality
+          </Button>
+          {quality.isError && <Alert variant="destructive">{(quality.error as Error).message}</Alert>}
+        </CardContent>
+      </Card>
+
+      {quality.data && (
+        <>
+          <Card>
+            <CardContent className="pt-6 text-sm">
+              <strong>
+                {quality.data.summary.defect_metric}
+                {quality.data.summary.metric_suffix} {quality.data.summary.metric_label}
+              </strong>{" "}
+              — {fmt(quality.data.summary.total_defects)} defects across {fmt(quality.data.summary.total_records)}{" "}
+              records. Worst batch: {quality.data.summary.worst_batch}
+            </CardContent>
+          </Card>
+
+          {quality.data.correlations.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Feature correlations with defects</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TableWrap>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Feature</TH>
+                        <TH>Correlation</TH>
+                        <TH>Direction</TH>
+                        <TH>Strength</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {quality.data.correlations.map((c) => (
+                        <TR key={c.feature}>
+                          <TD className="font-medium">{c.feature}</TD>
+                          <TD>{c.correlation}</TD>
+                          <TD>{c.direction}</TD>
+                          <TD>{c.strength}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableWrap>
+              </CardContent>
+            </Card>
+          )}
+
+          {quality.data.batch_stats.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Batch breakdown</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TableWrap>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Batch</TH>
+                        <TH>Records</TH>
+                        <TH>Defect rate</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {quality.data.batch_stats.map((b) => (
+                        <TR key={b.batch_id}>
+                          <TD className="font-medium">{b.batch_id}</TD>
+                          <TD>{fmt(b.total_records)}</TD>
+                          <TD>{b.defect_rate}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableWrap>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProcessMiningPanel({ d }: { d: DatasetDetail }) {
+  const names = d.columns.map((c) => c.name);
+  const [caseColumn, setCaseColumn] = useState("");
+  const [activityColumn, setActivityColumn] = useState("");
+  const [timestampColumn, setTimestampColumn] = useState("");
+
+  const process = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/datasets/${d.id}/process-mining/analyze`, {
+        method: "POST",
+        body: JSON.stringify({
+          case_column: caseColumn,
+          activity_column: activityColumn,
+          timestamp_column: timestampColumn,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Process mining analysis failed");
+      return res.json() as Promise<ProcessMiningResponse>;
+    },
+  });
+
+  const ready = Boolean(caseColumn && activityColumn && timestampColumn);
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Process mining</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Case/job/order ID (required)">
+              <Select value={caseColumn} onChange={(e) => setCaseColumn(e.target.value)}>
+                <option value="">Select column…</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Activity/step name (required)">
+              <Select value={activityColumn} onChange={(e) => setActivityColumn(e.target.value)}>
+                <option value="">Select column…</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Event timestamp (required)">
+              <Select value={timestampColumn} onChange={(e) => setTimestampColumn(e.target.value)}>
+                <option value="">Select column…</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Button disabled={!ready} loading={process.isPending} onClick={() => process.mutate()}>
+            Discover process
+          </Button>
+          {process.isError && <Alert variant="destructive">{(process.error as Error).message}</Alert>}
+        </CardContent>
+      </Card>
+
+      {process.data && (
+        <>
+          <Card>
+            <CardContent className="space-y-2 pt-6 text-sm">
+              <p>
+                {fmt(process.data.summary.total_cases)} cases · {fmt(process.data.summary.total_activities)}{" "}
+                activities · avg case duration {process.data.summary.avg_case_duration_min} min · biggest
+                bottleneck: {process.data.summary.longest_bottleneck}
+              </p>
+              <p>
+                Conformance to majority path ({process.data.conformance.reference_sequence.join(" → ")}):{" "}
+                {process.data.conformance.conformance_pct}% ({process.data.conformance.conforming_cases} conforming,{" "}
+                {process.data.conformance.deviating_cases} deviating)
+              </p>
+            </CardContent>
+          </Card>
+
+          {process.data.warnings.map((w) => (
+            <Alert key={w} variant="warning">
+              {w}
+            </Alert>
+          ))}
+
+          {process.data.bottlenecks.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Bottlenecks (highest avg wait time)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TableWrap>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Activity</TH>
+                        <TH>Avg wait (min)</TH>
+                        <TH>Severity</TH>
+                        <TH>Cases</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {process.data.bottlenecks.map((b) => (
+                        <TR key={b.name}>
+                          <TD className="font-medium">{b.name}</TD>
+                          <TD>{b.avg_wait_min}</TD>
+                          <TD>{b.severity}</TD>
+                          <TD>{fmt(b.cases)}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableWrap>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function QueryPanel({ d }: { d: DatasetDetail }) {
   const names = d.columns.map((c) => c.name);
   const qb = useQueryBuilder(d.id, names);
@@ -771,6 +1087,8 @@ export function DatasetDetail() {
       {tab === "sql" && <SqlPanel d={d} />}
       {tab === "clean" && <CleanPanel d={d} onCreated={openDataset} />}
       {tab === "transform" && <TransformPanel d={d} onCreated={openDataset} />}
+      {tab === "quality" && <QualityPanel d={d} />}
+      {tab === "process" && <ProcessMiningPanel d={d} />}
     </div>
   );
 }

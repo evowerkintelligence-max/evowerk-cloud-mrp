@@ -23,7 +23,6 @@ from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models
     alert,
-    artifact,
     audit,
     automl_run,
     bom,

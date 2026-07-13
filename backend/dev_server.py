@@ -24,7 +24,6 @@ from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models on the metadata
     alert,
-    artifact,
     audit,
     bom,
     dashboard,

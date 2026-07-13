@@ -20,9 +20,9 @@ export default defineConfig({
       // entry-per-route allowlist silently dropped any router added later:
       // /forecasts, /mrp, /inventory, /locations and /ai were all missing, so
       // Planning, Inventory and Ask never reached the API in dev. Same lesson
-      // hit again later - artifacts/computer-vision/data-chat/predictive/
-      // rca-cases/scenarios were added to main.py but never added here.
-      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|alerts|artifacts|computer-vision|data-chat|predictive|rca-cases|scenarios)(/|$|\\?)":
+      // hit again later - computer-vision/data-chat/predictive/rca-cases/
+      // scenarios were added to main.py but never added here.
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|predictive|rca-cases|scenarios)(/|$|\\?)":
         `http://localhost:${backendPort}`,
     },
   },

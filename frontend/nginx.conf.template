@@ -6,7 +6,9 @@
 # silently dropped every router added after /lots (analytics, ai, reports,
 # bi, workflows, automl, kpis, integrations, realtime were all missing, so
 # none of those pages worked once deployed via this nginx image, only in dev
-# through Vite's own proxy).
+# through Vite's own proxy). Same lesson hit a third time: simulation, alerts,
+# artifacts, computer-vision, data-chat, predictive, rca-cases, and scenarios
+# were all added to main.py after this list was last synced.
 #
 # proxy_buffering off + a long proxy_read_timeout apply here too: harmless for
 # ordinary JSON responses, but required for /realtime/streams/{id}/events
@@ -28,7 +30,7 @@ server {
         add_header Content-Type text/plain;
     }
 
-    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|health)(/|$) {
+    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|alerts|artifacts|computer-vision|data-chat|predictive|rca-cases|scenarios)(/|$) {
         proxy_pass http://${BACKEND_UPSTREAM};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

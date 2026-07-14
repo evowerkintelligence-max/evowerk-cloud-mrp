@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { today, plusDays } from "@/lib/date";
+import { useDatasets } from "./analytics/shared";
 
 interface ItemResponse {
   id: string;
@@ -9,8 +11,8 @@ interface ItemResponse {
   name: string;
 }
 
-type Kind = "mrp-plan" | "inventory-analytics" | "rca" | "scenario";
-type Format = "pdf" | "csv" | "html";
+type Kind = "mrp-plan" | "inventory-analytics" | "rca" | "scenario" | "dataset";
+type Format = "pdf" | "csv" | "html" | "xlsx";
 
 const KINDS: { kind: Kind; label: string; description: string }[] = [
   {
@@ -33,19 +35,14 @@ const KINDS: { kind: Kind; label: string; description: string }[] = [
     label: "Scenario comparison",
     description: "How reorder point, safety stock and status move if lead times change. Nothing is persisted.",
   },
+  {
+    kind: "dataset",
+    label: "Dataset",
+    description: "A row preview and size/shape summary of one uploaded dataset, instead of live production data.",
+  },
 ];
 
 const DIMENSIONS = ["supplier", "item_type", "abc_class"];
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function plusDays(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
 
 export function Reports() {
   const [kind, setKind] = useState<Kind>("mrp-plan");
@@ -53,6 +50,7 @@ export function Reports() {
   const [horizonEnd, setHorizonEnd] = useState(plusDays(90));
   const [dimension, setDimension] = useState(DIMENSIONS[0]);
   const [leadTimes, setLeadTimes] = useState<Record<string, string>>({});
+  const [datasetId, setDatasetId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const items = useQuery<ItemResponse[]>({
@@ -64,6 +62,8 @@ export function Reports() {
     },
     enabled: kind === "scenario",
   });
+
+  const datasets = useDatasets();
 
   // Only items given a lead time take part in the what-if; the backend rejects
   // an empty override set, so the preview stays idle until one is entered.
@@ -80,10 +80,11 @@ export function Reports() {
     }
     if (kind === "rca") params.set("dimension", dimension);
     if (kind === "scenario") params.set("lead_times", leadTimeParam);
+    if (kind === "dataset") params.set("dataset_id", datasetId);
     return `/reports/${kind}?${params}`;
   }
 
-  const ready = kind !== "scenario" || leadTimeParam !== "";
+  const ready = (kind !== "scenario" || leadTimeParam !== "") && (kind !== "dataset" || datasetId !== "");
 
   // Reports are authenticated, so they can't be fetched with a plain <a href> -
   // pull the bytes through apiFetch (which carries the bearer token and
@@ -115,7 +116,7 @@ export function Reports() {
   // report can never script the app around it.
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const preview = useQuery({
-    queryKey: ["report-preview", kind, horizonStart, horizonEnd, dimension, leadTimeParam],
+    queryKey: ["report-preview", kind, horizonStart, horizonEnd, dimension, leadTimeParam, datasetId],
     queryFn: () => fetchReport("html"),
     enabled: ready,
     retry: false,
@@ -217,6 +218,20 @@ export function Reports() {
             {!ready && <p>Set a lead time on at least one item to run the comparison.</p>}
           </>
         )}
+
+        {kind === "dataset" && (
+          <label>
+            Dataset
+            <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+              <option value="">Select a dataset…</option>
+              {datasets.data?.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.row_count.toLocaleString()} rows)
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </section>
 
       <section>
@@ -229,6 +244,9 @@ export function Reports() {
         </button>{" "}
         <button onClick={() => download("html")} disabled={!ready}>
           Download HTML
+        </button>{" "}
+        <button onClick={() => download("xlsx")} disabled={!ready}>
+          Download XLSX
         </button>
       </section>
 

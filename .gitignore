@@ -13,4 +13,9 @@ build/
 frontend/.vite/
 frontend/*.tsbuildinfo
 backend/data/
+data/
+.tmp/
+infra/terraform/**/tfplan.out
 graphify-out/
+
+.worktrees/

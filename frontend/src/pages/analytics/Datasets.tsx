@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Database } from "lucide-react";
+import { Database, Package } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
@@ -59,6 +59,11 @@ export function Datasets() {
       <PageHeader
         title="Datasets"
         description="Production data files powering the analytics engines. Upload CSV, Excel, JSON, or Parquet."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => navigate("/items")}>
+            <Package /> Item catalog
+          </Button>
+        }
       />
 
       {error && <Alert variant="destructive">{error}</Alert>}

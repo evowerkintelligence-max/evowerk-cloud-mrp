@@ -7,27 +7,59 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Literal
 
+from fastapi import HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.dashboard import Chart
+from app.models.dataset import Dataset
+from app.models.report_spec import SavedReport
 from app.models.tenant import Org
+from app.services import dataset_query as query_service
+from app.services import datasets as ds_service
+from app.services import llm
 from app.services.inventory_analytics import compute_inventory_analytics
 from app.services.mrp import compute_mrp_plan
 from app.services.rca import RcaResult, compute_rca
 from app.services.scenario import compare_lead_time_scenario
 
 # Ported from a desktop app's reports_v2 (ReportSpec + csv/html/pdf renderers).
-# Dropped on the way over: the on-disk spec store, the artifact registry, the
-# AI narration pass and the BI-widget embeds - all of that existed to snapshot a
-# *workflow run*, and every source here (MRP plan, analytics, RCA, scenario) is
-# recomputed from live org data on request instead. A report is therefore a
-# pure function of (org, kind, params) and needs no table, no migration and no
-# report_id: build a Report, render it, stream it.
+# Dropped on the way over: the on-disk spec store, the artifact registry, and
+# the BI-widget embeds - all of that existed to snapshot a *workflow run*, and
+# every source here (MRP plan, analytics, RCA, scenario) is recomputed from
+# live org data on request instead. A report is therefore a pure function of
+# (org, kind, params) and needs no table, no migration and no report_id: build
+# a Report, render it, stream it.
+#
+# AI narration (ported from report_narrate.py, see narrate_report below) keeps
+# that same shape: nothing is stored, a Report is narrated fresh on request
+# from whatever data it just computed.
 BRAND = "EvoWerk Cloud MRP"
 
-KINDS = ("mrp-plan", "inventory-analytics", "rca", "scenario")
-FORMATS = {"csv": "text/csv", "html": "text/html; charset=utf-8", "pdf": "application/pdf"}
+KINDS = ("mrp-plan", "inventory-analytics", "rca", "scenario", "dataset")
+FORMATS = {
+    "csv": "text/csv",
+    "html": "text/html; charset=utf-8",
+    "pdf": "application/pdf",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+# A cell string starting with one of these opens as a live formula in Excel/
+# Sheets - a dataset value like "=cmd|'/c calc'!A0" would otherwise execute on
+# open. Prefixing with a quote forces it to render as inert text instead.
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _excel_safe(cell: str) -> str:
+    # A leading "-" or "+" is also how a real negative/positive number renders
+    # (see _num) - only quote-prefix cells that AREN'T plain numbers, so a
+    # legitimate "-5.20" isn't turned into text.
+    if cell.startswith(_FORMULA_PREFIXES) and not _is_numeric(cell):
+        return "'" + cell
+    return cell
 
 
 @dataclass
@@ -407,6 +439,278 @@ async def build_scenario_report(
     )
 
 
+async def build_dataset_report(db: AsyncSession, org_id: uuid.UUID, dataset: Dataset) -> Report:
+    """A report over an uploaded dataset instead of live org data - a capped
+    row preview plus the same size/shape KPIs the Datasets page shows.
+    Column dtypes aren't included: CSV/TSV uploads are sniffed ALL_VARCHAR
+    (see services.datasets.relation_for), so a per-column type line would
+    read "VARCHAR" for nearly every column and add noise, not signal.
+    """
+    preview_limit = 200
+    preview = ds_service.preview_rows(dataset, limit=preview_limit)
+    col_names = [c["name"] for c in dataset.columns]
+
+    return Report(
+        slug="dataset",
+        title=dataset.name,
+        subtitle=f"Uploaded dataset — {_int(dataset.row_count)} rows, {_int(len(col_names))} columns",
+        org_name=await _org_name(db, org_id),
+        generated_at=_now(),
+        kpis=[
+            ("Rows", _int(dataset.row_count)),
+            ("Columns", _int(len(col_names))),
+            ("Size", f"{dataset.size_bytes / 1024:,.1f} KB"),
+            ("Format", dataset.fmt.upper()),
+        ],
+        sections=[
+            Section(
+                title=f"Preview (first {len(preview)} of {dataset.row_count:,} rows)",
+                columns=col_names,
+                rows=[
+                    [EM_DASH if row.get(c) is None else str(row.get(c)) for c in col_names] for row in preview
+                ],
+                note=None if preview else "Dataset is empty.",
+            )
+        ],
+        notes=[
+            f"Preview capped at {preview_limit} rows - use the Datasets page to work with the full file.",
+        ],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Custom report builder - a user-composed Report from an ordered list of
+# sections, saved as a SavedReport and rendered through the same
+# render_csv/html/pdf below as every other report kind. Ported from the
+# desktop app's reportsView.js (a list-based section builder, not drag/drop -
+# see the workflow/report-builder port plan). kpi_grid is deliberately not
+# included: it depends on a dedicated KPIs engine this app doesn't have yet.
+# --------------------------------------------------------------------------- #
+_BULLET_LABELS = {
+    "findings": "Finding",
+    "risks": "Risk",
+    "recommendations": "Recommendation",
+    "caveats": "Caveat",
+}
+
+
+class ReportSectionSpec(BaseModel):
+    type: Literal[
+        "title", "exec_summary", "table", "bi_chart",
+        "findings", "risks", "recommendations", "caveats", "text",
+    ]
+    title: str | None = None
+    text: str | None = None
+    items: list[str] | None = None
+    dataset_id: uuid.UUID | None = None
+    query: query_service.DatasetQueryRequest | None = None
+    chart_id: uuid.UUID | None = None
+
+
+async def _resolve_section(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> Section:
+    if spec.type in ("title", "exec_summary", "text"):
+        lines = [line for line in (spec.text or "").splitlines() if line.strip()]
+        return Section(
+            title=spec.title or spec.type.replace("_", " ").title(),
+            columns=["Text"],
+            rows=[[line] for line in lines] or [[EM_DASH]],
+        )
+
+    if spec.type in _BULLET_LABELS:
+        return Section(
+            title=spec.title or spec.type.title(),
+            columns=[_BULLET_LABELS[spec.type]],
+            rows=[[item] for item in (spec.items or [])] or [[EM_DASH]],
+        )
+
+    if spec.type == "table":
+        if spec.dataset_id is None or spec.query is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{spec.type}' section needs dataset_id and query")
+        dataset = await ds_service.get_dataset_or_404(db, org_id, spec.dataset_id)
+        result = await query_service.run_query(db, dataset, org_id, spec.query)
+        columns = result["columns"]
+        return Section(
+            title=spec.title or dataset.name,
+            columns=columns,
+            rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
+        )
+
+    # spec.type == "bi_chart": replay a saved Chart's query, same as GET
+    # /bi/charts/{id}/data - a table is the correct rendering here too, since
+    # a PDF/CSV export can't embed a live chart anyway.
+    if spec.chart_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "'bi_chart' section needs chart_id")
+    chart = (
+        await db.execute(select(Chart).where(Chart.id == spec.chart_id, Chart.org_id == org_id))
+    ).scalar_one_or_none()
+    if chart is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Chart not found: {spec.chart_id}")
+    dataset = await ds_service.get_dataset_or_404(db, org_id, chart.dataset_id)
+    query = query_service.DatasetQueryRequest.model_validate(chart.query_config)
+    result = await query_service.run_query(db, dataset, org_id, query)
+    columns = result["columns"]
+    return Section(
+        title=spec.title or chart.name,
+        columns=columns,
+        rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
+    )
+
+
+async def build_custom_report(
+    db: AsyncSession, org_id: uuid.UUID, name: str, sections: list[ReportSectionSpec]
+) -> Report:
+    resolved = [await _resolve_section(db, org_id, s) for s in sections]
+    return Report(
+        slug="custom",
+        title=name,
+        subtitle=f"{len(resolved)} section(s)",
+        org_name=await _org_name(db, org_id),
+        generated_at=_now(),
+        sections=resolved,
+    )
+
+
+async def list_saved_reports(db: AsyncSession, org_id: uuid.UUID) -> list[SavedReport]:
+    rows = await db.execute(
+        select(SavedReport).where(SavedReport.org_id == org_id).order_by(SavedReport.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
+async def get_saved_report_or_404(db: AsyncSession, org_id: uuid.UUID, report_id: uuid.UUID) -> SavedReport:
+    row = (
+        await db.execute(select(SavedReport).where(SavedReport.id == report_id, SavedReport.org_id == org_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+    return row
+
+
+# --------------------------------------------------------------------------- #
+# AI narration
+# --------------------------------------------------------------------------- #
+# Ported from the desktop app's report_narrate.py: an LLM writes the prose,
+# strictly grounded in numbers this module already computed - it never sees
+# raw org data, only the same Section(columns, rows) tables render_* already
+# use, and it never invents a figure that isn't in one of those tables.
+#
+# Generalized over any Section instead of the desktop's nine per-source
+# extractors (oee/downtime/shifts/...): every report here already normalizes
+# down to Section, so one generic prompt covers every report kind.
+NARRATION_STYLES = ("narrative", "bullets", "brief")
+_MAX_NARRATION_ROWS = 40  # enough shape for a grounded narrative, not the whole table
+
+
+class SectionNarrative(BaseModel):
+    title: str
+    narrative: str
+
+
+class ReportNarration(BaseModel):
+    executive_summary: str
+    sections: list[SectionNarrative]
+    error: str | None = None
+
+
+_STYLE_INSTRUCTIONS = {
+    "narrative": "Write 2-4 professional paragraphs per section for a plant manager or executive audience.",
+    "bullets": 'Write 4-8 short bullet points per section, one fact per bullet, each prefixed with "• ".',
+    "brief": "Write exactly one tight paragraph per section (max 3 sentences), covering only the highest-impact figures.",
+}
+
+
+def _narration_system(style: str) -> str:
+    instruction = _STYLE_INSTRUCTIONS.get(style, _STYLE_INSTRUCTIONS["narrative"])
+    return (
+        "You are a professional manufacturing report writer working as a scribe. "
+        "Your ONLY job is to convert the provided tables into narrative text.\n\n"
+        "STRICT RULES:\n"
+        "1. Every number, name, or date you write MUST come directly from the provided data.\n"
+        "2. Do not invent, estimate, or add any figures not present in the data.\n"
+        "3. Do not add recommendations or analysis beyond what the data explicitly shows.\n"
+        f"4. {instruction}\n"
+        "5. Executive summary: 1-2 sentences referencing the most significant findings across all sections.\n"
+        "6. Return EXACTLY one section per input block below, in the same order, copying its title exactly.\n\n"
+        'Return ONLY a JSON object: {"executive_summary": "...", '
+        '"sections": [{"title": "<exact title from block>", "narrative": "..."}]}'
+    )
+
+
+def _section_block(section: Section) -> str:
+    sample = section.rows[:_MAX_NARRATION_ROWS]
+    lines = [",".join(section.columns)] + [",".join(str(c) for c in row) for row in sample]
+    omitted = len(section.rows) - len(sample)
+    if omitted > 0:
+        lines.append(f"... ({omitted} more row(s) not shown)")
+    return f"=== {section.title} ===\n" + "\n".join(lines)
+
+
+def _narration_prompt(report: Report) -> str:
+    parts = [f"Report: {report.title}\nGenerated: {report.generated_at:%d %B %Y}"]
+    if report.kpis:
+        parts.append("Headline figures: " + ", ".join(f"{label}: {value}" for label, value in report.kpis))
+    parts += [_section_block(s) for s in report.sections]
+    return "\n\n".join(parts)
+
+
+def _fallback_narration(report: Report, error: str | None = None) -> ReportNarration:
+    kpi_str = "; ".join(f"{label}: {value}" for label, value in report.kpis)
+    summary = f"This report covers {len(report.sections)} section(s)."
+    if kpi_str:
+        summary += f" Key figures — {kpi_str}."
+    summary += " AI narration was unavailable; every figure above is computed from your live data."
+    return ReportNarration(
+        executive_summary=summary,
+        sections=[
+            SectionNarrative(
+                title=s.title,
+                narrative=f"{s.title}: {len(s.rows)} row(s) across {len(s.columns)} column(s). See the table above for full figures.",
+            )
+            for s in report.sections
+        ],
+        error=error,
+    )
+
+
+async def narrate_report(report: Report, style: str = "narrative") -> ReportNarration:
+    if not report.sections:
+        return ReportNarration(executive_summary="This report has no sections to narrate.", sections=[])
+    if not llm.is_configured():
+        return _fallback_narration(report)
+
+    try:
+        parsed = await llm.generate_json(
+            _narration_prompt(report), system=_narration_system(style), max_output_tokens=2500,
+        )
+    except Exception as exc:  # transient LLM error or malformed JSON - narrate via the deterministic path instead
+        return _fallback_narration(report, error=str(exc))
+
+    ai_sections = parsed.get("sections") or []
+    by_title = {str(s.get("title")): str(s.get("narrative") or "") for s in ai_sections if isinstance(s, dict)}
+    # The model was told to echo titles verbatim, but that isn't guaranteed - if
+    # it dropped them entirely but returned the right count, match positionally
+    # instead of silently producing zero narratives.
+    by_position = (
+        [s.get("narrative", "") if isinstance(s, dict) else "" for s in ai_sections]
+        if not by_title and len(ai_sections) == len(report.sections) else None
+    )
+    fallback_by_title = {s.title: s.narrative for s in _fallback_narration(report).sections}
+
+    sections_out = []
+    for idx, section in enumerate(report.sections):
+        narrative = by_title.get(section.title)
+        if not narrative and by_position is not None:
+            narrative = by_position[idx]
+        if not narrative:
+            narrative = fallback_by_title[section.title]
+        sections_out.append(SectionNarrative(title=section.title, narrative=narrative))
+
+    return ReportNarration(
+        executive_summary=str(parsed.get("executive_summary") or "").strip() or _fallback_narration(report).executive_summary,
+        sections=sections_out,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Renderers
 # --------------------------------------------------------------------------- #
@@ -424,7 +728,7 @@ def render_csv(report: Report) -> bytes:
         w.writerow([])
         w.writerow(["Summary"])
         for label, value in report.kpis:
-            w.writerow([label, value])
+            w.writerow([_excel_safe(label), _excel_safe(value)])
 
     for section in report.sections:
         w.writerow([])
@@ -432,7 +736,7 @@ def render_csv(report: Report) -> bytes:
         if section.note:
             w.writerow([section.note])
         w.writerow(section.columns)
-        w.writerows(section.rows)
+        w.writerows([[_excel_safe(cell) for cell in row] for row in section.rows])
 
     if report.notes:
         w.writerow([])
@@ -764,7 +1068,50 @@ def render_pdf(report: Report) -> bytes:
     return buf.getvalue()
 
 
-RENDERERS = {"csv": render_csv, "html": render_html, "pdf": render_pdf}
+def _sheet_name(name: str) -> str:
+    """Excel sheet names ban []:*?/\\ and cap at 31 chars."""
+    cleaned = "".join("_" if ch in '[]:*?/\\' else ch for ch in (name or "Sheet").strip())
+    return (cleaned or "Sheet")[:31]
+
+
+def render_xlsx(report: Report) -> bytes:
+    """One workbook, one sheet per section - ported from the desktop app's
+    exports.py _write_xlsx, generalized to Report/Section instead of a single
+    ad-hoc table."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    if report.kpis:
+        ws = wb.create_sheet(_sheet_name("Summary"))
+        ws.append(["Metric", "Value"])
+        for label, value in report.kpis:
+            ws.append([_excel_safe(label), _excel_safe(value)])
+
+    used_names: set[str] = set()
+    for section in report.sections:
+        base = _sheet_name(section.title)
+        name, n = base, 2
+        while name in used_names:
+            name = f"{base[:28]}_{n}"
+            n += 1
+        used_names.add(name)
+
+        ws = wb.create_sheet(name)
+        ws.append(section.columns)
+        for row in section.rows:
+            ws.append([_excel_safe(cell) for cell in row])
+
+    if not wb.sheetnames:
+        wb.create_sheet(_sheet_name(report.title))
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+RENDERERS = {"csv": render_csv, "html": render_html, "pdf": render_pdf, "xlsx": render_xlsx}
 
 
 def render(report: Report, fmt: str) -> bytes:

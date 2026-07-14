@@ -1,41 +1,70 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     ai_insights,
+    alerts,
+    automl,
     auth,
+    bi,
     boms,
+    computer_vision,
+    data_chat,
     datasets,
     downtime,
     forecasts,
+    integrations,
     inventory,
     inventory_analytics,
     items,
+    kpis,
     locations,
     lots,
+    mfg_forecast,
     oee,
     orgs,
+    plant_summary,
+    predictive,
     process_mining,
     purchase_orders,
     quality,
+    rca_cases,
+    realtime,
     reports,
     scrap,
     shifts,
+    simulation,
     spc,
     suppliers,
     throughput,
+    what_if_scenarios,
+    workflows,
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
+from app.services import realtime as realtime_service
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Re-adopt any realtime stream that was running before this process
+    # started (redeploy/restart/crash) - see app.services.realtime.
+    await realtime_service.resume_all_streams()
+    yield
+    realtime_service.stop_all_runners()
+
 
 app = FastAPI(
     title="EvoWerk Cloud MRP",
     docs_url="/docs" if settings.env != "production" else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(TelemetryMiddleware)
@@ -64,15 +93,31 @@ app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
 app.include_router(datasets.router)
 app.include_router(oee.router)
+app.include_router(plant_summary.router)
 app.include_router(downtime.router)
 app.include_router(throughput.router)
 app.include_router(scrap.router)
 app.include_router(shifts.router)
+app.include_router(simulation.router)
 app.include_router(spc.router)
 app.include_router(quality.router)
 app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
 app.include_router(reports.router)
+app.include_router(bi.router)
+app.include_router(workflows.router)
+app.include_router(automl.router)
+app.include_router(kpis.router)
+app.include_router(integrations.router)
+app.include_router(realtime.router)
+app.include_router(rca_cases.router)
+app.include_router(predictive.analyze_router)
+app.include_router(predictive.router)
+app.include_router(mfg_forecast.router)
+app.include_router(what_if_scenarios.router)
+app.include_router(computer_vision.router)
+app.include_router(data_chat.router)
+app.include_router(alerts.router)
 
 
 @app.get("/health")

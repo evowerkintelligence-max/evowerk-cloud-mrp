@@ -174,7 +174,11 @@ async def test_concurrent_inventory_adjust_no_lost_updates(pg_client):
     # assert the invariant, not that every request wins the create race.
     results = await asyncio.gather(
         *[
-            pg_client.post(f"/inventory/{item['id']}/adjust", json={"quantity": "5"}, headers=headers)
+            pg_client.post(
+                f"/inventory/{item['id']}/adjust",
+                json={"quantity": "5", "reason_code": "cycle_count"},
+                headers=headers,
+            )
             for _ in range(12)
         ]
     )
@@ -207,6 +211,65 @@ async def test_concurrent_lot_consume_never_oversells(pg_client):
     assert Decimal(lot.json()["quantity_remaining"]) == Decimal("0")
 
 
+async def test_concurrent_po_submit_only_one_succeeds(pg_client):
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers)
+    supplier = await _supplier(pg_client, headers)
+    po = (await pg_client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/purchase-orders/{po['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+
+    # Without the for_update lock on the PO row, two concurrent submits can both
+    # read status=="draft" before either commits and both flip it - the lock
+    # serializes them so only the first through wins and the rest see the
+    # already-submitted status and get a clean 409.
+    results = await asyncio.gather(
+        *[pg_client.post(f"/purchase-orders/{po['id']}/submit", headers=headers) for _ in range(10)]
+    )
+    statuses = [r.status_code for r in results]
+    assert statuses.count(200) == 1, statuses
+    assert statuses.count(409) == 9, statuses
+    detail = await pg_client.get(f"/purchase-orders/{po['id']}", headers=headers)
+    assert detail.json()["status"] == "submitted"
+
+
+async def test_concurrent_po_receive_never_exceeds_ordered_quantity(pg_client):
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers)
+    supplier = await _supplier(pg_client, headers)
+    po = (await pg_client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)).json()
+    lines = await pg_client.patch(
+        f"/purchase-orders/{po['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "100", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    line_id = lines.json()["lines"][0]["id"]
+    await pg_client.post(f"/purchase-orders/{po['id']}/submit", headers=headers)
+
+    # 15 concurrent receipts of 10 against an ordered quantity of 100: exactly
+    # 10 can succeed before the running total would exceed what was ordered.
+    results = await asyncio.gather(
+        *[
+            pg_client.post(
+                f"/purchase-orders/{po['id']}/receive",
+                json=[{"po_line_id": line_id, "quantity": "10"}],
+                headers=headers,
+            )
+            for _ in range(15)
+        ]
+    )
+    ok = [r for r in results if r.status_code == 200]
+    conflict = [r for r in results if r.status_code == 409]
+    assert len(ok) == 10, [r.status_code for r in results]
+    assert len(conflict) == 5
+    detail = await pg_client.get(f"/purchase-orders/{po['id']}", headers=headers)
+    assert Decimal(detail.json()["lines"][0]["quantity_received"]) == Decimal("100")
+    assert detail.json()["status"] == "received"
+
+
 async def test_concurrent_po_creation_never_duplicates_numbers(pg_client):
     headers = await _auth(pg_client)
     supplier = await _supplier(pg_client, headers)
@@ -227,3 +290,87 @@ async def test_concurrent_po_creation_never_duplicates_numbers(pg_client):
     numbers = [r.json()["po_number"] for r in results if r.status_code == 201]
     assert len(numbers) == len(set(numbers)), f"duplicate po_numbers: {sorted(numbers)}"
     assert numbers, "expected at least one PO to be created"
+
+
+async def test_concurrent_mutual_reference_activate_never_creates_a_live_cycle(pg_client):
+    """Draft A -> B and draft B -> A racing to activate. Without the org-wide
+    for_update lock in activate_bom, both requests could read the other side as
+    still-draft (invisible to the active-only cycle walk) before either commits,
+    and both activate - a real cycle in the graph MRP explosion walks. The lock
+    serializes them: the second sees the first's committed status and is
+    rejected, so exactly one side ever ends up active."""
+    headers = await _auth(pg_client)
+    item_a = await _item(pg_client, headers, sku="CYC-A")
+    item_b = await _item(pg_client, headers, sku="CYC-B")
+
+    bom_a = (await pg_client.post("/boms", json={"item_id": item_a["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/boms/{bom_a['id']}",
+        json={
+            "lines": [{"component_item_id": item_b["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_a["updated_at"],
+        },
+        headers=headers,
+    )
+    bom_b = (await pg_client.post("/boms", json={"item_id": item_b["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/boms/{bom_b['id']}",
+        json={
+            "lines": [{"component_item_id": item_a["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_b["updated_at"],
+        },
+        headers=headers,
+    )
+
+    results = await asyncio.gather(
+        pg_client.post(f"/boms/{bom_a['id']}/activate", headers=headers),
+        pg_client.post(f"/boms/{bom_b['id']}/activate", headers=headers),
+    )
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], statuses
+
+    detail_a = await pg_client.get(f"/boms/{bom_a['id']}", headers=headers)
+    detail_b = await pg_client.get(f"/boms/{bom_b['id']}", headers=headers)
+    # Exactly one side is active, the loser stays draft - never both, which
+    # would mean a real cycle got committed into the active-BOM graph.
+    assert sorted([detail_a.json()["status"], detail_b.json()["status"]]) == ["active", "draft"]
+
+
+async def test_concurrent_patch_same_bom_only_one_wins_via_row_version_cas(pg_client):
+    """Two PATCHes load the same draft BOM (same expected_updated_at) and fire
+    concurrently. The Python-level expected_updated_at pre-check can't catch
+    this alone - both can pass it before either flushes. Bom.row_version
+    (version_id_col) is the real guard for that gap: the loser's flush hits a
+    changed row_version, raises StaleDataError, and is converted to a clean
+    409 instead of silently clobbering the winner's write."""
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers, sku="FG-CAS")
+    comp_x = await _item(pg_client, headers, sku="RAW-X")
+    comp_y = await _item(pg_client, headers, sku="RAW-Y")
+    bom = (await pg_client.post("/boms", json={"item_id": item["id"]}, headers=headers)).json()
+
+    results = await asyncio.gather(
+        pg_client.patch(
+            f"/boms/{bom['id']}",
+            json={
+                "lines": [{"component_item_id": comp_x["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom["updated_at"],
+            },
+            headers=headers,
+        ),
+        pg_client.patch(
+            f"/boms/{bom['id']}",
+            json={
+                "lines": [{"component_item_id": comp_y["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom["updated_at"],
+            },
+            headers=headers,
+        ),
+    )
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], statuses
+
+    # The winner's write landed cleanly - exactly one line, not a merge or
+    # duplicate of both concurrent edits.
+    winner = next(r for r in results if r.status_code == 200).json()
+    assert len(winner["lines"]) == 1

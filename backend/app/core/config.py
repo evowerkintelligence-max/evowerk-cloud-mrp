@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     rate_limit_login_per_5min: int = 60
     rate_limit_refresh_per_5min: int = 120
     rate_limit_mfa_verify_per_5min: int = 30
+    # Free-text SQL is materially more expensive than the allow-listed query
+    # builder (full dataset load + arbitrary joins/aggregates per call), so
+    # unlike /datasets/{id}/query it gets its own limit.
+    rate_limit_sql_query_per_5min: int = 30
+    sql_query_timeout_seconds: float = 10.0
 
     cors_origins: list[str] = ["http://localhost:5173"]
 
@@ -46,6 +51,12 @@ class Settings(BaseSettings):
     allowed_dataset_exts: list[str] = [
         "csv", "tsv", "xlsx", "xls", "json", "jsonl", "ndjson", "parquet",
     ]
+
+    # Gemini client for LLM-backed features (data chat, computer vision, report
+    # narration). Optional: unset means every caller uses its deterministic
+    # fallback path instead of a live model call - see app/services/llm.py.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
 
 
 @lru_cache

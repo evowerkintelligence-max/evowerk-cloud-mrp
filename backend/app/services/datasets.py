@@ -179,14 +179,21 @@ async def delete_dataset(db: AsyncSession, dataset: Dataset) -> None:
     await db.flush()
 
 
+def missing_columns(dataset: Dataset, cols: Iterable[str | None]) -> list[str]:
+    """Which of `cols` aren't real headers of this dataset (blanks/None ignored).
+    The security-boundary allow-list check, factored out so callers that need
+    a soft warning (e.g. app.services.alerts) don't have to re-derive `known`."""
+    known = {c["name"] for c in dataset.columns}
+    return [col for col in cols if col and col not in known]
+
+
 def validate_columns(dataset: Dataset, cols: Iterable[str | None]) -> None:
     """Reject any mapped column that is not a real header of this dataset. Column
     names are interpolated into SQL (identifier-quoted by qi), so this
     allow-list is the security boundary — only known headers may pass."""
-    known = {c["name"] for c in dataset.columns}
-    for col in cols:
-        if col and col not in known:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Column not found in dataset: '{col}'")
+    missing = missing_columns(dataset, cols)
+    if missing:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Column not found in dataset: '{missing[0]}'")
 
 
 def dataframe_for(dataset: Dataset):

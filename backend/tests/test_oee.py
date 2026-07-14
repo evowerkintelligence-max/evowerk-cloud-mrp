@@ -39,9 +39,10 @@ async def test_oee_compute_availability_performance_quality(client):
     dataset_id = await _upload_dataset(client, token)
 
     res = await client.post(
-        f"/datasets/{dataset_id}/oee/compute",
+        "/analytics/oee",
         headers=headers,
         json={
+            "dataset_id": dataset_id,
             "planned_time_col": "planned_min",
             "operating_time_col": "operating_min",
             "total_units_col": "total_units",
@@ -75,9 +76,10 @@ async def test_oee_compute_rejects_unknown_column(client):
     dataset_id = await _upload_dataset(client, token)
 
     res = await client.post(
-        f"/datasets/{dataset_id}/oee/compute",
+        "/analytics/oee",
         headers=headers,
         json={
+            "dataset_id": dataset_id,
             "planned_time_col": "nope",
             "operating_time_col": "operating_min",
             "total_units_col": "total_units",
@@ -93,9 +95,10 @@ async def test_oee_rca_ranks_worst_machine_first(client):
     dataset_id = await _upload_dataset(client, token)
 
     res = await client.post(
-        f"/datasets/{dataset_id}/oee/rca",
+        "/analytics/oee/rca",
         headers=headers,
         json={
+            "dataset_id": dataset_id,
             "planned_time_col": "planned_min",
             "operating_time_col": "operating_min",
             "total_units_col": "total_units",

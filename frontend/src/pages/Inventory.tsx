@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +11,18 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { humanize } from "@/lib/status";
+import { humanize, inventoryStatusVariant } from "@/lib/status";
+import { cn } from "@/lib/utils";
+
+const REASON_CODES = [
+  { value: "cycle_count", label: "Cycle count" },
+  { value: "damage", label: "Damage" },
+  { value: "found_stock", label: "Found stock" },
+  { value: "shrinkage", label: "Shrinkage" },
+  { value: "correction", label: "Correction" },
+  { value: "other", label: "Other" },
+] as const;
+type ReasonCode = (typeof REASON_CODES)[number]["value"];
 
 interface LocationResponse {
   id: string;
@@ -43,6 +53,9 @@ interface InventoryTransaction {
   transaction_type: string;
   quantity_delta: string;
   reason: string | null;
+  counted_quantity: string | null;
+  expected_quantity: string | null;
+  reason_note: string | null;
   created_at: string;
 }
 
@@ -50,17 +63,42 @@ interface InventoryDetail extends InventoryItem {
   transactions: InventoryTransaction[];
 }
 
-export function Inventory() {
+interface InventoryAnalyticsLine {
+  item_id: string;
+  reorder_point: number | null;
+  days_of_supply: number | null;
+  status: string;
+}
+
+interface AdjustmentRequestSummary {
+  id: string;
+  status: string;
+}
+
+interface AdjustmentOutcome {
+  applied: boolean;
+  item: InventoryItem | null;
+  request: AdjustmentRequestSummary | null;
+}
+
+export function InventoryPanel() {
   const queryClient = useQueryClient();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [consumeQty, setConsumeQty] = useState("1");
   const [consumeLoc, setConsumeLoc] = useState("");
   const [adjustDelta, setAdjustDelta] = useState("1");
   const [adjustLoc, setAdjustLoc] = useState("");
+  const [adjustReasonCode, setAdjustReasonCode] = useState<ReasonCode>("correction");
+  const [adjustReasonNote, setAdjustReasonNote] = useState("");
+  const [countQty, setCountQty] = useState("");
+  const [countLoc, setCountLoc] = useState("");
+  const [countReasonCode, setCountReasonCode] = useState<ReasonCode>("cycle_count");
+  const [countReasonNote, setCountReasonNote] = useState("");
   const [fromLoc, setFromLoc] = useState("");
   const [toLoc, setToLoc] = useState("");
   const [transferQty, setTransferQty] = useState("1");
   const [error, setError] = useState<string | null>(null);
+  const [pendingNotice, setPendingNotice] = useState<string | null>(null);
 
   const balances = useQuery<InventoryItem[]>({
     queryKey: ["inventory"],
@@ -70,6 +108,16 @@ export function Inventory() {
       return res.json();
     },
   });
+
+  const analytics = useQuery<InventoryAnalyticsLine[]>({
+    queryKey: ["inventory-analytics"],
+    queryFn: async () => {
+      const res = await apiFetch("/inventory/analytics");
+      if (!res.ok) throw new Error("Failed to load inventory analytics");
+      return (await res.json()).lines;
+    },
+  });
+  const analyticsByItem = new Map(analytics.data?.map((a) => [a.item_id, a]));
 
   const locations = useQuery<LocationResponse[]>({
     queryKey: ["locations"],
@@ -116,13 +164,40 @@ export function Inventory() {
     onError: (e: Error) => setError(e.message),
   });
 
-  const adjust = useMutation({
+  const adjust = useMutation<AdjustmentOutcome, Error>({
     mutationFn: () =>
       post(`/inventory/${selectedItemId}/adjust`, {
         quantity: adjustDelta,
         location_id: adjustLoc || null,
+        reason_code: adjustReasonCode,
+        reason_note: adjustReasonCode === "other" ? adjustReasonNote : null,
       })(),
-    onSuccess: invalidate,
+    onSuccess: (outcome) => {
+      if (outcome.applied) {
+        invalidate();
+      } else {
+        setPendingNotice(`Submitted for owner approval (request ${outcome.request?.id.slice(0, 8)}…).`);
+      }
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const count = useMutation<AdjustmentOutcome, Error>({
+    mutationFn: () =>
+      post(`/inventory/${selectedItemId}/count`, {
+        location_id: countLoc || null,
+        counted_quantity: countQty,
+        reason_code: countReasonCode,
+        reason_note: countReasonCode === "other" ? countReasonNote : null,
+      })(),
+    onSuccess: (outcome) => {
+      if (outcome.applied) {
+        invalidate();
+      } else {
+        setPendingNotice(`Submitted for owner approval (request ${outcome.request?.id.slice(0, 8)}…).`);
+      }
+      setCountQty("");
+    },
     onError: (e: Error) => setError(e.message),
   });
 
@@ -160,14 +235,15 @@ export function Inventory() {
 
   return (
     <div>
-      <PageHeader
-        title="Inventory"
-        description="On-hand stock for non-lot-tracked items, per location. Receiving a PO adds stock; consume, adjust, or transfer to move it. (Lot-tracked items track on-hand through their lots.)"
-      />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}
+        </Alert>
+      )}
+
+      {pendingNotice && (
+        <Alert variant="info" className="mb-6">
+          {pendingNotice}
         </Alert>
       )}
 
@@ -186,25 +262,34 @@ export function Inventory() {
                 <TH>Total on hand</TH>
                 <TH>By location</TH>
                 <TH>UoM</TH>
+                <TH>Status</TH>
               </TR>
             </THead>
             <TBody>
-              {balances.data?.map((bal) => (
-                <TR
-                  key={bal.item_id}
-                  onClick={() => setSelectedItemId(bal.item_id)}
-                  className={`cursor-pointer ${selectedItemId === bal.item_id ? "bg-primary/5" : ""}`}
-                >
-                  <TD className="font-medium">
-                    {bal.item_sku} - {bal.item_name}
-                  </TD>
-                  <TD>{bal.quantity_on_hand}</TD>
-                  <TD className="text-muted-foreground">
-                    {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
-                  </TD>
-                  <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
-                </TR>
-              ))}
+              {balances.data?.map((bal) => {
+                const a = analyticsByItem.get(bal.item_id);
+                return (
+                  <TR
+                    key={bal.item_id}
+                    onClick={() => setSelectedItemId(bal.item_id)}
+                    className={cn("cursor-pointer", selectedItemId === bal.item_id && "bg-primary/5")}
+                  >
+                    <TD className="font-medium">
+                      {bal.item_sku} - {bal.item_name}
+                    </TD>
+                    <TD>{bal.quantity_on_hand}</TD>
+                    <TD className="text-muted-foreground">
+                      {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
+                    </TD>
+                    <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
+                    <TD>
+                      {a && a.status !== "no_data" && (
+                        <Badge variant={inventoryStatusVariant(a.status)}>{humanize(a.status)}</Badge>
+                      )}
+                    </TD>
+                  </TR>
+                );
+              })}
             </TBody>
           </Table>
         </TableWrap>
@@ -218,6 +303,17 @@ export function Inventory() {
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}
+              {(() => {
+                const a = analyticsByItem.get(detail.data.item_id);
+                if (!a || a.reorder_point == null) return null;
+                return (
+                  <>
+                    {" "}
+                    · Reorder point: {a.reorder_point.toFixed(2)}{" "}
+                    <Badge variant={inventoryStatusVariant(a.status)}>{humanize(a.status)}</Badge>
+                  </>
+                );
+              })()}
             </p>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -242,11 +338,12 @@ export function Inventory() {
               </Table>
             </TableWrap>
 
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   setError(null);
+                  setPendingNotice(null);
                   consume.mutate();
                 }}
                 className="space-y-3 rounded-lg border border-border p-4"
@@ -277,11 +374,66 @@ export function Inventory() {
                 onSubmit={(e) => {
                   e.preventDefault();
                   setError(null);
+                  setPendingNotice(null);
+                  count.mutate();
+                }}
+                className="space-y-3 rounded-lg border border-border p-4"
+              >
+                <p className="text-sm font-semibold">Count</p>
+                <Field label="Counted quantity" htmlFor="cnt-qty">
+                  <Input
+                    id="cnt-qty"
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    value={countQty}
+                    onChange={(e) => setCountQty(e.target.value)}
+                    required
+                  />
+                </Field>
+                <Field label="At location" htmlFor="cnt-loc">
+                  <Select id="cnt-loc" value={countLoc} onChange={(e) => setCountLoc(e.target.value)}>
+                    {locationOptions}
+                  </Select>
+                </Field>
+                <Field label="Reason" htmlFor="cnt-reason">
+                  <Select
+                    id="cnt-reason"
+                    value={countReasonCode}
+                    onChange={(e) => setCountReasonCode(e.target.value as ReasonCode)}
+                  >
+                    {REASON_CODES.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {countReasonCode === "other" && (
+                  <Field label="Note" htmlFor="cnt-note">
+                    <Input
+                      id="cnt-note"
+                      value={countReasonNote}
+                      onChange={(e) => setCountReasonNote(e.target.value)}
+                      required
+                    />
+                  </Field>
+                )}
+                <Button type="submit" variant="secondary" className="w-full" loading={count.isPending}>
+                  Count
+                </Button>
+              </form>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setError(null);
+                  setPendingNotice(null);
                   adjust.mutate();
                 }}
                 className="space-y-3 rounded-lg border border-border p-4"
               >
-                <p className="text-sm font-semibold">Adjust</p>
+                <p className="text-sm font-semibold">Adjust (no count)</p>
                 <Field label="Delta (+/-)" htmlFor="a-qty">
                   <Input
                     id="a-qty"
@@ -297,6 +449,29 @@ export function Inventory() {
                     {locationOptions}
                   </Select>
                 </Field>
+                <Field label="Reason" htmlFor="a-reason">
+                  <Select
+                    id="a-reason"
+                    value={adjustReasonCode}
+                    onChange={(e) => setAdjustReasonCode(e.target.value as ReasonCode)}
+                  >
+                    {REASON_CODES.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {adjustReasonCode === "other" && (
+                  <Field label="Note" htmlFor="a-note">
+                    <Input
+                      id="a-note"
+                      value={adjustReasonNote}
+                      onChange={(e) => setAdjustReasonNote(e.target.value)}
+                      required
+                    />
+                  </Field>
+                )}
                 <Button type="submit" variant="secondary" className="w-full" loading={adjust.isPending}>
                   Adjust
                 </Button>
@@ -364,7 +539,14 @@ export function Inventory() {
                           {tx.quantity_delta}
                         </Badge>
                       </TD>
-                      <TD className="text-muted-foreground">{tx.reason ?? "—"}</TD>
+                      <TD className="text-muted-foreground">
+                        {tx.reason ? humanize(tx.reason) : "—"}
+                        {tx.counted_quantity != null && (
+                          <span className="block text-xs">
+                            counted {tx.counted_quantity} · expected {tx.expected_quantity}
+                          </span>
+                        )}
+                      </TD>
                       <TD className="text-muted-foreground">
                         {new Date(tx.created_at).toLocaleString()}
                       </TD>

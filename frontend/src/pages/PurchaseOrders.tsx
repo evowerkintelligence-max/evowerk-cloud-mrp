@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { ShoppingCart } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,8 +10,13 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
+import { Dialog } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { ItemSelect } from "@/components/ItemSelect";
 import { humanize, poStatusVariant } from "@/lib/status";
+import { cn } from "@/lib/utils";
+
+const PAGE_SIZE = 20;
 
 interface ItemResponse {
   id: string;
@@ -53,7 +57,7 @@ interface PurchaseOrderDetailResponse extends PurchaseOrderResponse {
 const CANCELLABLE_STATUSES = ["draft", "submitted"];
 const RECEIVABLE_STATUSES = ["submitted", "partially_received"];
 
-export function PurchaseOrders() {
+export function PurchaseOrdersPanel() {
   const queryClient = useQueryClient();
   const [selectedPoId, setSelectedPoId] = useState<string | null>(null);
   const [newPoSupplierId, setNewPoSupplierId] = useState("");
@@ -62,9 +66,16 @@ export function PurchaseOrders() {
   const [lineUnitPrice, setLineUnitPrice] = useState("0");
   const [receiveLineId, setReceiveLineId] = useState("");
   const [receiveQuantity, setReceiveQuantity] = useState("1");
+  const [receiveQuantityRejected, setReceiveQuantityRejected] = useState("0");
+  const [receiveRejectReason, setReceiveRejectReason] = useState("");
   const [receiveLotNumber, setReceiveLotNumber] = useState("");
   const [receiveExpiryDate, setReceiveExpiryDate] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const items = useQuery<ItemResponse[]>({
     queryKey: ["items"],
@@ -75,19 +86,22 @@ export function PurchaseOrders() {
     },
   });
 
+  // active_only: a cancelled/replaced vendor shouldn't be pickable for a new PO.
   const suppliers = useQuery<SupplierResponse[]>({
-    queryKey: ["suppliers"],
+    queryKey: ["suppliers", "active"],
     queryFn: async () => {
-      const res = await apiFetch("/suppliers");
+      const res = await apiFetch("/suppliers?active_only=true");
       if (!res.ok) throw new Error("Failed to load suppliers");
       return res.json();
     },
   });
 
   const purchaseOrders = useQuery<PurchaseOrderResponse[]>({
-    queryKey: ["purchase-orders"],
+    queryKey: ["purchase-orders", search, page],
     queryFn: async () => {
-      const res = await apiFetch("/purchase-orders");
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+      if (search) params.set("q", search);
+      const res = await apiFetch(`/purchase-orders?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load purchase orders");
       return res.json();
     },
@@ -187,6 +201,8 @@ export function PurchaseOrders() {
           {
             po_line_id: receiveLineId,
             quantity: receiveQuantity,
+            quantity_rejected: receiveQuantityRejected || "0",
+            reject_reason: receiveRejectReason || null,
             lot_number: receivingLineIsLotTracked ? receiveLotNumber : null,
             expiry_date: receivingLineIsLotTracked && receiveExpiryDate ? receiveExpiryDate : null,
           },
@@ -201,6 +217,8 @@ export function PurchaseOrders() {
     onSuccess: () => {
       setReceiveLineId("");
       setReceiveQuantity("1");
+      setReceiveQuantityRejected("0");
+      setReceiveRejectReason("");
       setReceiveLotNumber("");
       setReceiveExpiryDate("");
       invalidatePo();
@@ -242,11 +260,6 @@ export function PurchaseOrders() {
 
   return (
     <div>
-      <PageHeader
-        title="Purchase Orders"
-        description="Create drafts, submit them to suppliers, and receive stock as it arrives."
-      />
-
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}
@@ -283,10 +296,21 @@ export function PurchaseOrders() {
         </CardContent>
       </Card>
 
+      <div className="mb-4 max-w-xs">
+        <Input
+          placeholder="Search PO # or supplier…"
+          value={search}
+          onChange={(e) => {
+            setPage(0);
+            setSearch(e.target.value);
+          }}
+        />
+      </div>
+
       {purchaseOrders.data && purchaseOrders.data.length === 0 ? (
         <EmptyState icon={<ShoppingCart />} title="No purchase orders yet" />
       ) : (
-        <TableWrap className="mb-8">
+        <TableWrap className="mb-4">
           <Table>
             <THead>
               <TR>
@@ -300,7 +324,7 @@ export function PurchaseOrders() {
                 <TR
                   key={po.id}
                   onClick={() => setSelectedPoId(po.id)}
-                  className={`cursor-pointer ${selectedPoId === po.id ? "bg-primary/5" : ""}`}
+                  className={cn("cursor-pointer", selectedPoId === po.id && "bg-primary/5")}
                 >
                   <TD className="font-medium">PO-{po.po_number}</TD>
                   <TD>{po.supplier_name}</TD>
@@ -314,6 +338,28 @@ export function PurchaseOrders() {
         </TableWrap>
       )}
 
+      <div className="mb-8 flex items-center justify-between">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={page === 0}
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+        >
+          Previous
+        </Button>
+        <span className="text-sm text-muted-foreground">Page {page + 1}</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!purchaseOrders.data || purchaseOrders.data.length < PAGE_SIZE}
+          onClick={() => setPage((p) => p + 1)}
+        >
+          Next
+        </Button>
+      </div>
+
       {poDetail.data && (
         <Card>
           <CardHeader className="flex-row items-center justify-between">
@@ -325,22 +371,12 @@ export function PurchaseOrders() {
             </CardTitle>
             <div className="flex items-center gap-2">
               {poDetail.data.status === "draft" && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => submitPo.mutate()}
-                  loading={submitPo.isPending}
-                >
+                <Button variant="secondary" size="sm" onClick={() => setConfirmSubmit(true)}>
                   Submit
                 </Button>
               )}
               {CANCELLABLE_STATUSES.includes(poDetail.data.status) && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => cancelPo.mutate()}
-                  loading={cancelPo.isPending}
-                >
+                <Button variant="destructive" size="sm" onClick={() => setConfirmCancel(true)}>
                   Cancel
                 </Button>
               )}
@@ -378,21 +414,13 @@ export function PurchaseOrders() {
                 className="grid gap-4 sm:grid-cols-[1fr_140px_140px_auto] sm:items-end"
               >
                 <Field label="Item" htmlFor="po-item">
-                  <Select
+                  <ItemSelect
                     id="po-item"
+                    items={items.data}
                     value={lineItemId}
-                    onChange={(e) => setLineItemId(e.target.value)}
+                    onChange={setLineItemId}
                     required
-                  >
-                    <option value="" disabled>
-                      Select an item
-                    </option>
-                    {items.data?.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.sku} - {item.name}
-                      </option>
-                    ))}
-                  </Select>
+                  />
                 </Field>
                 <Field label="Quantity" htmlFor="po-qty">
                   <Input
@@ -457,6 +485,24 @@ export function PurchaseOrders() {
                       required
                     />
                   </Field>
+                  <Field label="Rejected quantity" htmlFor="rcv-qty-rejected">
+                    <Input
+                      id="rcv-qty-rejected"
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max={receiveQuantity || undefined}
+                      value={receiveQuantityRejected}
+                      onChange={(e) => setReceiveQuantityRejected(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Reject reason (optional)" htmlFor="rcv-reject-reason">
+                    <Input
+                      id="rcv-reject-reason"
+                      value={receiveRejectReason}
+                      onChange={(e) => setReceiveRejectReason(e.target.value)}
+                    />
+                  </Field>
                   {receivingLineIsLotTracked && (
                     <>
                       <Field label="Lot number" htmlFor="rcv-lot">
@@ -485,6 +531,50 @@ export function PurchaseOrders() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {poDetail.data && (
+        <Dialog open={confirmSubmit} onClose={() => setConfirmSubmit(false)} title="Submit purchase order?">
+          <p className="text-sm text-muted-foreground">
+            PO-{poDetail.data.po_number} will move to <strong>Submitted</strong> and its lines can no
+            longer be edited.
+          </p>
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="secondary" onClick={() => setConfirmSubmit(false)}>
+              Never mind
+            </Button>
+            <Button
+              loading={submitPo.isPending}
+              onClick={() => {
+                submitPo.mutate(undefined, { onSuccess: () => setConfirmSubmit(false) });
+              }}
+            >
+              Submit
+            </Button>
+          </div>
+        </Dialog>
+      )}
+
+      {poDetail.data && (
+        <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} title="Cancel purchase order?">
+          <p className="text-sm text-muted-foreground">
+            PO-{poDetail.data.po_number} will be cancelled. This can't be undone.
+          </p>
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="secondary" onClick={() => setConfirmCancel(false)}>
+              Never mind
+            </Button>
+            <Button
+              variant="destructive"
+              loading={cancelPo.isPending}
+              onClick={() => {
+                cancelPo.mutate(undefined, { onSuccess: () => setConfirmCancel(false) });
+              }}
+            >
+              Cancel PO
+            </Button>
+          </div>
+        </Dialog>
       )}
     </div>
   );

@@ -44,9 +44,9 @@ export function Throughput() {
       {(r) => (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard label="Total units" value={fmt(r.total_units)} />
-            <StatCard label="Avg / period" value={fmt(r.avg_units_per_period)} hint={`${r.period_count} periods`} />
-            <StatCard label="Peak" value={fmt(r.peak_units)} hint={r.peak_period ?? undefined} />
+            <StatCard label="Total units" value={fmt(r.total_units)} tone="primary" />
+            <StatCard label="Avg / period" value={fmt(r.avg_units_per_period)} hint={`${r.period_count} periods`} tone="accent" />
+            <StatCard label="Peak" value={fmt(r.peak_units)} hint={r.peak_period ?? undefined} tone="success" />
             <StatCard
               label="Plan attainment"
               value={
@@ -58,6 +58,7 @@ export function Throughput() {
                   </span>
                 )
               }
+              tone="warning"
             />
           </div>
 

@@ -59,7 +59,15 @@ def _params(kind: str, item_id: str) -> dict:
 
 
 @pytest.mark.parametrize("kind", ALL_KINDS)
-@pytest.mark.parametrize("fmt,media_type", [("html", "text/html"), ("csv", "text/csv"), ("pdf", "application/pdf")])
+@pytest.mark.parametrize(
+    "fmt,media_type",
+    [
+        ("html", "text/html"),
+        ("csv", "text/csv"),
+        ("pdf", "application/pdf"),
+        ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ],
+)
 async def test_every_kind_renders_in_every_format(client, kind, fmt, media_type):
     _, headers = await _register_and_login(client)
     item = await _create_item(client, headers, "WIDGET-1", "Widget", lead_time_days=7)
@@ -79,6 +87,9 @@ async def test_every_kind_renders_in_every_format(client, kind, fmt, media_type)
     if fmt == "csv":
         # utf-8-sig BOM so Excel on Windows reads it as UTF-8.
         assert res.content.startswith(b"\xef\xbb\xbf")
+    if fmt == "xlsx":
+        # xlsx is a zip archive - PK magic bytes confirm openpyxl wrote a real workbook.
+        assert res.content.startswith(b"PK\x03\x04")
 
 
 async def test_mrp_plan_report_contains_the_shortfall(client):
@@ -176,6 +187,61 @@ async def test_scenario_report_missing_colon_is_rejected(client):
     assert res.status_code == 400
 
 
+DATASET_CSV = b"sku,qty,region\nA-1,10,east\nA-2,5,west\nA-1,3,west\n"
+
+
+async def _upload_dataset(client, headers, *, content=DATASET_CSV, filename="stock.csv"):
+    res = await client.post("/datasets", headers=headers, files={"file": (filename, content, "text/csv")})
+    assert res.status_code == 201, res.text
+    return res.json()["id"]
+
+
+async def test_dataset_report_needs_dataset_id(client):
+    _, headers = await _register_and_login(client)
+    res = await client.get("/reports/dataset", params={"format": "html"}, headers=headers)
+    assert res.status_code == 400
+
+
+async def test_dataset_report_unknown_dataset_404(client):
+    _, headers = await _register_and_login(client)
+    res = await client.get(
+        "/reports/dataset",
+        params={"format": "html", "dataset_id": "00000000-0000-0000-0000-000000000000"},
+        headers=headers,
+    )
+    assert res.status_code == 404
+
+
+async def test_dataset_report_shows_preview_and_kpis(client):
+    _, headers = await _register_and_login(client)
+    dataset_id = await _upload_dataset(client, headers)
+
+    csv_res = await client.get(
+        "/reports/dataset", params={"format": "csv", "dataset_id": dataset_id}, headers=headers
+    )
+    assert csv_res.status_code == 200, csv_res.text
+    rows = list(csv.reader(io.StringIO(csv_res.content.decode("utf-8-sig"))))
+    flat = [cell for row in rows for cell in row]
+    assert "A-1" in flat and "east" in flat  # preview rows made it in
+    assert "3" in flat  # Rows KPI
+
+    html_res = await client.get(
+        "/reports/dataset", params={"format": "html", "dataset_id": dataset_id}, headers=headers
+    )
+    assert "A-1" in html_res.text
+
+
+async def test_dataset_report_cross_tenant_isolation(client):
+    _, headers_a = await _register_and_login(client, email="dra@example.com", org_name="DR Org A")
+    dataset_id = await _upload_dataset(client, headers_a)
+
+    _, headers_b = await _register_and_login(client, email="drb@example.com", org_name="DR Org B")
+    res = await client.get(
+        "/reports/dataset", params={"format": "html", "dataset_id": dataset_id}, headers=headers_b
+    )
+    assert res.status_code == 404
+
+
 async def test_rca_report_rejects_unknown_dimension(client):
     _, headers = await _register_and_login(client)
     res = await client.get("/reports/rca", params={"format": "html", "dimension": "bogus"}, headers=headers)
@@ -186,7 +252,7 @@ async def test_unknown_kind_and_format_are_rejected(client):
     _, headers = await _register_and_login(client)
     assert (await client.get("/reports/nope", headers=headers)).status_code == 404
     assert (
-        await client.get("/reports/rca", params={"format": "xlsx"}, headers=headers)
+        await client.get("/reports/rca", params={"format": "docx"}, headers=headers)
     ).status_code == 400
 
 

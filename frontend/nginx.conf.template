@@ -1,8 +1,20 @@
 # Mirrors frontend/vite.config.ts's dev proxy: the app calls the backend via
 # same-origin relative paths (see src/api/client.ts), so whatever serves the
-# built static files also has to reverse-proxy those same prefixes. Adding a
-# new backend router means adding its prefix here too, same as it would need
-# adding to vite.config.ts's dev proxy.
+# built static files also has to reverse-proxy those same prefixes. One regex
+# over every backend router prefix (see app/main.py), same fix applied to
+# vite.config.ts's dev proxy - the old entry-per-route allowlist here had
+# silently dropped every router added after /lots (analytics, ai, reports,
+# bi, workflows, automl, kpis, integrations, realtime were all missing, so
+# none of those pages worked once deployed via this nginx image, only in dev
+# through Vite's own proxy). Same lesson hit a third time: simulation, alerts,
+# artifacts, computer-vision, data-chat, predictive, rca-cases, and scenarios
+# were all added to main.py after this list was last synced.
+#
+# proxy_buffering off + a long proxy_read_timeout apply here too: harmless for
+# ordinary JSON responses, but required for /realtime/streams/{id}/events
+# (Server-Sent Events) - nginx buffers responses by default, which would
+# delay every tick until the buffer filled, and its 60s default read timeout
+# would silently cut a stream whose interval_seconds is set above that.
 
 server {
     listen 80;
@@ -18,60 +30,14 @@ server {
         add_header Content-Type text/plain;
     }
 
-    location /auth/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/auth/;
+    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|alerts|artifacts|computer-vision|data-chat|predictive|rca-cases|scenarios)(/|$) {
+        proxy_pass http://${BACKEND_UPSTREAM};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /orgs/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/orgs/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /items/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/items/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /boms/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/boms/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /suppliers/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/suppliers/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /purchase-orders/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/purchase-orders/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /lots/ {
-        proxy_pass http://${BACKEND_UPSTREAM}/lots/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
     }
 
     # SPA client-side routing (react-router-dom) - anything not matched above

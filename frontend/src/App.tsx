@@ -7,15 +7,16 @@ import { MfaChallenge } from "./pages/MfaChallenge";
 import { Dashboard } from "./pages/Dashboard";
 import { Items } from "./pages/Items";
 import { Boms } from "./pages/Boms";
-import { Suppliers } from "./pages/Suppliers";
-import { PurchaseOrders } from "./pages/PurchaseOrders";
+import { Procurement } from "./pages/Procurement";
 import { Lots } from "./pages/Lots";
-import { Inventory } from "./pages/Inventory";
-import { Locations } from "./pages/Locations";
+import { Warehouse } from "./pages/Warehouse";
 import { Planning } from "./pages/Planning";
 import { Datasets } from "./pages/analytics/Datasets";
 import { DatasetDetail } from "./pages/analytics/DatasetDetail";
+import { SqlEditor } from "./pages/SqlEditor";
+import { Simulation } from "./pages/Simulation";
 import { Oee } from "./pages/analytics/Oee";
+import { PlantSummary } from "./pages/analytics/PlantSummary";
 import { Downtime } from "./pages/analytics/Downtime";
 import { Throughput } from "./pages/analytics/Throughput";
 import { Scrap } from "./pages/analytics/Scrap";
@@ -23,6 +24,24 @@ import { Shifts } from "./pages/analytics/Shifts";
 import { Spc } from "./pages/analytics/Spc";
 import { Ask } from "./pages/Ask";
 import { Reports } from "./pages/Reports";
+import { Dashboards as BiDashboards } from "./pages/bi/Dashboards";
+import { ChartBuilder } from "./pages/bi/ChartBuilder";
+import { DashboardDetail as BiDashboardDetail } from "./pages/bi/DashboardDetail";
+import { Workflows } from "./pages/workflows/Workflows";
+import { WorkflowBuilder } from "./pages/workflows/WorkflowBuilder";
+import { ReportBuilder } from "./pages/ReportBuilder";
+import { AutoML } from "./pages/AutoML";
+import { AutoMLRun } from "./pages/automl/AutoMLRun";
+import { Kpis } from "./pages/Kpis";
+import { Integrations } from "./pages/Integrations";
+import { Realtime } from "./pages/Realtime";
+import { RcaCases } from "./pages/RcaCases";
+import { RunHistory } from "./pages/workflows/RunHistory";
+import { Predictive } from "./pages/Predictive";
+import { MfgForecast } from "./pages/MfgForecast";
+import { Scenarios } from "./pages/Scenarios";
+import { ComputerVision } from "./pages/ComputerVision";
+import { Alerts } from "./pages/Alerts";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -53,14 +72,13 @@ export function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/items" element={<Items />} />
         <Route path="/boms" element={<Boms />} />
-        <Route path="/suppliers" element={<Suppliers />} />
-        <Route path="/purchase-orders" element={<PurchaseOrders />} />
+        <Route path="/procurement" element={<Procurement />} />
         <Route path="/lots" element={<Lots />} />
-        <Route path="/inventory" element={<Inventory />} />
-        <Route path="/locations" element={<Locations />} />
+        <Route path="/warehouse" element={<Warehouse />} />
         <Route path="/planning" element={<Planning />} />
         <Route path="/analytics" element={<Navigate to="/analytics/oee" replace />} />
         <Route path="/analytics/oee" element={<Oee />} />
+        <Route path="/analytics/plant-summary" element={<PlantSummary />} />
         <Route path="/analytics/downtime" element={<Downtime />} />
         <Route path="/analytics/throughput" element={<Throughput />} />
         <Route path="/analytics/scrap" element={<Scrap />} />
@@ -68,8 +86,28 @@ export function App() {
         <Route path="/analytics/spc" element={<Spc />} />
         <Route path="/datasets" element={<Datasets />} />
         <Route path="/datasets/:id" element={<DatasetDetail />} />
+        <Route path="/sql-editor" element={<SqlEditor />} />
+        <Route path="/simulation" element={<Simulation />} />
         <Route path="/ask" element={<Ask />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/bi" element={<BiDashboards />} />
+        <Route path="/bi/new" element={<ChartBuilder />} />
+        <Route path="/bi/:id" element={<BiDashboardDetail />} />
+        <Route path="/workflows" element={<Workflows />} />
+        <Route path="/workflows/:id" element={<WorkflowBuilder />} />
+        <Route path="/runs" element={<RunHistory />} />
+        <Route path="/report-builder" element={<ReportBuilder />} />
+        <Route path="/automl" element={<AutoML />} />
+        <Route path="/automl/:id" element={<AutoMLRun />} />
+        <Route path="/kpis" element={<Kpis />} />
+        <Route path="/integrations" element={<Integrations />} />
+        <Route path="/realtime" element={<Realtime />} />
+        <Route path="/rca-cases" element={<RcaCases />} />
+        <Route path="/predictive" element={<Predictive />} />
+        <Route path="/mfg-forecast" element={<MfgForecast />} />
+        <Route path="/scenarios" element={<Scenarios />} />
+        <Route path="/computer-vision" element={<ComputerVision />} />
+        <Route path="/alerts" element={<Alerts />} />
       </Route>
     </Routes>
   );

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -247,3 +249,60 @@ async def test_list_suppliers_filters_by_tag(client):
     res = await client.get("/suppliers?tag=metals", headers=headers)
     assert res.status_code == 200
     assert {s["name"] for s in res.json()} == {"Alpha", "Gamma"}
+
+
+async def test_supplier_scorecard_no_data_yet(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await _create_supplier(client, token)
+
+    res = await client.get(f"/suppliers/{supplier['id']}/scorecard", headers=headers)
+    assert res.status_code == 200
+    assert res.json() == {"on_time_pct": None, "defect_pct": None, "sample_size": 0}
+
+
+async def test_supplier_scorecard_on_time_and_defect_math(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await _create_supplier(client, token)
+    item = (
+        await client.post(
+            "/items",
+            json={"sku": "ROD", "name": "Rod", "item_type": "raw_material", "unit_of_measure": "ea"},
+            headers=headers,
+        )
+    ).json()
+
+    async def _po_receive(expected_delivery_date, quantity, quantity_rejected):
+        body = {"supplier_id": supplier["id"]}
+        if expected_delivery_date is not None:
+            body["expected_delivery_date"] = expected_delivery_date
+        po = (await client.post("/purchase-orders", json=body, headers=headers)).json()
+        lines = await client.patch(
+            f"/purchase-orders/{po['id']}",
+            json=[
+                {"item_id": item["id"], "quantity_ordered": quantity, "unit_price": "1", "sequence": 0}
+            ],
+            headers=headers,
+        )
+        line_id = lines.json()["lines"][0]["id"]
+        await client.post(f"/purchase-orders/{po['id']}/submit", headers=headers)
+        await client.post(
+            f"/purchase-orders/{po['id']}/receive",
+            json=[{"po_line_id": line_id, "quantity": quantity, "quantity_rejected": quantity_rejected}],
+            headers=headers,
+        )
+
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    await _po_receive(tomorrow, "10", "2")  # on time, 2 rejected
+    await _po_receive(yesterday, "5", "0")  # late, none rejected
+    await _po_receive(None, "5", "0")  # no due date, excluded from on_time_pct
+
+    res = await client.get(f"/suppliers/{supplier['id']}/scorecard", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["sample_size"] == 2
+    assert body["on_time_pct"] == pytest.approx(0.5)
+    assert body["defect_pct"] == pytest.approx(0.1)

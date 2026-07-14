@@ -4,14 +4,20 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.procurement import Supplier, SupplierContact
+from app.models.procurement import (
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseOrderReceiptLine,
+    Supplier,
+    SupplierContact,
+)
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
 
@@ -390,3 +396,70 @@ async def delete_supplier_contact(
         metadata={"supplier_id": str(supplier_id)},
     )
     await db.commit()
+
+
+class SupplierScorecardResponse(BaseModel):
+    on_time_pct: float | None
+    defect_pct: float | None
+    sample_size: int
+
+
+@router.get("/{supplier_id}/scorecard", response_model=SupplierScorecardResponse)
+async def get_supplier_scorecard(
+    supplier_id: uuid.UUID,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_or_404(db, Supplier, current.org_id, supplier_id, "Supplier not found")
+
+    po_rows = (
+        await db.execute(
+            select(PurchaseOrder.id, PurchaseOrder.expected_delivery_date).where(
+                PurchaseOrder.org_id == current.org_id,
+                PurchaseOrder.supplier_id == supplier_id,
+                PurchaseOrder.status == "received",
+                PurchaseOrder.expected_delivery_date.is_not(None),
+            )
+        )
+    ).all()
+
+    on_time_pct: float | None = None
+    if po_rows:
+        po_ids = [row.id for row in po_rows]
+        last_receipt_by_po = dict(
+            (
+                await db.execute(
+                    select(PurchaseOrderLine.po_id, func.max(PurchaseOrderReceiptLine.received_at))
+                    .join(
+                        PurchaseOrderReceiptLine,
+                        PurchaseOrderReceiptLine.po_line_id == PurchaseOrderLine.id,
+                    )
+                    .where(PurchaseOrderLine.po_id.in_(po_ids))
+                    .group_by(PurchaseOrderLine.po_id)
+                )
+            ).all()
+        )
+        on_time_count = sum(
+            1
+            for row in po_rows
+            if last_receipt_by_po.get(row.id) is not None
+            and last_receipt_by_po[row.id].date() <= row.expected_delivery_date
+        )
+        on_time_pct = on_time_count / len(po_rows)
+
+    total_received, total_rejected = (
+        await db.execute(
+            select(
+                func.sum(PurchaseOrderReceiptLine.quantity),
+                func.sum(PurchaseOrderReceiptLine.quantity_rejected),
+            )
+            .join(PurchaseOrderLine, PurchaseOrderLine.id == PurchaseOrderReceiptLine.po_line_id)
+            .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
+            .where(PurchaseOrder.org_id == current.org_id, PurchaseOrder.supplier_id == supplier_id)
+        )
+    ).first()
+    defect_pct = float(total_rejected / total_received) if total_received else None
+
+    return SupplierScorecardResponse(
+        on_time_pct=on_time_pct, defect_pct=defect_pct, sample_size=len(po_rows)
+    )

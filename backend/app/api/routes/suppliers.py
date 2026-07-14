@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
+from app.core.time import ensure_utc
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.procurement import (
@@ -443,7 +444,10 @@ async def get_supplier_scorecard(
             1
             for row in po_rows
             if last_receipt_by_po.get(row.id) is not None
-            and last_receipt_by_po[row.id].date() <= row.expected_delivery_date
+            # expected_delivery_date is a UTC calendar date by convention (see
+            # app.core.time.ensure_utc); compare against the receipt's UTC date,
+            # not whatever timezone happens to be local to this process.
+            and ensure_utc(last_receipt_by_po[row.id]).date() <= row.expected_delivery_date
         )
         on_time_pct = on_time_count / len(po_rows)
 

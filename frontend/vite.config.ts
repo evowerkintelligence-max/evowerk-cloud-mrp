@@ -20,7 +20,7 @@ export default defineConfig({
       // entry-per-route allowlist silently dropped any router added later:
       // /forecasts, /mrp, /inventory, /locations and /ai were all missing, so
       // Planning, Inventory and Ask never reached the API in dev.
-      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health)(/|$|\\?)":
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|artifacts|rca-cases|predictive|scenarios|computer-vision|data-chat)(/|$|\\?)":
         `http://localhost:${backendPort}`,
     },
   },

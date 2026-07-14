@@ -50,6 +50,10 @@ class PurchaseOrderLineResponse(BaseModel):
 class ReceiveLineInput(BaseModel):
     po_line_id: str
     quantity: Decimal
+    # Portion of `quantity` that failed inspection - not additional to it.
+    # See PurchaseOrderReceiptLine.quantity_rejected for the full contract.
+    quantity_rejected: Decimal = Decimal(0)
+    reject_reason: str | None = None
     # Required if the line's item is lot-tracked, rejected otherwise - see
     # receive_purchase_order's validation loop.
     lot_number: str | None = None
@@ -331,6 +335,10 @@ async def receive_purchase_order(
                 status.HTTP_409_CONFLICT,
                 f"Receiving {receipt.quantity} on line {line_id} would exceed the ordered quantity",
             )
+        if receipt.quantity_rejected < 0 or receipt.quantity_rejected > receipt.quantity:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "quantity_rejected must be between 0 and quantity"
+            )
         item = items_by_line_id[line_id]
         if item.is_lot_tracked and not receipt.lot_number:
             raise HTTPException(
@@ -346,15 +354,22 @@ async def receive_purchase_order(
         line = lines_by_id[line_id]
         item = items_by_line_id[line_id]
         line.quantity_received += receipt.quantity
+        accepted_quantity = receipt.quantity - receipt.quantity_rejected
 
         receipt_line = PurchaseOrderReceiptLine(
             id=uuid.uuid4(),
             org_id=current.org_id,
             po_line_id=line.id,
             quantity=receipt.quantity,
+            quantity_rejected=receipt.quantity_rejected,
+            reject_reason=receipt.reject_reason,
             received_by=current.id,
         )
         db.add(receipt_line)
+
+        if accepted_quantity == 0:
+            # Fully rejected: nothing to apply to inventory/lot stock.
+            continue
 
         # Defaults to the org's default location if unspecified - see
         # services.locations. Shared by both branches below.
@@ -374,7 +389,7 @@ async def receive_purchase_order(
                 item_id=item.id,
                 lot_number=lot_number,
                 location_id=location_id,
-                quantity=receipt.quantity,
+                quantity=accepted_quantity,
                 expiry_date=receipt.expiry_date,
                 created_by=current.id,
             )
@@ -383,7 +398,7 @@ async def receive_purchase_order(
                     org_id=current.org_id,
                     lot_id=lot.id,
                     transaction_type="receipt",
-                    quantity=receipt.quantity,
+                    quantity=accepted_quantity,
                     source_receipt_line_id=receipt_line.id,
                     created_by=current.id,
                 )
@@ -398,7 +413,7 @@ async def receive_purchase_order(
                 org_id=current.org_id,
                 item_id=item.id,
                 location_id=location_id,
-                delta=receipt.quantity,
+                delta=accepted_quantity,
                 transaction_type="receipt",
                 created_by=current.id,
                 source_receipt_line_id=receipt_line.id,

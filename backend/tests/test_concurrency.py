@@ -346,3 +346,63 @@ async def test_stale_approval_after_concurrent_consume_is_rejected(pg_client, pg
 
     detail = await pg_client.get(f"/inventory/{item['id']}", headers=headers)
     assert Decimal(detail.json()["quantity_on_hand"]) == Decimal("50")
+
+
+async def test_concurrent_approve_only_one_succeeds(pg_client, pg_engine):
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers)
+    supplier = await _supplier(pg_client, headers)
+    await _receive(pg_client, headers, item, supplier, 100)
+
+    org_id = (await pg_client.get("/orgs/me", headers=headers)).json()["id"]
+    await pg_client.patch("/orgs/me", json={"adjust_approval_threshold": "0"}, headers=headers)
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import uuid as uuid_module
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    session_factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="manager-approve-race@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="manager",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    login = await pg_client.post(
+        "/auth/login", json={"email": "manager-approve-race@example.com", "password": PASSWORD}
+    )
+    manager_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # Threshold is 0, so this queues regardless of magnitude.
+    submit = await pg_client.post(
+        f"/inventory/{item['id']}/adjust",
+        json={"quantity": "50", "reason_code": "cycle_count"},
+        headers=manager_headers,
+    )
+    assert submit.status_code == 200
+    request_id = submit.json()["request"]["id"]
+
+    # Without the for_update lock on the request row, multiple concurrent
+    # approvals can all read status=="pending" before either commits and all
+    # apply the delta - the lock serializes them so only the first through
+    # wins and the rest see the already-approved status.
+    results = await asyncio.gather(
+        *[
+            pg_client.post(f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers)
+            for _ in range(10)
+        ]
+    )
+    statuses = [r.status_code for r in results]
+    assert statuses.count(200) == 1, statuses
+    assert statuses.count(409) == 9, statuses
+
+    # The delta was applied exactly once, not zero times and not ten times.
+    detail = await pg_client.get(f"/inventory/{item['id']}", headers=headers)
+    assert Decimal(detail.json()["quantity_on_hand"]) == Decimal("150")

@@ -543,8 +543,13 @@ async def approve_adjustment_request(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
+    # Locked for the rest of this transaction: without it, two concurrent
+    # approvals (or an approve racing a reject) can both read status="pending"
+    # before either commits and both post the delta - same class of race
+    # purchase_orders.py guards against on PO submit/receive.
     req = await get_or_404(
-        db, InventoryAdjustmentRequest, current.org_id, request_id, "Adjustment request not found"
+        db, InventoryAdjustmentRequest, current.org_id, request_id, "Adjustment request not found",
+        for_update=True,
     )
     if req.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, f"Request already {req.status}")
@@ -589,8 +594,11 @@ async def reject_adjustment_request(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
+    # Locked for the rest of this transaction: see approve_adjustment_request's
+    # matching comment - same race between two concurrent reviewers.
     req = await get_or_404(
-        db, InventoryAdjustmentRequest, current.org_id, request_id, "Adjustment request not found"
+        db, InventoryAdjustmentRequest, current.org_id, request_id, "Adjustment request not found",
+        for_update=True,
     )
     if req.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, f"Request already {req.status}")

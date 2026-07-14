@@ -139,7 +139,18 @@ export function BuildCalculatorPanel() {
         <CardContent className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-3 lg:max-w-2xl">
             <Field label="Product" htmlFor="bc-item">
-              <ItemSelect id="bc-item" items={items.data} value={itemId} onChange={setItemId} required />
+              <ItemSelect
+                id="bc-item"
+                items={items.data}
+                value={itemId}
+                onChange={(id) => {
+                  setItemId(id);
+                  setPlan(null);
+                  setResult(null);
+                  setConfirming(false);
+                }}
+                required
+              />
             </Field>
             <Field label="Build quantity" htmlFor="bc-qty">
               <Input
@@ -148,7 +159,12 @@ export function BuildCalculatorPanel() {
                 step="0.0001"
                 min="0.0001"
                 value={buildQuantity}
-                onChange={(e) => setBuildQuantity(e.target.value)}
+                onChange={(e) => {
+                  setBuildQuantity(e.target.value);
+                  setPlan(null);
+                  setResult(null);
+                  setConfirming(false);
+                }}
               />
             </Field>
             <Field label="Expected yield loss %" htmlFor="bc-yield">
@@ -159,7 +175,12 @@ export function BuildCalculatorPanel() {
                 min="0"
                 max="99.99"
                 value={yieldLossPct}
-                onChange={(e) => setYieldLossPct(e.target.value)}
+                onChange={(e) => {
+                  setYieldLossPct(e.target.value);
+                  setPlan(null);
+                  setResult(null);
+                  setConfirming(false);
+                }}
                 title="Percent of build attempts expected to fail QA/scrap entirely - inflates the build quantity before exploding the recipe"
               />
             </Field>

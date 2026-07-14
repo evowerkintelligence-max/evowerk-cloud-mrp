@@ -244,6 +244,8 @@ async def test_po_number_allocates_sequentially(client):
         assert res.status_code == 201
         numbers.append(res.json()["po_number"])
 
+    assert numbers == [1, 2, 3, 4, 5]
+
 
 async def test_receive_with_rejected_quantity_only_applies_accepted_to_inventory(client):
     token = await _register_and_login(client)

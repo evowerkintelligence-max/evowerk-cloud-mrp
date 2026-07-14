@@ -4,9 +4,9 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,15 +146,23 @@ async def create_purchase_order(
 
 @router.get("", response_model=list[PurchaseOrderResponse])
 async def list_purchase_orders(
+    q: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
+    query = (
         select(PurchaseOrder, Supplier)
         .join(Supplier, Supplier.id == PurchaseOrder.supplier_id)
         .where(PurchaseOrder.org_id == current.org_id)
-        .order_by(PurchaseOrder.po_number)
     )
+    if q:
+        query = query.where(
+            or_(Supplier.name.ilike(f"%{q}%"), cast(PurchaseOrder.po_number, String).ilike(f"%{q}%"))
+        )
+    query = query.order_by(PurchaseOrder.po_number).limit(limit).offset(offset)
+    result = await db.execute(query)
     return [await _po_to_response(db, po, supplier) for po, supplier in result.all()]
 
 
@@ -199,7 +207,9 @@ async def update_purchase_order_lines(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
+    po = await get_or_404(
+        db, PurchaseOrder, current.org_id, po_id, "Purchase order not found", for_update=True
+    )
     if po.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft purchase orders can be edited")
     if not lines_in:
@@ -248,7 +258,9 @@ async def submit_purchase_order(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
+    po = await get_or_404(
+        db, PurchaseOrder, current.org_id, po_id, "Purchase order not found", for_update=True
+    )
     if po.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft purchase orders can be submitted")
 
@@ -280,7 +292,9 @@ async def receive_purchase_order(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
+    po = await get_or_404(
+        db, PurchaseOrder, current.org_id, po_id, "Purchase order not found", for_update=True
+    )
     if po.status not in ("submitted", "partially_received"):
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Only submitted or partially received purchase orders can receive"
@@ -292,6 +306,7 @@ async def receive_purchase_order(
         select(PurchaseOrderLine, Item)
         .join(Item, Item.id == PurchaseOrderLine.item_id)
         .where(PurchaseOrderLine.po_id == po.id)
+        .with_for_update(of=PurchaseOrderLine)
     )
     lines_by_id: dict[uuid.UUID, PurchaseOrderLine] = {}
     items_by_line_id: dict[uuid.UUID, Item] = {}
@@ -416,7 +431,9 @@ async def cancel_purchase_order(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
+    po = await get_or_404(
+        db, PurchaseOrder, current.org_id, po_id, "Purchase order not found", for_update=True
+    )
     # Status alone is authoritative here: it already flips to
     # partially_received the instant any receiving happens, so gating on
     # draft/submitted is sufficient - no separate per-line check needed.

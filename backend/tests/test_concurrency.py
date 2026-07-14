@@ -207,6 +207,65 @@ async def test_concurrent_lot_consume_never_oversells(pg_client):
     assert Decimal(lot.json()["quantity_remaining"]) == Decimal("0")
 
 
+async def test_concurrent_po_submit_only_one_succeeds(pg_client):
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers)
+    supplier = await _supplier(pg_client, headers)
+    po = (await pg_client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/purchase-orders/{po['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+
+    # Without the for_update lock on the PO row, two concurrent submits can both
+    # read status=="draft" before either commits and both flip it - the lock
+    # serializes them so only the first through wins and the rest see the
+    # already-submitted status and get a clean 409.
+    results = await asyncio.gather(
+        *[pg_client.post(f"/purchase-orders/{po['id']}/submit", headers=headers) for _ in range(10)]
+    )
+    statuses = [r.status_code for r in results]
+    assert statuses.count(200) == 1, statuses
+    assert statuses.count(409) == 9, statuses
+    detail = await pg_client.get(f"/purchase-orders/{po['id']}", headers=headers)
+    assert detail.json()["status"] == "submitted"
+
+
+async def test_concurrent_po_receive_never_exceeds_ordered_quantity(pg_client):
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers)
+    supplier = await _supplier(pg_client, headers)
+    po = (await pg_client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)).json()
+    lines = await pg_client.patch(
+        f"/purchase-orders/{po['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "100", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    line_id = lines.json()["lines"][0]["id"]
+    await pg_client.post(f"/purchase-orders/{po['id']}/submit", headers=headers)
+
+    # 15 concurrent receipts of 10 against an ordered quantity of 100: exactly
+    # 10 can succeed before the running total would exceed what was ordered.
+    results = await asyncio.gather(
+        *[
+            pg_client.post(
+                f"/purchase-orders/{po['id']}/receive",
+                json=[{"po_line_id": line_id, "quantity": "10"}],
+                headers=headers,
+            )
+            for _ in range(15)
+        ]
+    )
+    ok = [r for r in results if r.status_code == 200]
+    conflict = [r for r in results if r.status_code == 409]
+    assert len(ok) == 10, [r.status_code for r in results]
+    assert len(conflict) == 5
+    detail = await pg_client.get(f"/purchase-orders/{po['id']}", headers=headers)
+    assert Decimal(detail.json()["lines"][0]["quantity_received"]) == Decimal("100")
+    assert detail.json()["status"] == "received"
+
+
 async def test_concurrent_po_creation_never_duplicates_numbers(pg_client):
     headers = await _auth(pg_client)
     supplier = await _supplier(pg_client, headers)

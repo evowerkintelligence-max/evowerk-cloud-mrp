@@ -89,10 +89,11 @@ export function GeneratePosPanel({
     },
   });
 
+  // active_only: a deactivated vendor shouldn't be offered for a new draft PO.
   const suppliers = useQuery<SupplierResponse[]>({
-    queryKey: ["suppliers"],
+    queryKey: ["suppliers", "active"],
     queryFn: async () => {
-      const res = await apiFetch("/suppliers");
+      const res = await apiFetch("/suppliers?active_only=true");
       if (!res.ok) throw new Error("Failed to load suppliers");
       return res.json();
     },

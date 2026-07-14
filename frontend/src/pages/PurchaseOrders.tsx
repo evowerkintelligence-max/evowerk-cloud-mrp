@@ -10,10 +10,13 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
+import { Dialog } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { ItemSelect } from "@/components/ItemSelect";
 import { humanize, poStatusVariant } from "@/lib/status";
 import { cn } from "@/lib/utils";
+
+const PAGE_SIZE = 20;
 
 interface ItemResponse {
   id: string;
@@ -67,6 +70,11 @@ export function PurchaseOrdersPanel() {
   const [receiveExpiryDate, setReceiveExpiryDate] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
   const items = useQuery<ItemResponse[]>({
     queryKey: ["items"],
     queryFn: async () => {
@@ -76,19 +84,22 @@ export function PurchaseOrdersPanel() {
     },
   });
 
+  // active_only: a cancelled/replaced vendor shouldn't be pickable for a new PO.
   const suppliers = useQuery<SupplierResponse[]>({
-    queryKey: ["suppliers"],
+    queryKey: ["suppliers", "active"],
     queryFn: async () => {
-      const res = await apiFetch("/suppliers");
+      const res = await apiFetch("/suppliers?active_only=true");
       if (!res.ok) throw new Error("Failed to load suppliers");
       return res.json();
     },
   });
 
   const purchaseOrders = useQuery<PurchaseOrderResponse[]>({
-    queryKey: ["purchase-orders"],
+    queryKey: ["purchase-orders", search, page],
     queryFn: async () => {
-      const res = await apiFetch("/purchase-orders");
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+      if (search) params.set("q", search);
+      const res = await apiFetch(`/purchase-orders?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load purchase orders");
       return res.json();
     },
@@ -279,10 +290,21 @@ export function PurchaseOrdersPanel() {
         </CardContent>
       </Card>
 
+      <div className="mb-4 max-w-xs">
+        <Input
+          placeholder="Search PO # or supplier…"
+          value={search}
+          onChange={(e) => {
+            setPage(0);
+            setSearch(e.target.value);
+          }}
+        />
+      </div>
+
       {purchaseOrders.data && purchaseOrders.data.length === 0 ? (
         <EmptyState icon={<ShoppingCart />} title="No purchase orders yet" />
       ) : (
-        <TableWrap className="mb-8">
+        <TableWrap className="mb-4">
           <Table>
             <THead>
               <TR>
@@ -310,6 +332,28 @@ export function PurchaseOrdersPanel() {
         </TableWrap>
       )}
 
+      <div className="mb-8 flex items-center justify-between">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={page === 0}
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+        >
+          Previous
+        </Button>
+        <span className="text-sm text-muted-foreground">Page {page + 1}</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!purchaseOrders.data || purchaseOrders.data.length < PAGE_SIZE}
+          onClick={() => setPage((p) => p + 1)}
+        >
+          Next
+        </Button>
+      </div>
+
       {poDetail.data && (
         <Card>
           <CardHeader className="flex-row items-center justify-between">
@@ -321,22 +365,12 @@ export function PurchaseOrdersPanel() {
             </CardTitle>
             <div className="flex items-center gap-2">
               {poDetail.data.status === "draft" && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => submitPo.mutate()}
-                  loading={submitPo.isPending}
-                >
+                <Button variant="secondary" size="sm" onClick={() => setConfirmSubmit(true)}>
                   Submit
                 </Button>
               )}
               {CANCELLABLE_STATUSES.includes(poDetail.data.status) && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => cancelPo.mutate()}
-                  loading={cancelPo.isPending}
-                >
+                <Button variant="destructive" size="sm" onClick={() => setConfirmCancel(true)}>
                   Cancel
                 </Button>
               )}
@@ -473,6 +507,50 @@ export function PurchaseOrdersPanel() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {poDetail.data && (
+        <Dialog open={confirmSubmit} onClose={() => setConfirmSubmit(false)} title="Submit purchase order?">
+          <p className="text-sm text-muted-foreground">
+            PO-{poDetail.data.po_number} will move to <strong>Submitted</strong> and its lines can no
+            longer be edited.
+          </p>
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="secondary" onClick={() => setConfirmSubmit(false)}>
+              Never mind
+            </Button>
+            <Button
+              loading={submitPo.isPending}
+              onClick={() => {
+                submitPo.mutate(undefined, { onSuccess: () => setConfirmSubmit(false) });
+              }}
+            >
+              Submit
+            </Button>
+          </div>
+        </Dialog>
+      )}
+
+      {poDetail.data && (
+        <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} title="Cancel purchase order?">
+          <p className="text-sm text-muted-foreground">
+            PO-{poDetail.data.po_number} will be cancelled. This can't be undone.
+          </p>
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="secondary" onClick={() => setConfirmCancel(false)}>
+              Never mind
+            </Button>
+            <Button
+              variant="destructive"
+              loading={cancelPo.isPending}
+              onClick={() => {
+                cancelPo.mutate(undefined, { onSuccess: () => setConfirmCancel(false) });
+              }}
+            >
+              Cancel PO
+            </Button>
+          </div>
+        </Dialog>
       )}
     </div>
   );

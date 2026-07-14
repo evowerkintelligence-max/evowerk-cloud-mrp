@@ -363,3 +363,40 @@ async def test_rbac_blocks_non_owner_from_mutations(client, test_engine):
     # Reads are still open to non-owners.
     read = await client.get("/items", headers={"Authorization": f"Bearer {member_token}"})
     assert read.status_code == 200
+
+
+async def test_create_bom_survives_version_collision_retry(client, monkeypatch):
+    """Regression test for the retry loop expiring `item` on rollback (see
+    create_bom): forces one IntegrityError on the first version-allocation
+    flush, so the loop takes its rollback+retry path, then confirms the
+    endpoint still succeeds instead of 500ing on an expired ORM attribute read.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.bom import Bom
+
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="RACE-FG", name="Widget", item_type="finished_good")
+
+    original_flush = AsyncSession.flush
+    state = {"raised": False}
+
+    async def flaky_flush(self, *args, **kwargs):
+        pending_boms = [obj for obj in self.new if isinstance(obj, Bom)]
+        if pending_boms and not state["raised"]:
+            state["raised"] = True
+            raise IntegrityError("INSERT INTO boms ...", {}, Exception("uq_boms_org_item_version"))
+        return await original_flush(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "flush", flaky_flush)
+
+    res = await client.post("/boms", json={"item_id": item["id"]}, headers=headers)
+
+    assert state["raised"], "test setup didn't actually trigger the forced collision"
+    assert res.status_code == 201
+    body = res.json()
+    assert body["version"] == 1
+    assert body["item_sku"] == "RACE-FG"
+    assert body["item_name"] == "Widget"

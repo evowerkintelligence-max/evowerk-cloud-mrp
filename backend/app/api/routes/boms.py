@@ -172,6 +172,12 @@ async def create_bom(
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid item_id") from None
     item = await _get_item_or_404(db, current.org_id, item_id)
+    # Hoisted into plain locals before the retry loop: a collision below calls
+    # db.rollback(), which expires `item` in the session. Reading an expired
+    # attribute on an async session triggers an implicit refresh SELECT,
+    # which raises MissingGreenlet here rather than just re-fetching.
+    item_sku = item.sku
+    item_name = item.name
 
     for attempt in range(MAX_VERSION_ATTEMPTS):
         max_version = await db.scalar(
@@ -204,7 +210,10 @@ async def create_bom(
         metadata={"item_id": str(item_id), "version": bom.version},
     )
     await db.commit()
-    return await _bom_to_response(db, bom, item)
+    return BomResponse(
+        id=str(bom.id), item_id=str(bom.item_id), item_sku=item_sku, item_name=item_name,
+        version=bom.version, status=bom.status, updated_at=bom.updated_at,
+    )
 
 
 @router.get("", response_model=list[BomResponse])

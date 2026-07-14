@@ -286,3 +286,63 @@ async def test_concurrent_po_creation_never_duplicates_numbers(pg_client):
     numbers = [r.json()["po_number"] for r in results if r.status_code == 201]
     assert len(numbers) == len(set(numbers)), f"duplicate po_numbers: {sorted(numbers)}"
     assert numbers, "expected at least one PO to be created"
+
+
+async def test_stale_approval_after_concurrent_consume_is_rejected(pg_client, pg_engine):
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers)
+    supplier = await _supplier(pg_client, headers)
+    await _receive(pg_client, headers, item, supplier, 100)
+
+    org_id = (await pg_client.get("/orgs/me", headers=headers)).json()["id"]
+    await pg_client.patch("/orgs/me", json={"adjust_approval_threshold": "0"}, headers=headers)
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import uuid as uuid_module
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    session_factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="manager-stale@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="manager",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    login = await pg_client.post(
+        "/auth/login", json={"email": "manager-stale@example.com", "password": PASSWORD}
+    )
+    manager_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # Threshold is 0, so any manager adjustment queues, including a negative one.
+    submit = await pg_client.post(
+        f"/inventory/{item['id']}/adjust",
+        json={"quantity": "-60", "reason_code": "cycle_count"},
+        headers=manager_headers,
+    )
+    assert submit.status_code == 200
+    request_id = submit.json()["request"]["id"]
+
+    # Meanwhile, 50 units get consumed - only 50 remain, not enough for -60.
+    consume = await pg_client.post(
+        f"/inventory/{item['id']}/consume", json={"quantity": "50"}, headers=headers
+    )
+    assert consume.status_code == 200
+
+    approve = await pg_client.post(
+        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers
+    )
+    assert approve.status_code == 409
+
+    # The request is still pending, not silently marked approved on failure.
+    pending = await pg_client.get("/inventory/adjustment-requests?status=pending", headers=headers)
+    assert any(r["id"] == request_id for r in pending.json())
+
+    detail = await pg_client.get(f"/inventory/{item['id']}", headers=headers)
+    assert Decimal(detail.json()["quantity_on_hand"]) == Decimal("50")

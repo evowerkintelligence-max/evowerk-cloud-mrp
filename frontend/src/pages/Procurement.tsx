@@ -5,11 +5,13 @@ import { PageTabs } from "@/components/PageTabs";
 import { PurchaseOrdersPanel } from "./PurchaseOrders";
 import { SuppliersPanel } from "./Suppliers";
 import { GeneratePosPanel } from "./GeneratePos";
+import { BuildCalculatorPanel } from "./BuildCalculator";
 
 const TABS = [
   { value: "purchase-orders", label: "Purchase Orders" },
   { value: "suppliers", label: "Suppliers" },
   { value: "generate", label: "Generate from Plan" },
+  { value: "build-calculator", label: "Build Calculator" },
 ] as const;
 
 type Tab = (typeof TABS)[number]["value"];
@@ -38,6 +40,7 @@ export function Procurement() {
           initialHorizonEnd={searchParams.get("horizonEnd")}
         />
       )}
+      {tab === "build-calculator" && <BuildCalculatorPanel />}
     </div>
   );
 }

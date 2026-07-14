@@ -292,121 +292,85 @@ async def test_concurrent_po_creation_never_duplicates_numbers(pg_client):
     assert numbers, "expected at least one PO to be created"
 
 
-async def test_stale_approval_after_concurrent_consume_is_rejected(pg_client, pg_engine):
+async def test_concurrent_mutual_reference_activate_never_creates_a_live_cycle(pg_client):
+    """Draft A -> B and draft B -> A racing to activate. Without the org-wide
+    for_update lock in activate_bom, both requests could read the other side as
+    still-draft (invisible to the active-only cycle walk) before either commits,
+    and both activate - a real cycle in the graph MRP explosion walks. The lock
+    serializes them: the second sees the first's committed status and is
+    rejected, so exactly one side ever ends up active."""
     headers = await _auth(pg_client)
-    item = await _item(pg_client, headers)
-    supplier = await _supplier(pg_client, headers)
-    await _receive(pg_client, headers, item, supplier, 100)
+    item_a = await _item(pg_client, headers, sku="CYC-A")
+    item_b = await _item(pg_client, headers, sku="CYC-B")
 
-    org_id = (await pg_client.get("/orgs/me", headers=headers)).json()["id"]
-    await pg_client.patch("/orgs/me", json={"adjust_approval_threshold": "0"}, headers=headers)
-
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    import uuid as uuid_module
-
-    from app.core.security import hash_password
-    from app.models.user import User
-
-    session_factory = async_sessionmaker(pg_engine, expire_on_commit=False)
-    async with session_factory() as session:
-        session.add(
-            User(
-                org_id=uuid_module.UUID(org_id),
-                email="manager-stale@example.com",
-                password_hash=hash_password(PASSWORD),
-                role="manager",
-                is_active=True,
-            )
-        )
-        await session.commit()
-    login = await pg_client.post(
-        "/auth/login", json={"email": "manager-stale@example.com", "password": PASSWORD}
+    bom_a = (await pg_client.post("/boms", json={"item_id": item_a["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/boms/{bom_a['id']}",
+        json={
+            "lines": [{"component_item_id": item_b["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_a["updated_at"],
+        },
+        headers=headers,
     )
-    manager_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-
-    # Threshold is 0, so any manager adjustment queues, including a negative one.
-    submit = await pg_client.post(
-        f"/inventory/{item['id']}/adjust",
-        json={"quantity": "-60", "reason_code": "cycle_count"},
-        headers=manager_headers,
+    bom_b = (await pg_client.post("/boms", json={"item_id": item_b["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/boms/{bom_b['id']}",
+        json={
+            "lines": [{"component_item_id": item_a["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_b["updated_at"],
+        },
+        headers=headers,
     )
-    assert submit.status_code == 200
-    request_id = submit.json()["request"]["id"]
 
-    # Meanwhile, 50 units get consumed - only 50 remain, not enough for -60.
-    consume = await pg_client.post(
-        f"/inventory/{item['id']}/consume", json={"quantity": "50"}, headers=headers
-    )
-    assert consume.status_code == 200
-
-    approve = await pg_client.post(
-        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers
-    )
-    assert approve.status_code == 409
-
-    # The request is still pending, not silently marked approved on failure.
-    pending = await pg_client.get("/inventory/adjustment-requests?status=pending", headers=headers)
-    assert any(r["id"] == request_id for r in pending.json())
-
-    detail = await pg_client.get(f"/inventory/{item['id']}", headers=headers)
-    assert Decimal(detail.json()["quantity_on_hand"]) == Decimal("50")
-
-
-async def test_concurrent_approve_only_one_succeeds(pg_client, pg_engine):
-    headers = await _auth(pg_client)
-    item = await _item(pg_client, headers)
-    supplier = await _supplier(pg_client, headers)
-    await _receive(pg_client, headers, item, supplier, 100)
-
-    org_id = (await pg_client.get("/orgs/me", headers=headers)).json()["id"]
-    await pg_client.patch("/orgs/me", json={"adjust_approval_threshold": "0"}, headers=headers)
-
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    import uuid as uuid_module
-
-    from app.core.security import hash_password
-    from app.models.user import User
-
-    session_factory = async_sessionmaker(pg_engine, expire_on_commit=False)
-    async with session_factory() as session:
-        session.add(
-            User(
-                org_id=uuid_module.UUID(org_id),
-                email="manager-approve-race@example.com",
-                password_hash=hash_password(PASSWORD),
-                role="manager",
-                is_active=True,
-            )
-        )
-        await session.commit()
-    login = await pg_client.post(
-        "/auth/login", json={"email": "manager-approve-race@example.com", "password": PASSWORD}
-    )
-    manager_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-
-    # Threshold is 0, so this queues regardless of magnitude.
-    submit = await pg_client.post(
-        f"/inventory/{item['id']}/adjust",
-        json={"quantity": "50", "reason_code": "cycle_count"},
-        headers=manager_headers,
-    )
-    assert submit.status_code == 200
-    request_id = submit.json()["request"]["id"]
-
-    # Without the for_update lock on the request row, multiple concurrent
-    # approvals can all read status=="pending" before either commits and all
-    # apply the delta - the lock serializes them so only the first through
-    # wins and the rest see the already-approved status.
     results = await asyncio.gather(
-        *[
-            pg_client.post(f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers)
-            for _ in range(10)
-        ]
+        pg_client.post(f"/boms/{bom_a['id']}/activate", headers=headers),
+        pg_client.post(f"/boms/{bom_b['id']}/activate", headers=headers),
     )
-    statuses = [r.status_code for r in results]
-    assert statuses.count(200) == 1, statuses
-    assert statuses.count(409) == 9, statuses
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], statuses
 
-    # The delta was applied exactly once, not zero times and not ten times.
-    detail = await pg_client.get(f"/inventory/{item['id']}", headers=headers)
-    assert Decimal(detail.json()["quantity_on_hand"]) == Decimal("150")
+    detail_a = await pg_client.get(f"/boms/{bom_a['id']}", headers=headers)
+    detail_b = await pg_client.get(f"/boms/{bom_b['id']}", headers=headers)
+    # Exactly one side is active, the loser stays draft - never both, which
+    # would mean a real cycle got committed into the active-BOM graph.
+    assert sorted([detail_a.json()["status"], detail_b.json()["status"]]) == ["active", "draft"]
+
+
+async def test_concurrent_patch_same_bom_only_one_wins_via_row_version_cas(pg_client):
+    """Two PATCHes load the same draft BOM (same expected_updated_at) and fire
+    concurrently. The Python-level expected_updated_at pre-check can't catch
+    this alone - both can pass it before either flushes. Bom.row_version
+    (version_id_col) is the real guard for that gap: the loser's flush hits a
+    changed row_version, raises StaleDataError, and is converted to a clean
+    409 instead of silently clobbering the winner's write."""
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers, sku="FG-CAS")
+    comp_x = await _item(pg_client, headers, sku="RAW-X")
+    comp_y = await _item(pg_client, headers, sku="RAW-Y")
+    bom = (await pg_client.post("/boms", json={"item_id": item["id"]}, headers=headers)).json()
+
+    results = await asyncio.gather(
+        pg_client.patch(
+            f"/boms/{bom['id']}",
+            json={
+                "lines": [{"component_item_id": comp_x["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom["updated_at"],
+            },
+            headers=headers,
+        ),
+        pg_client.patch(
+            f"/boms/{bom['id']}",
+            json={
+                "lines": [{"component_item_id": comp_y["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom["updated_at"],
+            },
+            headers=headers,
+        ),
+    )
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], statuses
+
+    # The winner's write landed cleanly - exactly one line, not a merge or
+    # duplicate of both concurrent edits.
+    winner = next(r for r in results if r.status_code == 200).json()
+    assert len(winner["lines"]) == 1

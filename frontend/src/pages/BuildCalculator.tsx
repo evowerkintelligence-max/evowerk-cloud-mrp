@@ -77,9 +77,17 @@ export function BuildCalculatorPanel() {
       return res.json() as Promise<BuildPlanResponse>;
     },
     onSuccess: (data) => {
-      setPlan(data);
-      setResult(null);
-      setConfirming(false);
+      // Guard against stale responses: only apply plan if response matches current input state
+      if (
+        data.item_id === itemId &&
+        data.build_quantity === buildQuantity &&
+        data.yield_loss_pct === (yieldLossPct || "0")
+      ) {
+        setPlan(data);
+        setResult(null);
+        setConfirming(false);
+      }
+      // If response is stale (inputs changed before response arrived), silently drop it
     },
     onError: (e: Error) => setError(e.message),
   });

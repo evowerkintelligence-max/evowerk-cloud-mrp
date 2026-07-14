@@ -540,6 +540,24 @@ export function Boms() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const reviseBom = useMutation({
+    mutationFn: async () => {
+      if (!bomDetail.data) throw new Error("No BOM selected");
+      const res = await apiFetch(`/boms/${bomDetail.data.id}/revise`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to revise BOM");
+      }
+      return res.json() as Promise<BomDetailResponse>;
+    },
+    onSuccess: (newDraft) => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["boms"] });
+      setSelectedBomId(newDraft.id);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
   const deleteBom = useMutation({
     mutationFn: async () => {
       const res = await apiFetch(`/boms/${selectedBomId}`, { method: "DELETE" });
@@ -669,6 +687,16 @@ export function Boms() {
                   Activate
                 </Button>
               </div>
+            )}
+            {bomDetail.data.status === "active" && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => reviseBom.mutate()}
+                loading={reviseBom.isPending}
+              >
+                Edit (new version)
+              </Button>
             )}
           </CardHeader>
           <CardContent className="space-y-6">

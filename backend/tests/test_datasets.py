@@ -75,6 +75,41 @@ async def test_list_preview_health_and_delete(client):
     assert (await client.get(f"/datasets/{dataset_id}", headers=headers)).status_code == 404
 
 
+async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    token = await _register_and_login(client, email="owner2@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+    dataset_id = (await _upload(client, token)).json()["id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        import uuid as uuid_module
+
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="member2@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+    login = await client.post("/auth/login", json={"email": "member2@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    res = await client.delete(f"/datasets/{dataset_id}", headers=member_headers)
+    assert res.status_code == 403
+    assert (await client.get(f"/datasets/{dataset_id}", headers=headers)).status_code == 200
+
+
 async def test_tenant_isolation(client):
     token_a = await _register_and_login(client, email="a@example.com", org_name="A Co")
     token_b = await _register_and_login(client, email="b@example.com", org_name="B Co")

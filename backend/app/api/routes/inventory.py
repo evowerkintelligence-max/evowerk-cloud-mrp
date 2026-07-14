@@ -113,7 +113,11 @@ def _item_response(item: Item, by_location: list[LocationQuantity]) -> Inventory
         item_sku=item.sku,
         item_name=item.name,
         unit_of_measure=item.unit_of_measure,
-        quantity_on_hand=sum((lq.quantity_on_hand for lq in by_location), Decimal(0)),
+        # Decimal(0) (vs "0.0000") would serialize as "0" instead of matching
+        # the Numeric(12,4) scale every DB-sourced balance carries - only
+        # visible once an item can legitimately have zero location rows (e.g.
+        # a fully-rejected PO receipt that never touches inventory).
+        quantity_on_hand=sum((lq.quantity_on_hand for lq in by_location), Decimal("0.0000")),
         by_location=by_location,
     )
 

@@ -174,7 +174,11 @@ async def test_concurrent_inventory_adjust_no_lost_updates(pg_client):
     # assert the invariant, not that every request wins the create race.
     results = await asyncio.gather(
         *[
-            pg_client.post(f"/inventory/{item['id']}/adjust", json={"quantity": "5"}, headers=headers)
+            pg_client.post(
+                f"/inventory/{item['id']}/adjust",
+                json={"quantity": "5", "reason_code": "cycle_count"},
+                headers=headers,
+            )
             for _ in range(12)
         ]
     )

@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { humanize } from "@/lib/status";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 25;
 // Mirrors LOT_EXPIRY_WARNING_DAYS in backend/app/services/morning_brief.py -
@@ -436,7 +437,7 @@ export function Lots() {
                 <TR
                   key={lot.id}
                   onClick={() => setSelectedLotId(lot.id)}
-                  className={`cursor-pointer ${selectedLotId === lot.id ? "bg-primary/5" : ""}`}
+                  className={cn("cursor-pointer", selectedLotId === lot.id && "bg-primary/5")}
                 >
                   <TD className="font-medium">
                     {lot.item_sku} - {lot.item_name}

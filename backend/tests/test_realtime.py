@@ -230,6 +230,46 @@ async def test_sse_generator_yields_first_snapshot_frame(client, fake_rest_serve
 
 
 @pytest.mark.asyncio
+async def test_list_streams_attaches_alerts_to_the_right_stream(client, fake_rest_server):
+    """GET /realtime/streams batches every stream's stream_metric alert rules
+    into one query (app.services.alerts.stream_alerts_bulk) - this checks the
+    SQL-side stream_id filter actually scopes each rule to its own stream
+    instead of leaking a rule onto every stream in the response."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
+    integration_id = await _create_rest_integration(client, headers, base_url)
+
+    stream_a = (
+        await client.post(
+            "/realtime/streams", headers=headers,
+            json={"integration_id": integration_id, "name": "A", "interval_seconds": 1, "column_map": {}},
+        )
+    ).json()["stream_id"]
+    stream_b = (
+        await client.post(
+            "/realtime/streams", headers=headers,
+            json={"integration_id": integration_id, "name": "B", "interval_seconds": 1, "column_map": {}},
+        )
+    ).json()["stream_id"]
+
+    rule = await client.post(
+        "/alerts/rules", headers=headers,
+        json={
+            "name": "A watch", "type": "stream_metric",
+            "config": {"stream_id": stream_a, "metric_name": "throughput", "comparison": "gt", "threshold": -1},
+        },
+    )
+    assert rule.status_code == 201, rule.text
+
+    listed = (await client.get("/realtime/streams", headers=headers)).json()["streams"]
+    by_id = {s["stream_id"]: s for s in listed}
+    assert len(by_id[stream_a]["alerts"]) == 1
+    assert by_id[stream_a]["alerts"][0]["rule_name"] == "A watch"
+    assert by_id[stream_b]["alerts"] == []
+
+
+@pytest.mark.asyncio
 async def test_cannot_access_another_orgs_stream(client, fake_rest_server):
     token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
     headers_a = {"Authorization": f"Bearer {token_a}"}

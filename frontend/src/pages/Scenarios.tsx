@@ -80,6 +80,8 @@ function CreateScenarioForm({ onCreated }: { onCreated: () => void }) {
 function ScenarioList() {
   const qc = useQueryClient();
   const scenarios = useQuery<Scenario[]>({ queryKey: ["scenarios"], queryFn: () => j(apiFetch("/scenarios")) });
+  const [ranScenarioId, setRanScenarioId] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const del = useMutation({
     mutationFn: (id: string) => apiFetch(`/scenarios/${id}`, { method: "DELETE" }),
@@ -88,7 +90,27 @@ function ScenarioList() {
 
   const run = useMutation({
     mutationFn: (id: string) => j<{ params: object; result: { columns: string[]; rows: Record<string, unknown>[] } }[]>(apiFetch(`/scenarios/${id}/execute`, { method: "POST", body: JSON.stringify({ param_sets: [{}] }) })),
+    onSuccess: (_data, id) => setRanScenarioId(id),
   });
+
+  async function downloadLatestRun(fmt: "csv" | "xlsx") {
+    if (!ranScenarioId) return;
+    setDownloading(true);
+    try {
+      const runs = await j<{ id: string }[]>(apiFetch(`/scenarios/${ranScenarioId}/runs`));
+      if (!runs.length) return;
+      const res = await apiFetch(`/scenarios/${ranScenarioId}/runs/${runs[0].id}/export?fmt=${fmt}`);
+      if (!res.ok) throw new Error("Export failed");
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `scenario-run.${fmt}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <Card>
@@ -132,26 +154,36 @@ function ScenarioList() {
         </TableWrap>
 
         {run.isSuccess && run.data[0] && (
-          <TableWrap>
-            <Table>
-              <THead>
-                <TR>
-                  {run.data[0].result.columns.map((c) => (
-                    <TH key={c}>{c}</TH>
-                  ))}
-                </TR>
-              </THead>
-              <TBody>
-                {run.data[0].result.rows.map((row, i) => (
-                  <TR key={i}>
-                    {run.data![0].result.columns.map((c) => (
-                      <TD key={c}>{String(row[c])}</TD>
+          <>
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" loading={downloading} onClick={() => downloadLatestRun("csv")}>
+                Download CSV
+              </Button>
+              <Button size="sm" variant="secondary" loading={downloading} onClick={() => downloadLatestRun("xlsx")}>
+                Download XLSX
+              </Button>
+            </div>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    {run.data[0].result.columns.map((c) => (
+                      <TH key={c}>{c}</TH>
                     ))}
                   </TR>
-                ))}
-              </TBody>
-            </Table>
-          </TableWrap>
+                </THead>
+                <TBody>
+                  {run.data[0].result.rows.map((row, i) => (
+                    <TR key={i}>
+                      {run.data![0].result.columns.map((c) => (
+                        <TD key={c}>{String(row[c])}</TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </>
         )}
       </CardContent>
     </Card>

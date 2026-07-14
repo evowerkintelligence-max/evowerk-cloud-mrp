@@ -11,6 +11,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { useDatasets, ColumnChecklist, EChart, rankedBarOption, gradientAreaSeries, C, TOOLTIP, AXIS_LABEL, SPLIT_LINE, AXIS_LINE } from "../analytics/shared";
+import { cn } from "@/lib/utils";
 import {
   TASKS,
   THOROUGHNESS,
@@ -153,7 +154,7 @@ function ContributionBars({ contributions }: { contributions: { feature: string;
                 style={{ width: `${pct}%` }}
               />
             </div>
-            <div className={`w-16 flex-shrink-0 text-right ${positive ? "text-emerald-500" : "text-rose-500"}`}>
+            <div className={cn("w-16 flex-shrink-0 text-right", positive ? "text-emerald-500" : "text-rose-500")}>
               {positive ? "+" : ""}{c.contribution.toFixed(4)}
             </div>
           </div>

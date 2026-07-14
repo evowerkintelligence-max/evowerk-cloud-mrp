@@ -9,12 +9,41 @@ No code is shared beyond common pip packages for core math (data cleaning,
 OEE calc, forecasting) — see the desktop repo's `project_product_separation`
 notes for why.
 
-## Phase 1 (this repo, current state)
+## Current state
 
-Security foundation on top of the Phase 0 scaffold: auth (OAuth2 password
-grant + JWT + TOTP MFA), multi-tenant data model (`org_id` scoping baked into
-every table from day one), an append-only audit log, and CI/CD security
-gates. Still no business features.
+Security foundation: auth (OAuth2 password grant + JWT + TOTP MFA),
+multi-tenant data model (`org_id` scoping baked into every table from day
+one), an append-only audit log, and CI/CD security gates (see below). Built
+on top of that, a full manufacturing feature set:
+
+- **MRP core**: BOMs/recipes with revisioning, netted-vs-gross MRP explosion,
+  build calculator, unit conversion on BOM lines.
+- **Procurement**: purchase orders, suppliers, preferred-supplier selection,
+  MOQ rounding, auto-generated POs off the MRP plan.
+- **Inventory**: on-hand tracking, lot/FEFO consumption, multi-location,
+  concurrency-safe stock adjustments, full audit trail.
+- **Demand forecasting**: moving average / exponential smoothing, feeding the
+  MRP plan and PO generation.
+- **Shop-floor analytics**: OEE, SPC control charts, scrap, downtime
+  (Pareto/MTTR), throughput, shift comparison, a rolled-up plant summary.
+- **Quality & RCA**: defect-rate/DPU analysis, root-cause cases with
+  fishbone-style cause trees and CAPA actions.
+- **Predictive maintenance**: machine risk scoring and maintenance
+  scheduling.
+- **Computer vision**: image-based defect/PPE detection via Gemini vision.
+- **AutoML**: sklearn model bake-off, SHAP explainability, drift detection.
+- **BI / ad-hoc analytics**: dataset upload & cleaning, pivot/SQL query,
+  custom dashboards/charts, KPIs, saved reports with AI narration, and a
+  natural-language "Ask" chat over the data.
+- **Data integrations**: CSV/Excel, SQL Server, Oracle, OPC-UA, OPC-DA, MQTT,
+  generic REST/SAP OData, and OSIsoft PI historian connectors.
+- **Workflow automation**: DAG-based workflow builder with run history, plus
+  realtime streams and alert rules (inventory, downtime, quality, production
+  target).
+- **Process mining**: discovers actual process flow from event logs.
+
+53 backend test modules cover this surface in addition to the auth suite
+described under Testing below.
 
 ### Audit log: append-only at the database level
 
@@ -162,7 +191,14 @@ token), account lockout, password policy, the MFA-disable-bypass regression,
 cross-tenant isolation, and per-IP rate limiting (both that it trips, and that
 it doesn't get in the way of many legitimate concurrent users).
 
-## Deferred past Phase 1
+## Deployment IaC
+
+Terraform modules for customer-hosted deployment live under
+`infra/terraform/`: `aws/` (ECS + ALB + RDS) and `azure/` (Container Apps +
+Key Vault). See each module's `README.md` for prerequisites and the
+deploy/update flow.
+
+## Deferred / not yet built
 
 - Secrets-manager integration — hosting is resolved (customer's own
   cloud infrastructure, not EvoWerk-managed; EvoWerk doesn't take on
@@ -176,14 +212,12 @@ it doesn't get in the way of many legitimate concurrent users).
 - Encryption at rest for the Postgres volume itself (as opposed to the
   application-level encryption TOTP secrets already get) — the customer's
   managed-Postgres choice, not something EvoWerk builds.
-- A deployment guide/IaC (Terraform) for standing the app up on a customer's
-  AWS/GCP/Azure account — not started yet.
 - DAST (dynamic scanning, e.g. OWASP ZAP) — needs a running deployed target,
   so deferred until there's a staging environment; SAST/dependency/secret/
   container scanning all run in CI today (see above).
 - Fine-grained RBAC (currently a single `role` string per user) — per-feature
-  permission checks are a Phase 2 (feature development) concern.
-- SOC2/GDPR/HIPAA/ISO 27001 evidence collection — Phase 3.
+  permission checks are not yet built.
+- SOC2/GDPR/HIPAA/ISO 27001 evidence collection — not started.
 - Account deactivation/invite UI — `is_active` exists and is enforced, but
   nothing sets it to `false` yet.
 - Signed commits — not enforceable from inside the repo; requires a GitHub

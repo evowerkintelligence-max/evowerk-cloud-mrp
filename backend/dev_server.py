@@ -23,7 +23,7 @@ from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models on the metadata
-    artifact,
+    alert,
     audit,
     bom,
     dashboard,

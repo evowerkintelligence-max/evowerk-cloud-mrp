@@ -43,6 +43,20 @@ interface SavedReportSummary {
   updated_at: string;
 }
 
+const NARRATION_STYLES = ["narrative", "bullets", "brief"] as const;
+type NarrationStyle = (typeof NARRATION_STYLES)[number];
+
+interface SectionNarrative {
+  title: string;
+  narrative: string;
+}
+
+interface ReportNarration {
+  executive_summary: string;
+  sections: SectionNarrative[];
+  error: string | null;
+}
+
 function blankSection(): SectionDraft {
   return { type: "text", title: "", text: "", itemsText: "", dataset_id: "", queryText: '{"select":[]}', chart_id: "" };
 }
@@ -95,6 +109,8 @@ export function ReportBuilder() {
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
   const [sectionDraft, setSectionDraft] = useState<SectionDraft>(blankSection());
   const [error, setError] = useState<string | null>(null);
+  const [narrationStyle, setNarrationStyle] = useState<NarrationStyle>("narrative");
+  const [narration, setNarration] = useState<ReportNarration | null>(null);
 
   const reports = useQuery<SavedReportSummary[]>({
     queryKey: ["saved-reports"],
@@ -180,7 +196,35 @@ export function ReportBuilder() {
     });
   }
 
-  async function download(format: "html" | "pdf" | "csv") {
+  const narrate = useMutation({
+    mutationFn: async () => {
+      if (!editingId || editingId === "new") throw new Error("Save the report first.");
+      const res = await apiFetch(`/reports/custom/${editingId}/narrate?style=${narrationStyle}`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Narration failed");
+      return res.json() as Promise<ReportNarration>;
+    },
+    onSuccess: (n) => {
+      setError(null);
+      setNarration(n);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  function useAsExecSummary() {
+    if (!narration) return;
+    setSections((prev) => {
+      const section = { type: "exec_summary", title: "Executive Summary", text: narration.executive_summary };
+      const idx = prev.findIndex((s) => s.type === "exec_summary");
+      if (idx >= 0) return prev.map((s, i) => (i === idx ? section : s));
+      return [section, ...prev];
+    });
+  }
+
+  function addNarrativeAsSection(sn: SectionNarrative) {
+    setSections((prev) => [...prev, { type: "text", title: sn.title, text: sn.narrative }]);
+  }
+
+  async function download(format: "html" | "pdf" | "csv" | "xlsx") {
     if (!editingId || editingId === "new") return;
     const res = await apiFetch(`/reports/custom/${editingId}/render?format=${format}`);
     if (!res.ok) {
@@ -256,6 +300,19 @@ export function ReportBuilder() {
                 <Button variant="secondary" onClick={() => download("html")}>Export HTML</Button>
                 <Button variant="secondary" onClick={() => download("pdf")}>Export PDF</Button>
                 <Button variant="secondary" onClick={() => download("csv")}>Export CSV</Button>
+                <Button variant="secondary" onClick={() => download("xlsx")}>Export XLSX</Button>
+                <Select
+                  className="w-auto"
+                  value={narrationStyle}
+                  onChange={(e) => setNarrationStyle(e.target.value as NarrationStyle)}
+                >
+                  {NARRATION_STYLES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </Select>
+                <Button variant="secondary" loading={narrate.isPending} onClick={() => narrate.mutate()}>
+                  Narrate
+                </Button>
               </>
             )}
           </div>
@@ -305,6 +362,35 @@ export function ReportBuilder() {
           <Button variant="secondary" size="sm" onClick={openAddSection}>+ Add section</Button>
         </CardContent>
       </Card>
+
+      {narration && (
+        <Card>
+          <CardHeader>
+            <CardTitle>AI narrative ({narrationStyle})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {narration.error && (
+              <Alert variant="warning">AI narration was unavailable — showing a computed fallback summary.</Alert>
+            )}
+            <div className="rounded-md border border-border p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold">Executive summary</span>
+                <Button variant="ghost" size="sm" onClick={useAsExecSummary}>Use as Exec Summary section</Button>
+              </div>
+              <p className="whitespace-pre-line text-sm text-muted-foreground">{narration.executive_summary}</p>
+            </div>
+            {narration.sections.map((sn, i) => (
+              <div key={i} className="rounded-md border border-border p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold">{sn.title}</span>
+                  <Button variant="ghost" size="sm" onClick={() => addNarrativeAsSection(sn)}>Add as text section</Button>
+                </div>
+                <p className="whitespace-pre-line text-sm text-muted-foreground">{sn.narrative}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog
         open={editingSectionIndex !== null}

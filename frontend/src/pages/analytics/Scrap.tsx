@@ -34,8 +34,8 @@ export function Scrap() {
       {(r) => (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <StatCard label="Total units" value={fmt(r.total_units)} />
-            <StatCard label="Scrap units" value={<span style={{ color: C.red }}>{fmt(r.total_scrap)}</span>} />
+            <StatCard label="Total units" value={fmt(r.total_units)} tone="primary" />
+            <StatCard label="Scrap units" value={<span style={{ color: C.red }}>{fmt(r.total_scrap)}</span>} tone="accent" />
             <StatCard
               label="Scrap rate"
               value={
@@ -43,9 +43,10 @@ export function Scrap() {
                   {r.scrap_rate_pct}%
                 </span>
               }
+              tone="success"
             />
-            <StatCard label="First-pass quality" value={`${r.fpq_pct}%`} />
-            <StatCard label="Defects / 1000" value={fmt(r.defect_rate_per_1000)} />
+            <StatCard label="First-pass quality" value={`${r.fpq_pct}%`} tone="warning" />
+            <StatCard label="Defects / 1000" value={fmt(r.defect_rate_per_1000)} tone="primary" />
           </div>
 
           {r.by_reason.length > 0 && (

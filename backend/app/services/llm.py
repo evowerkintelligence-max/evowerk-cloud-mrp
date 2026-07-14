@@ -35,8 +35,6 @@ async def generate_text(
     prompt: str,
     *,
     system: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
     max_output_tokens: int | None = None,
 ) -> str:
     if not prompt.strip():
@@ -44,14 +42,11 @@ async def generate_text(
 
     client = _client()
     parts = [f"[SYSTEM]\n{system}\n", prompt] if system else [prompt]
-    config = {
-        **({"temperature": temperature} if temperature is not None else {}),
-        **({"max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),
-    }
+    config = {"max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}
 
     def _call() -> str:
         resp = client.models.generate_content(
-            model=model or get_settings().gemini_model,
+            model=get_settings().gemini_model,
             contents="\n\n".join(parts),
             config=config,
         )
@@ -64,8 +59,6 @@ async def generate_json(
     prompt: str,
     *,
     system: str | None = None,
-    model: str | None = None,
-    temperature: float | None = None,
     max_output_tokens: int | None = None,
 ) -> dict:
     """Best-effort JSON mode: instructs the model to return only JSON, then
@@ -75,9 +68,7 @@ async def generate_json(
     json_system = (f"{system}\n\n" if system else "") + (
         "Return ONLY valid JSON. Do not wrap in markdown fences. Do not include commentary."
     )
-    text = await generate_text(
-        prompt, system=json_system, model=model, temperature=temperature, max_output_tokens=max_output_tokens
-    )
+    text = await generate_text(prompt, system=json_system, max_output_tokens=max_output_tokens)
     try:
         return json.loads(text)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -90,7 +81,6 @@ async def generate_from_image(
     prompt: str,
     *,
     system: str | None = None,
-    model: str | None = None,
 ) -> str:
     """Vision call for computer_vision.py - image + text prompt in, text out."""
     client = _client()
@@ -102,7 +92,7 @@ async def generate_from_image(
 
     def _call() -> str:
         resp = client.models.generate_content(
-            model=model or get_settings().gemini_model,
+            model=get_settings().gemini_model,
             contents=parts,
         )
         return (resp.text or "").strip()

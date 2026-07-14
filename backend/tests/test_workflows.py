@@ -217,6 +217,43 @@ async def test_skip_dependents_marks_downstream_skipped_not_failed(client):
     assert "node_finished" in events_by_step["independent"]
 
 
+async def test_run_history_lists_across_workflows_with_status_filter_and_org_scoping(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    ok = await client.post("/workflows", headers=headers, json=_linear_workflow(dataset_id))
+    ok_id = ok.json()["id"]
+    await client.post(f"/workflows/{ok_id}/run", headers=headers)
+
+    bad = await client.post(
+        "/workflows",
+        headers=headers,
+        json={
+            "name": "Bad SQL",
+            "steps": [{"id": "bad_sql", "name": "Bad SQL", "type": "sql", "config": {"sql": "SELECT 1"}}],
+        },
+    )
+    bad_id = bad.json()["id"]
+    await client.post(f"/workflows/{bad_id}/run", headers=headers)
+
+    all_runs = await client.get("/workflows/runs", headers=headers)
+    assert all_runs.status_code == 200
+    body = all_runs.json()
+    assert len(body) == 2
+    names = {r["workflow_name"] for r in body}
+    assert names == {"West region export", "Bad SQL"}
+    # newest first
+    assert body[0]["created_at"] >= body[1]["created_at"]
+
+    failed_only = await client.get("/workflows/runs?status=failed", headers=headers)
+    assert [r["workflow_name"] for r in failed_only.json()] == ["Bad SQL"]
+
+    token_b = await _register_and_login(client, email="b@example.com", org_name="OrgB")
+    other_org = await client.get("/workflows/runs", headers={"Authorization": f"Bearer {token_b}"})
+    assert other_org.json() == []
+
+
 async def test_cross_org_isolation_on_workflow(client):
     token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
     dataset_id = await _upload(client, token_a)

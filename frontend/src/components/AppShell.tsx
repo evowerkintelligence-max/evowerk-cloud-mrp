@@ -1,39 +1,13 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  BarChart3,
-  Boxes,
-  Brain,
-  CalendarRange,
-  Database,
-  FileStack,
-  FlaskConical,
-  Gauge,
-  LayoutDashboard,
-  LayoutGrid,
-  Layers,
-  LogOut,
-  PackageX,
-  Plug,
-  Radio,
-  Camera,
-  Search,
-  SplitSquareHorizontal,
-  TrendingUp,
-  Wrench,
-  ShoppingCart,
-  Target,
-  Terminal,
-  TimerOff,
-  Users,
-  Warehouse,
-  Workflow,
-} from "lucide-react";
+import { Bell, ChevronDown, ChevronRight, LogOut, Search } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/BrandMark";
+import { CommandPalette } from "@/components/CommandPalette";
+import { ALL_NAV_ITEMS, NAV_SECTIONS, findNavMatch, type NavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
 interface OrgResponse {
@@ -41,46 +15,25 @@ interface OrgResponse {
   name: string;
 }
 
-const NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/boms", label: "Bills of Materials", icon: Layers, end: false },
-  { to: "/procurement", label: "Procurement", icon: ShoppingCart, end: false },
-  { to: "/lots", label: "Lots", icon: Boxes, end: false },
-  { to: "/warehouse", label: "Warehouse", icon: Warehouse, end: false },
-  { to: "/planning", label: "Planning", icon: CalendarRange, end: false },
-];
+const COLLAPSE_KEY = "evowerk.nav.collapsed";
 
-const ANALYTICS_NAV = [
-  { to: "/datasets", label: "Datasets", icon: Database, end: false },
-  { to: "/sql-editor", label: "SQL Editor", icon: Terminal, end: false },
-  { to: "/analytics/oee", label: "OEE", icon: Gauge, end: false },
-  { to: "/analytics/downtime", label: "Downtime", icon: TimerOff, end: false },
-  { to: "/analytics/throughput", label: "Throughput", icon: BarChart3, end: false },
-  { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX, end: false },
-  { to: "/analytics/shifts", label: "Shifts", icon: Users, end: false },
-  { to: "/analytics/spc", label: "SPC", icon: Activity, end: false },
-  { to: "/kpis", label: "KPIs", icon: Target, end: false },
-  { to: "/integrations", label: "Integrations", icon: Plug, end: false },
-  { to: "/realtime", label: "Realtime", icon: Radio, end: false },
-  { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, end: false },
-  { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
-  { to: "/report-builder", label: "Report Builder", icon: FileStack, end: false },
-  { to: "/automl", label: "AutoML", icon: Brain, end: false },
-  { to: "/simulation", label: "Simulation", icon: FlaskConical, end: false },
-  { to: "/rca-cases", label: "Root Cause Analysis", icon: Search, end: false },
-  { to: "/predictive", label: "Predictive Maintenance", icon: Wrench, end: false },
-  { to: "/mfg-forecast", label: "Manufacturing Forecast", icon: TrendingUp, end: false },
-  { to: "/scenarios", label: "Scenarios", icon: SplitSquareHorizontal, end: false },
-  { to: "/computer-vision", label: "Computer Vision", icon: Camera, end: false },
-];
+function loadCollapsed(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
 
 function Brand() {
   return (
     <div className="flex items-center gap-2.5">
-      <BrandMark className="size-9 shrink-0 text-foreground" title="Evowerk" />
+      <BrandMark className="size-8 shrink-0 text-foreground" title="Evowerk" />
       <div className="leading-tight">
-        <div className="text-base font-bold uppercase tracking-[0.16em] text-foreground">Evowerk</div>
-        <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+        <div className="text-[15px] font-bold uppercase tracking-[0.16em] text-foreground">
+          Evowerk
+        </div>
+        <div className="mt-0.5 text-[9px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
           Cloud MRP
         </div>
       </div>
@@ -88,10 +41,43 @@ function Brand() {
   );
 }
 
+function SideNavLink({ item }: { item: NavItem }) {
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      className={({ isActive }) =>
+        cn(
+          "group relative flex items-center gap-2.5 rounded-md px-3 py-[7px] text-[13px] font-medium transition-colors duration-150",
+          isActive
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span
+              aria-hidden
+              className="brand-gradient-animate absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full"
+            />
+          )}
+          <item.icon className="size-4 shrink-0 opacity-80" />
+          <span className="truncate">{item.label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+}
+
 export function AppShell() {
   const navigate = useNavigate();
+  const location = useLocation();
   const clear = useAuthStore((s) => s.clear);
   const refreshToken = useAuthStore((s) => s.refreshToken);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
 
   const org = useQuery<OrgResponse>({
     queryKey: ["org-me"],
@@ -101,6 +87,25 @@ export function AppShell() {
       return res.json();
     },
   });
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  function toggleSection(label: string) {
+    setCollapsed((prev) => {
+      const next = { ...prev, [label]: !prev[label] };
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   async function logout() {
     if (refreshToken) {
@@ -113,71 +118,127 @@ export function AppShell() {
     navigate("/login");
   }
 
+  const match = findNavMatch(location.pathname);
+  const orgInitials = (org.data?.name ?? "??")
+    .split(/\s+/)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
   return (
     <div className="min-h-screen">
       <div className="app-backdrop" />
-      <div className="mx-auto flex min-h-screen max-w-[1600px]">
-        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card/40 backdrop-blur-sm md:flex">
-          <div className="flex h-16 items-center px-5">
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <div className="mx-auto flex min-h-screen max-w-[1680px]">
+        <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-border/70 bg-card/40 md:flex">
+          <div className="flex h-14 shrink-0 items-center border-b border-border/60 px-5">
             <Brand />
           </div>
-          <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-            {NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-primary/10 text-primary shadow-glow-sm"
-                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
-                  )
-                }
-              >
-                <item.icon className="size-4 shrink-0" />
-                {item.label}
-              </NavLink>
-            ))}
-            <div className="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
-              Analytics
-            </div>
-            {ANALYTICS_NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-primary/10 text-primary shadow-glow-sm"
-                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
-                  )
-                }
-              >
-                <item.icon className="size-4 shrink-0" />
-                {item.label}
-              </NavLink>
-            ))}
+          <nav className="flex flex-1 flex-col overflow-y-auto px-3 py-3">
+            {NAV_SECTIONS.map((section, idx) => {
+              const isCollapsed = collapsed[section.label];
+              // The single-item Overview section renders without a group header.
+              if (section.items.length === 1 && idx === 0) {
+                return (
+                  <div key={section.label} className="flex flex-col gap-0.5">
+                    {section.items.map((item) => (
+                      <SideNavLink key={item.to} item={item} />
+                    ))}
+                  </div>
+                );
+              }
+              return (
+                <div key={section.label} className="mt-5 first:mt-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(section.label)}
+                    className="flex w-full items-center justify-between rounded px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+                  >
+                    {section.label}
+                    {isCollapsed ? (
+                      <ChevronRight className="size-3" />
+                    ) : (
+                      <ChevronDown className="size-3" />
+                    )}
+                  </button>
+                  {!isCollapsed && (
+                    <div className="flex flex-col gap-0.5">
+                      {section.items.map((item) => (
+                        <SideNavLink key={item.to} item={item} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </nav>
-          <div className="px-5 py-4 text-xs text-muted-foreground">v0.0.1</div>
+          <div className="flex shrink-0 items-center gap-3 border-t border-border/60 px-4 py-3">
+            <div className="brand-gradient-animate flex size-8 shrink-0 items-center justify-center rounded-md text-[11px] font-bold text-white shadow-glow-sm">
+              {orgInitials}
+            </div>
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="truncate text-[13px] font-medium text-foreground">
+                {org.data?.name ?? "—"}
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                Workspace
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={logout}
+              aria-label="Log out"
+              title="Log out"
+            >
+              <LogOut />
+            </Button>
+          </div>
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-10 flex h-16 items-center justify-between gap-4 border-b border-border bg-background/70 px-5 backdrop-blur-md">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="hidden sm:inline">Organization</span>
-              <span className="font-medium text-foreground">{org.data?.name ?? "—"}</span>
+          <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-border/70 bg-background/70 px-5 backdrop-blur-md">
+            <div className="flex min-w-0 items-center gap-2 text-sm">
+              {match ? (
+                <>
+                  <span className="hidden text-muted-foreground sm:inline">{match.section}</span>
+                  <span className="hidden text-muted-foreground/50 sm:inline">/</span>
+                  <span className="truncate font-medium text-foreground">{match.label}</span>
+                </>
+              ) : (
+                <span className="truncate font-medium text-foreground">
+                  {org.data?.name ?? ""}
+                </span>
+              )}
             </div>
-            <Button variant="ghost" size="sm" onClick={logout}>
-              <LogOut /> Log out
-            </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                className="hidden h-9 w-60 items-center gap-2 rounded-md border border-input bg-secondary/40 px-3 text-sm text-muted-foreground shadow-card transition-colors hover:border-muted-foreground/40 hover:text-foreground sm:flex"
+              >
+                <Search className="size-3.5" />
+                <span className="flex-1 text-left text-[13px]">Search…</span>
+                <kbd className="rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  Ctrl K
+                </kbd>
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate("/alerts")}
+                aria-label="Alerts"
+                title="Alerts"
+              >
+                <Bell />
+              </Button>
+            </div>
           </header>
 
           <div className="flex gap-1 overflow-x-auto border-b border-border bg-card/30 px-3 py-2 md:hidden">
-            {[...NAV, ...ANALYTICS_NAV].map((item) => (
+            {ALL_NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -194,7 +255,7 @@ export function AppShell() {
             ))}
           </div>
 
-          <main className="mx-auto w-full max-w-6xl flex-1 animate-fade-in px-5 py-8">
+          <main className="mx-auto w-full max-w-6xl flex-1 animate-fade-in px-6 py-8">
             <Outlet />
           </main>
         </div>

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, require_role
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
@@ -94,28 +94,12 @@ def _to_response(lot: Lot, item: Item, location: Location) -> LotResponse:
     )
 
 
-async def _get_lot_or_404(db: AsyncSession, org_id: uuid.UUID, lot_id: uuid.UUID) -> Lot:
-    result = await db.execute(select(Lot).where(Lot.id == lot_id, Lot.org_id == org_id))
-    lot = result.scalar_one_or_none()
-    if lot is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lot not found")
-    return lot
-
-
 async def _get_location(db: AsyncSession, org_id: uuid.UUID, location_id: uuid.UUID) -> Location:
-    result = await db.execute(select(Location).where(Location.id == location_id, Location.org_id == org_id))
-    location = result.scalar_one_or_none()
-    if location is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Location not found")
-    return location
+    return await get_or_404(db, Location, org_id, location_id, "Location not found")
 
 
 async def _get_item(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-    result = await db.execute(select(Item).where(Item.id == item_id, Item.org_id == org_id))
-    item = result.scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    return item
+    return await get_or_404(db, Item, org_id, item_id, "Item not found")
 
 
 LOT_STATUSES = ("active", "on_hold", "depleted")
@@ -165,7 +149,7 @@ async def get_lot(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    lot = await _get_lot_or_404(db, current.org_id, lot_id)
+    lot = await get_or_404(db, Lot, current.org_id, lot_id, "Lot not found")
     item = await _get_item(db, current.org_id, lot.item_id)
     location = await _get_location(db, current.org_id, lot.location_id)
 
@@ -197,7 +181,7 @@ async def consume_lot(
     if body.quantity <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
 
-    lot = await _get_lot_or_404(db, current.org_id, lot_id)
+    lot = await get_or_404(db, Lot, current.org_id, lot_id, "Lot not found")
     if lot.status == "on_hold":
         raise HTTPException(status.HTTP_409_CONFLICT, "Lot is on hold and can't be consumed")
 
@@ -304,7 +288,7 @@ async def transfer_lot(
     if body.quantity <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
 
-    lot = await _get_lot_or_404(db, current.org_id, lot_id)
+    lot = await get_or_404(db, Lot, current.org_id, lot_id, "Lot not found")
     if lot.status == "on_hold":
         raise HTTPException(status.HTTP_409_CONFLICT, "Lot is on hold and can't be transferred")
     to_location_id = await resolve_location_id(db, current.org_id, body.to_location_id)
@@ -367,7 +351,7 @@ async def hold_lot(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    lot = await _get_lot_or_404(db, current.org_id, lot_id)
+    lot = await get_or_404(db, Lot, current.org_id, lot_id, "Lot not found")
     lot.status = "on_hold"
     await db.flush()
 
@@ -386,7 +370,7 @@ async def release_lot(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    lot = await _get_lot_or_404(db, current.org_id, lot_id)
+    lot = await get_or_404(db, Lot, current.org_id, lot_id, "Lot not found")
     if lot.status != "on_hold":
         raise HTTPException(status.HTTP_409_CONFLICT, "Lot is not on hold")
     lot.status = "active" if lot.quantity_remaining > 0 else "depleted"

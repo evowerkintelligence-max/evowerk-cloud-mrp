@@ -91,6 +91,29 @@ async def execute_scenario(
     return out
 
 
+async def list_scenario_runs(db: AsyncSession, org_id: uuid.UUID, scenario_id: uuid.UUID) -> list[ScenarioRun]:
+    result = await db.execute(
+        select(ScenarioRun)
+        .where(ScenarioRun.org_id == org_id, ScenarioRun.scenario_id == scenario_id)
+        .order_by(ScenarioRun.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_scenario_run_or_404(
+    db: AsyncSession, org_id: uuid.UUID, scenario_id: uuid.UUID, run_id: uuid.UUID
+) -> ScenarioRun:
+    result = await db.execute(
+        select(ScenarioRun).where(
+            ScenarioRun.org_id == org_id, ScenarioRun.scenario_id == scenario_id, ScenarioRun.id == run_id
+        )
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise ValueError("Scenario run not found")
+    return run
+
+
 @dataclass
 class ScenarioCompareResult:
     metric: str

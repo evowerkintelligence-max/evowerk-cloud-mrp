@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { today, plusDays } from "@/lib/date";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,16 +53,6 @@ interface MrpPlanResponse {
   horizon_start: string;
   horizon_end: string;
   lines: MrpPlanLine[];
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function plusDays(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 export function Planning() {

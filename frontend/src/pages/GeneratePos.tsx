@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { today, plusDays } from "@/lib/date";
 import { Field } from "@/components/Field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -52,16 +53,6 @@ interface AutoGenerateResult {
   unassigned: { item_id: string; item_sku: string; item_name: string; net_requirement: string }[];
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function plusDays(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 export function GeneratePosPanel({
   initialHorizonStart,
   initialHorizonEnd,
@@ -98,10 +89,11 @@ export function GeneratePosPanel({
     },
   });
 
+  // active_only: a deactivated vendor shouldn't be offered for a new draft PO.
   const suppliers = useQuery<SupplierResponse[]>({
-    queryKey: ["suppliers"],
+    queryKey: ["suppliers", "active"],
     queryFn: async () => {
-      const res = await apiFetch("/suppliers");
+      const res = await apiFetch("/suppliers?active_only=true");
       if (!res.ok) throw new Error("Failed to load suppliers");
       return res.json();
     },

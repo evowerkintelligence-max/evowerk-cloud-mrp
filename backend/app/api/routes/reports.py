@@ -19,7 +19,9 @@ from app.services.rca import DIMENSIONS
 from app.services.reports import (
     FORMATS,
     KINDS,
+    NARRATION_STYLES,
     Report,
+    ReportNarration,
     ReportSectionSpec,
     build_custom_report,
     build_dataset_report,
@@ -29,6 +31,7 @@ from app.services.reports import (
     build_scenario_report,
     get_saved_report_or_404,
     list_saved_reports,
+    narrate_report,
     render,
 )
 
@@ -199,7 +202,7 @@ async def delete_custom_report(
 @router.get("/custom/{report_id}/render")
 async def render_custom_report(
     report_id: uuid.UUID,
-    format: str = Query("html", description="html | pdf | csv"),
+    format: str = Query("html", description="html | pdf | csv | xlsx"),
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -216,10 +219,25 @@ async def render_custom_report(
     )
 
 
+@router.post("/custom/{report_id}/narrate", response_model=ReportNarration)
+async def narrate_custom_report(
+    report_id: uuid.UUID,
+    style: str = Query("narrative", description=" | ".join(NARRATION_STYLES)),
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if style not in NARRATION_STYLES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"style must be one of {NARRATION_STYLES}")
+    saved = await get_saved_report_or_404(db, current.org_id, report_id)
+    sections = [ReportSectionSpec.model_validate(s) for s in saved.sections]
+    report = await build_custom_report(db, current.org_id, saved.name, sections)
+    return await narrate_report(report, style)
+
+
 @router.get("/{kind}")
 async def get_report(
     kind: str,
-    format: str = Query("html", description="html | pdf | csv"),
+    format: str = Query("html", description="html | pdf | csv | xlsx"),
     horizon_start: date | None = None,
     horizon_end: date | None = None,
     dimension: str = "supplier",
@@ -253,3 +271,33 @@ async def get_report(
         media_type=FORMATS[format],
         headers={"Content-Disposition": f'{disposition}; filename="{report.filename(format)}"'},
     )
+
+
+@router.post("/{kind}/narrate", response_model=ReportNarration)
+async def narrate_report_kind(
+    kind: str,
+    style: str = Query("narrative", description=" | ".join(NARRATION_STYLES)),
+    horizon_start: date | None = None,
+    horizon_end: date | None = None,
+    dimension: str = "supplier",
+    lead_times: str | None = Query(None, description="item_id:days,item_id:days (scenario only)"),
+    dataset_id: str | None = Query(None, description="dataset id (dataset kind only)"),
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if kind not in KINDS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown report: {kind}")
+    if style not in NARRATION_STYLES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"style must be one of {NARRATION_STYLES}")
+
+    report = await _build(
+        db,
+        current.org_id,
+        kind,
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        dimension=dimension,
+        lead_times=lead_times,
+        dataset_id=dataset_id,
+    )
+    return await narrate_report(report, style)

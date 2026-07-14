@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.automl_run import AutoMLRun
@@ -98,15 +98,6 @@ def _detail(r: AutoMLRun) -> RunDetail:
         leaderboard=r.leaderboard,
         meta=r.meta,
     )
-
-
-async def _get_run_or_404(db: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> AutoMLRun:
-    run = (
-        await db.execute(select(AutoMLRun).where(AutoMLRun.id == run_id, AutoMLRun.org_id == org_id))
-    ).scalar_one_or_none()
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
-    return run
 
 
 def _require_success(run: AutoMLRun) -> None:
@@ -192,13 +183,13 @@ async def create_run(
 
 @router.get("/runs/{run_id}", response_model=RunDetail)
 async def get_run(run_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     return _detail(run)
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_run(run_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     automl_storage.delete_run_dir(current.org_id, run_id)
     await db.delete(run)
     await log_event(db, action="automl.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(run_id))
@@ -209,7 +200,7 @@ async def delete_run(run_id: uuid.UUID, current: CurrentUser = Depends(get_curre
 async def predict(
     run_id: uuid.UUID, req: DatasetRefRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
     pipe = _load_pipeline(run)
@@ -224,7 +215,7 @@ async def predict(
 async def forecast_trajectory(
     run_id: uuid.UUID, steps: int | None = None, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, run.dataset_id)
     pipe = _load_pipeline(run)
@@ -238,7 +229,7 @@ async def forecast_trajectory(
 
 @router.get("/runs/{run_id}/explain")
 async def explain(run_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
     Xs, ys = _load_explain_sample(current.org_id, run_id)
@@ -249,7 +240,7 @@ async def explain(run_id: uuid.UUID, current: CurrentUser = Depends(get_current_
 async def explain_row(
     run_id: uuid.UUID, req: RowExplainRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
     Xs, ys = _load_explain_sample(current.org_id, run_id)
@@ -263,7 +254,7 @@ async def explain_row(
 async def partial_dependence(
     run_id: uuid.UUID, feature: str, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
     Xs, _ys = _load_explain_sample(current.org_id, run_id)
@@ -277,7 +268,7 @@ async def partial_dependence(
 async def drift_check(
     run_id: uuid.UUID, req: DatasetRefRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    run = await _get_run_or_404(db, current.org_id, run_id)
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
     df = datasets_service.dataframe_for(dataset)

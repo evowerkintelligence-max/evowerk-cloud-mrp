@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { useDatasets } from "@/pages/analytics/shared";
+import { cn } from "@/lib/utils";
 
 interface RcaCase {
   id: string;
@@ -613,7 +614,7 @@ function CaseDetail({ caseId, onBack }: { caseId: string; onBack: () => void }) 
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`px-3 py-2 text-sm capitalize ${tab === t ? "border-b-2 border-primary font-medium text-foreground" : "text-muted-foreground"}`}
+            className={cn("px-3 py-2 text-sm capitalize", tab === t ? "border-b-2 border-primary font-medium text-foreground" : "text-muted-foreground")}
           >
             {t}
           </button>

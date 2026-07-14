@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     ai_insights,
-    artifacts,
+    alerts,
     automl,
     auth,
     bi,
@@ -27,6 +27,7 @@ from app.api.routes import (
     mfg_forecast,
     oee,
     orgs,
+    plant_summary,
     predictive,
     process_mining,
     purchase_orders,
@@ -92,6 +93,7 @@ app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
 app.include_router(datasets.router)
 app.include_router(oee.router)
+app.include_router(plant_summary.router)
 app.include_router(downtime.router)
 app.include_router(throughput.router)
 app.include_router(scrap.router)
@@ -108,7 +110,6 @@ app.include_router(automl.router)
 app.include_router(kpis.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
-app.include_router(artifacts.router)
 app.include_router(rca_cases.router)
 app.include_router(predictive.analyze_router)
 app.include_router(predictive.router)
@@ -116,6 +117,7 @@ app.include_router(mfg_forecast.router)
 app.include_router(what_if_scenarios.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
+app.include_router(alerts.router)
 
 
 @app.get("/health")

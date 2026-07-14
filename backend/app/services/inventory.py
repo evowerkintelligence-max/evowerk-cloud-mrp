@@ -37,6 +37,9 @@ async def apply_inventory_delta(
     created_by: uuid.UUID,
     reason: str | None = None,
     source_receipt_line_id: uuid.UUID | None = None,
+    counted_quantity: Decimal | None = None,
+    expected_quantity: Decimal | None = None,
+    reason_note: str | None = None,
 ) -> Decimal:
     """Apply a signed delta to a non-lot-tracked item's on-hand balance at one
     location and record an append-only InventoryTransaction. Returns the new
@@ -66,6 +69,9 @@ async def apply_inventory_delta(
             transaction_type=transaction_type,
             quantity_delta=delta,
             reason=reason,
+            reason_note=reason_note,
+            counted_quantity=counted_quantity,
+            expected_quantity=expected_quantity,
             source_receipt_line_id=source_receipt_line_id,
             created_by=created_by,
         )

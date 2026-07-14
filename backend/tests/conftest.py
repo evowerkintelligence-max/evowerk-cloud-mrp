@@ -22,7 +22,7 @@ from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models
-    artifact,
+    alert,
     audit,
     automl_run,
     bom,

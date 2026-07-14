@@ -1,7 +1,7 @@
 """rca_cases
 
 Revision ID: e91c4a5d8f37
-Revises: d8a1f3b72e04
+Revises: c4f8a2e60d97
 Create Date: 2026-07-12
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "e91c4a5d8f37"  # pragma: allowlist secret
-down_revision = "d8a1f3b72e04"  # pragma: allowlist secret
+down_revision = "c4f8a2e60d97"  # pragma: allowlist secret
 branch_labels = None
 depends_on = None
 

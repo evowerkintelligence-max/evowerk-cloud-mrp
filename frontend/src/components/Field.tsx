@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 export function Field({
   label,
@@ -15,7 +16,7 @@ export function Field({
   children: ReactNode;
 }) {
   return (
-    <div className={className ? `space-y-2 ${className}` : "space-y-2"}>
+    <div className={cn("space-y-2", className)}>
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}

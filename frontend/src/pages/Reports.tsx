@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
+import { today, plusDays } from "@/lib/date";
 import { useDatasets } from "./analytics/shared";
 
 interface ItemResponse {
@@ -11,7 +12,7 @@ interface ItemResponse {
 }
 
 type Kind = "mrp-plan" | "inventory-analytics" | "rca" | "scenario" | "dataset";
-type Format = "pdf" | "csv" | "html";
+type Format = "pdf" | "csv" | "html" | "xlsx";
 
 const KINDS: { kind: Kind; label: string; description: string }[] = [
   {
@@ -42,16 +43,6 @@ const KINDS: { kind: Kind; label: string; description: string }[] = [
 ];
 
 const DIMENSIONS = ["supplier", "item_type", "abc_class"];
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function plusDays(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
 
 export function Reports() {
   const [kind, setKind] = useState<Kind>("mrp-plan");
@@ -253,6 +244,9 @@ export function Reports() {
         </button>{" "}
         <button onClick={() => download("html")} disabled={!ready}>
           Download HTML
+        </button>{" "}
+        <button onClick={() => download("xlsx")} disabled={!ready}>
+          Download XLSX
         </button>
       </section>
 

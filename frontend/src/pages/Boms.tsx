@@ -720,6 +720,9 @@ export function Boms() {
                         setLineComponentId(id);
                         setLineUnitId("");
                         setLineUnitQuantity("");
+                        setShowNewUnit(false);
+                        setNewUnitCode("");
+                        setNewUnitFactor("");
                       }}
                       excludeId={bomDetail.data.item_id}
                       required

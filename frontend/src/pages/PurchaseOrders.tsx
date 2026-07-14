@@ -66,6 +66,8 @@ export function PurchaseOrdersPanel() {
   const [lineUnitPrice, setLineUnitPrice] = useState("0");
   const [receiveLineId, setReceiveLineId] = useState("");
   const [receiveQuantity, setReceiveQuantity] = useState("1");
+  const [receiveQuantityRejected, setReceiveQuantityRejected] = useState("0");
+  const [receiveRejectReason, setReceiveRejectReason] = useState("");
   const [receiveLotNumber, setReceiveLotNumber] = useState("");
   const [receiveExpiryDate, setReceiveExpiryDate] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +201,8 @@ export function PurchaseOrdersPanel() {
           {
             po_line_id: receiveLineId,
             quantity: receiveQuantity,
+            quantity_rejected: receiveQuantityRejected || "0",
+            reject_reason: receiveRejectReason || null,
             lot_number: receivingLineIsLotTracked ? receiveLotNumber : null,
             expiry_date: receivingLineIsLotTracked && receiveExpiryDate ? receiveExpiryDate : null,
           },
@@ -213,6 +217,8 @@ export function PurchaseOrdersPanel() {
     onSuccess: () => {
       setReceiveLineId("");
       setReceiveQuantity("1");
+      setReceiveQuantityRejected("0");
+      setReceiveRejectReason("");
       setReceiveLotNumber("");
       setReceiveExpiryDate("");
       invalidatePo();
@@ -477,6 +483,24 @@ export function PurchaseOrdersPanel() {
                       value={receiveQuantity}
                       onChange={(e) => setReceiveQuantity(e.target.value)}
                       required
+                    />
+                  </Field>
+                  <Field label="Rejected quantity" htmlFor="rcv-qty-rejected">
+                    <Input
+                      id="rcv-qty-rejected"
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max={receiveQuantity || undefined}
+                      value={receiveQuantityRejected}
+                      onChange={(e) => setReceiveQuantityRejected(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Reject reason (optional)" htmlFor="rcv-reject-reason">
+                    <Input
+                      id="rcv-reject-reason"
+                      value={receiveRejectReason}
+                      onChange={(e) => setReceiveRejectReason(e.target.value)}
                     />
                   </Field>
                   {receivingLineIsLotTracked && (

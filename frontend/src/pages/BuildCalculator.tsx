@@ -80,8 +80,8 @@ export function BuildCalculatorPanel() {
       // Guard against stale responses: only apply plan if response matches current input state
       if (
         data.item_id === itemId &&
-        data.build_quantity === buildQuantity &&
-        data.yield_loss_pct === (yieldLossPct || "0")
+        Number(data.build_quantity) === Number(buildQuantity) &&
+        Number(data.yield_loss_pct) === Number(yieldLossPct || "0")
       ) {
         setPlan(data);
         setResult(null);

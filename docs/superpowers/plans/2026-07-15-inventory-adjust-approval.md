@@ -8,15 +8,18 @@
 
 **Tech Stack:** FastAPI + SQLAlchemy async + Alembic (backend), React + TanStack Query + TypeScript (frontend), pytest + pytest-asyncio (backend tests), no frontend test runner exists in this repo (verify frontend changes via `npm run build` + manual check in the dev server).
 
+**Task grouping:** Tasks are organized **by file, not by endpoint** - every file in this plan is written or modified in exactly one task, never touched again later. This costs some internal TDD granularity within the larger tasks (Task 2 in particular bundles what would otherwise be five separate endpoint slices), but it means a fresh subagent dispatched per task never has to re-read and re-orient on a file another task already changed. Within each task, the step sequence still follows write-tests -> verify-red -> implement -> verify-green -> commit; it's just scoped to "everything this file needs," not "one endpoint."
+
 ## Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-07-14-inventory-adjust-approval-design.md` - every task below implements one piece of it; the "Data model", "Backend API", "Frontend", and "Testing" sections there are the source of truth if this plan and the spec ever disagree.
 - Default `Org.adjust_approval_threshold` is `50` (`Decimal("50")` / migration `server_default="50"`) - exact value from the spec, not a placeholder.
 - Reason codes are exactly: `cycle_count | damage | found_stock | shrinkage | correction | other` - this exact list, in this order, everywhere it appears (backend `Literal`, frontend `REASON_CODES`).
 - `reason_code == "other"` always requires a non-empty `reason_note`, enforced both in the shared Pydantic validator and (for UX) in the frontend forms.
-- Breaking change: `POST /inventory/{item_id}/adjust` currently accepts an optional `reason` string; after Task 3 it requires `reason_code` and returns a different response shape (`AdjustmentOutcome` instead of a flat `InventoryItemResponse`). This is intentional per the spec - do not preserve backward compatibility.
+- Breaking change: `POST /inventory/{item_id}/adjust` currently accepts an optional `reason` string; after Task 2 it requires `reason_code` and returns a different response shape (`AdjustmentOutcome` instead of a flat `InventoryItemResponse`). This is intentional per the spec - do not preserve backward compatibility.
 - Every new/changed backend mutation gets an audit log entry via the existing `log_event` helper (`app/middleware/audit.py`), following the existing `inventory.consumed` / `inventory.adjusted` / `inventory.transferred` naming: `inventory.adjustment_requested`, `inventory.adjustment_approved`, `inventory.adjustment_rejected`, `org.threshold_updated`.
 - Backend commands run from the `backend/` directory. Frontend commands run from the `frontend/` directory.
+- **One file, one task.** If you find yourself about to modify a file a previous task already touched, stop - that's a sign this plan needs updating, not a sign to proceed.
 
 ---
 
@@ -287,18 +290,22 @@ git commit -m "feat: add schema for inventory adjustment approval requests"
 
 ---
 
-### Task 2: Manager role - consume and transfer access
+### Task 2: Inventory routes - manager role, reason codes, threshold gate, count, approval queue
+
+The largest task in this plan, by design: `backend/app/api/routes/inventory.py` and its two test files are fully finished here, in one pass, so no later task ever touches them again. Everything from "manager can consume/transfer" through "owner can approve a pending request" lands together.
 
 **Files:**
 - Modify: `backend/app/api/routes/inventory.py`
 - Modify: `backend/tests/test_inventory.py`
+- Create: `backend/tests/test_inventory_adjustment_requests.py`
 
 **Interfaces:**
-- Produces: test helpers `_add_user_with_role(test_engine, org_id: str, email: str, role: str) -> None` and `_login(client, email: str) -> dict[str, str]` in `test_inventory.py`, reused by later tasks and by `test_inventory_adjustment_requests.py` via `from tests.test_inventory import ...` (the cross-module import pattern already used by `tests/test_rate_limit.py` importing from `tests/test_auth.py`).
+- Consumes: `apply_inventory_delta(..., counted_quantity=, expected_quantity=, reason_note=)`, `InventoryAdjustmentRequest`, `Org.adjust_approval_threshold` from Task 1.
+- Produces (used by Task 3 and Task 4, both of which only *read* these - they don't edit this file): `ReasonCode` (`Literal["cycle_count", "damage", "found_stock", "shrinkage", "correction", "other"]`); `AdjustmentRequestResponse`; `AdjustmentOutcome` (`{applied: bool, item: InventoryItemResponse | None, request: AdjustmentRequestResponse | None}`); `POST /inventory/{item_id}/adjust` (rewritten), `POST /inventory/{item_id}/count` (new), `GET /inventory/adjustment-requests`, `POST /inventory/adjustment-requests/{id}/approve`, `POST /inventory/adjustment-requests/{id}/reject`; test helpers `_add_user_with_role(test_engine, org_id, email, role)` and `_login(client, email)` in `test_inventory.py`, imported by `test_inventory_adjustment_requests.py` and by Task 3/4's test files via `from tests.test_inventory import ...` (the cross-module import pattern already used by `tests/test_rate_limit.py` importing from `tests/test_auth.py`).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write every failing test this task needs**
 
-Add to `backend/tests/test_inventory.py`, after the existing helper functions (after `_on_hand`, before `test_receiving_non_lot_item_accrues_on_hand`):
+First, in `backend/tests/test_inventory.py`, add these two helpers after the existing helper functions (after `_on_hand`, before `test_receiving_non_lot_item_accrues_on_hand`):
 
 ```python
 async def _add_user_with_role(test_engine, org_id: str, email: str, role: str) -> None:
@@ -328,7 +335,7 @@ async def _login(client, email: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 ```
 
-Then add the test itself, anywhere after those helpers:
+Add the manager consume/transfer test:
 
 ```python
 async def test_manager_can_consume_and_transfer(client, test_engine):
@@ -371,69 +378,7 @@ async def test_manager_can_consume_and_transfer(client, test_engine):
     assert balances[default_location_id] == Decimal("30")
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `pytest tests/test_inventory.py::test_manager_can_consume_and_transfer -v`
-Expected: FAIL - `consume.status_code == 200` fails because it's currently `403` (manager isn't `owner`).
-
-- [ ] **Step 3: Allow `manager` on consume and transfer**
-
-In `backend/app/api/routes/inventory.py`, change the role dependency on `consume_inventory` and `transfer_inventory` only (leave `adjust_inventory`'s `require_role("owner")` untouched - that changes in Task 3, deliberately kept separate so manager access to `adjust` and its threshold gate land together, never as two steps where manager briefly has ungated access):
-
-```python
-@router.post("/{item_id}/consume", response_model=InventoryItemResponse)
-async def consume_inventory(
-    item_id: uuid.UUID,
-    body: ConsumeRequest,
-    current: CurrentUser = Depends(require_role("owner", "manager")),
-    db: AsyncSession = Depends(get_db),
-):
-```
-
-```python
-@router.post("/{item_id}/transfer", response_model=InventoryItemResponse)
-async def transfer_inventory(
-    item_id: uuid.UUID,
-    body: TransferRequest,
-    current: CurrentUser = Depends(require_role("owner", "manager")),
-    db: AsyncSession = Depends(get_db),
-):
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `pytest tests/test_inventory.py::test_manager_can_consume_and_transfer -v`
-Expected: PASS
-
-- [ ] **Step 5: Run the full inventory test file to confirm no regressions**
-
-Run: `pytest tests/test_inventory.py -v`
-Expected: PASS (including `test_rbac_blocks_non_owner_from_inventory_mutations`, which only asserts `member` is blocked - unaffected by opening consume/transfer to `manager`).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/api/routes/inventory.py backend/tests/test_inventory.py
-git commit -m "feat: allow manager role to consume and transfer inventory"
-```
-
----
-
-### Task 3: Adjust endpoint - reason codes, threshold gate, pending queue
-
-This is the core of the feature. `adjust_inventory` changes from a flat apply-and-return endpoint into one that branches on role and threshold, backed by a new shared helper that Task 4's `/count` endpoint will also call.
-
-**Files:**
-- Modify: `backend/app/api/routes/inventory.py`
-- Modify: `backend/tests/test_inventory.py`
-
-**Interfaces:**
-- Consumes: `apply_inventory_delta(..., counted_quantity=, expected_quantity=, reason_note=)` from Task 1; `require_role`, `get_or_404`, `resolve_location_id`, `log_event` (all pre-existing).
-- Produces: `ReasonCode` (`Literal["cycle_count", "damage", "found_stock", "shrinkage", "correction", "other"]`); `AdjustmentRequestResponse` Pydantic model; `AdjustmentOutcome` Pydantic model (`{applied: bool, item: InventoryItemResponse | None, request: AdjustmentRequestResponse | None}`); `_current_on_hand(db, org_id, item_id, location_id) -> Decimal`; `_adjustment_request_response(req, item, location) -> AdjustmentRequestResponse`; `_post_or_queue_adjustment(db, *, org_id, role, item, location_id, delta, current_on_hand, reason_code, reason_note, counted_quantity, created_by) -> AdjustmentOutcome` - **Task 4 imports and calls this exact function**, do not rename it.
-
-- [ ] **Step 1: Write the failing tests**
-
-First, update the existing adjust tests in `backend/tests/test_inventory.py` to the new required `reason_code` field and the new `AdjustmentOutcome` response shape. Replace `test_adjust_up_and_down`, `test_adjust_zero_rejected`, and the adjust portion of `test_consume_and_adjust_reject_lot_tracked_item` and `test_rbac_blocks_non_owner_from_inventory_mutations` with:
+Now replace `test_adjust_up_and_down`, `test_adjust_zero_rejected`, and `test_consume_and_adjust_reject_lot_tracked_item` with the `reason_code`-aware versions, and add the new reason-code/threshold/count tests:
 
 ```python
 async def test_adjust_up_and_down(client):
@@ -541,23 +486,8 @@ async def test_consume_and_adjust_reject_lot_tracked_item(client):
             headers=headers,
         )
     ).status_code == 400
-```
 
-In `test_rbac_blocks_non_owner_from_inventory_mutations`, update the adjust assertion:
 
-```python
-    assert (
-        await client.post(
-            f"/inventory/{item['id']}/adjust",
-            json={"quantity": "1", "reason_code": "correction"},
-            headers=member_headers,
-        )
-    ).status_code == 403
-```
-
-Now add the new threshold-gate tests:
-
-```python
 async def test_manager_adjust_within_threshold_applies_immediately(client, test_engine):
     token = await _register_and_login(client, email="owner4@example.com")
     headers = {"Authorization": f"Bearer {token}"}
@@ -625,14 +555,277 @@ async def test_owner_adjust_over_threshold_still_applies_immediately(client):
     body = res.json()
     assert body["applied"] is True
     assert _dec(body["item"]["quantity_on_hand"]) == Decimal("160")
+
+
+async def test_count_computes_variance_and_applies_within_threshold(client):
+    token = await _register_and_login(client, email="owner7@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+    await _receive(client, token, item, supplier, 50)
+
+    res = await client.post(
+        f"/inventory/{item['id']}/count",
+        json={"counted_quantity": "42"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["applied"] is True
+    assert _dec(body["item"]["quantity_on_hand"]) == Decimal("42")
+
+    detail = await _on_hand(client, token, item)
+    last_tx = detail["transactions"][-1]
+    assert last_tx["transaction_type"] == "adjustment"
+    assert _dec(last_tx["quantity_delta"]) == Decimal("-8")
+    assert _dec(last_tx["counted_quantity"]) == Decimal("42")
+    assert _dec(last_tx["expected_quantity"]) == Decimal("50")
+    assert last_tx["reason"] == "cycle_count"
+
+
+async def test_count_no_variance_rejected(client):
+    token = await _register_and_login(client, email="owner8@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+    await _receive(client, token, item, supplier, 50)
+
+    res = await client.post(
+        f"/inventory/{item['id']}/count",
+        json={"counted_quantity": "50"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+
+async def test_count_against_no_balance_treats_expected_as_zero(client):
+    token = await _register_and_login(client, email="owner9@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)  # never received - no balance row
+
+    res = await client.post(
+        f"/inventory/{item['id']}/count",
+        json={"counted_quantity": "5"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert _dec(res.json()["item"]["quantity_on_hand"]) == Decimal("5")
+
+
+async def test_manager_count_over_threshold_creates_pending_request(client, test_engine):
+    token = await _register_and_login(client, email="owner10@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+    await _receive(client, token, item, supplier, 100)
+
+    await _add_user_with_role(test_engine, org_id, "manager10@example.com", "manager")
+    manager_headers = await _login(client, "manager10@example.com")
+
+    # default threshold is 50; counting 20 (variance -80) exceeds it
+    res = await client.post(
+        f"/inventory/{item['id']}/count",
+        json={"counted_quantity": "20"},
+        headers=manager_headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["applied"] is False
+    assert _dec(body["request"]["quantity_delta"]) == Decimal("-80")
+    assert _dec(body["request"]["counted_quantity"]) == Decimal("20")
+    assert body["request"]["reason_code"] == "cycle_count"
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+In `test_rbac_blocks_non_owner_from_inventory_mutations`, update the adjust assertion:
 
-Run: `pytest tests/test_inventory.py -v`
-Expected: FAIL - `AdjustRequest` doesn't accept `reason_code` yet (422 for the wrong reason, or the response has no `applied`/`item`/`request` keys).
+```python
+    assert (
+        await client.post(
+            f"/inventory/{item['id']}/adjust",
+            json={"quantity": "1", "reason_code": "correction"},
+            headers=member_headers,
+        )
+    ).status_code == 403
+```
 
-- [ ] **Step 3: Implement**
+Finally, create `backend/tests/test_inventory_adjustment_requests.py` in full - list, approve, and reject tests together, since this file is created exactly once:
+
+```python
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from tests.test_inventory import (
+    PASSWORD,
+    _add_user_with_role,
+    _create_item,
+    _create_supplier,
+    _dec,
+    _login,
+    _receive,
+    _register_and_login,
+)
+
+pytestmark = pytest.mark.asyncio
+
+
+async def _submit_over_threshold_request(client, test_engine, owner_email, manager_email):
+    token = await _register_and_login(client, email=owner_email)
+    headers = {"Authorization": f"Bearer {token}"}
+    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+    await _receive(client, token, item, supplier, 100)
+
+    await _add_user_with_role(test_engine, org_id, manager_email, "manager")
+    manager_headers = await _login(client, manager_email)
+
+    submit = await client.post(
+        f"/inventory/{item['id']}/adjust",
+        json={"quantity": "60", "reason_code": "cycle_count"},
+        headers=manager_headers,
+    )
+    assert submit.status_code == 200
+    request_id = submit.json()["request"]["id"]
+    return headers, manager_headers, item, request_id
+
+
+async def test_owner_and_manager_can_list_pending_requests(client, test_engine):
+    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner11@example.com", "manager11@example.com"
+    )
+
+    owner_view = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
+    assert owner_view.status_code == 200
+    assert any(r["id"] == request_id for r in owner_view.json())
+
+    manager_view = await client.get(
+        "/inventory/adjustment-requests?status=pending", headers=manager_headers
+    )
+    assert manager_view.status_code == 200
+    assert any(r["id"] == request_id for r in manager_view.json())
+
+
+async def test_member_cannot_list_pending_requests(client, test_engine):
+    token = await _register_and_login(client, email="owner12@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
+    await _add_user_with_role(test_engine, org_id, "member12@example.com", "member")
+    member_headers = await _login(client, "member12@example.com")
+
+    res = await client.get("/inventory/adjustment-requests?status=pending", headers=member_headers)
+    assert res.status_code == 403
+
+
+async def test_default_status_filter_is_pending(client, test_engine):
+    headers, _, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner13@example.com", "manager13@example.com"
+    )
+
+    res = await client.get("/inventory/adjustment-requests", headers=headers)
+    assert res.status_code == 200
+    assert all(r["status"] == "pending" for r in res.json())
+    assert any(r["id"] == request_id for r in res.json())
+
+
+async def test_owner_can_approve_pending_request(client, test_engine):
+    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner14@example.com", "manager14@example.com"
+    )
+    # requested_by should end up as the transaction's created_by after approval -
+    # the ledger attributes the movement to whoever asked for it, not the approver.
+    pending = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
+    requested_by = next(r for r in pending.json() if r["id"] == request_id)["requested_by"]
+
+    approve = await client.post(
+        f"/inventory/adjustment-requests/{request_id}/approve",
+        json={"review_note": "checked the shelf myself"},
+        headers=headers,
+    )
+    assert approve.status_code == 200
+    body = approve.json()
+    assert body["status"] == "approved"
+    assert body["review_note"] == "checked the shelf myself"
+
+    detail = await client.get(f"/inventory/{item['id']}", headers=headers)
+    assert _dec(detail.json()["quantity_on_hand"]) == Decimal("160")
+    last_tx = detail.json()["transactions"][-1]
+    assert last_tx["transaction_type"] == "adjustment"
+    assert _dec(last_tx["quantity_delta"]) == Decimal("60")
+    assert last_tx["created_by"] == requested_by
+
+
+async def test_manager_cannot_approve(client, test_engine):
+    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner15@example.com", "manager15@example.com"
+    )
+
+    res = await client.post(
+        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=manager_headers
+    )
+    assert res.status_code == 403
+
+
+async def test_approving_already_reviewed_request_conflicts(client, test_engine):
+    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner16@example.com", "manager16@example.com"
+    )
+
+    first = await client.post(
+        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers
+    )
+    assert first.status_code == 200
+
+    second = await client.post(
+        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers
+    )
+    assert second.status_code == 409
+
+
+async def test_owner_can_reject_pending_request_with_no_balance_impact(client, test_engine):
+    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner17@example.com", "manager17@example.com"
+    )
+
+    reject = await client.post(
+        f"/inventory/adjustment-requests/{request_id}/reject",
+        json={"review_note": "count looks wrong, recount needed"},
+        headers=headers,
+    )
+    assert reject.status_code == 200
+    body = reject.json()
+    assert body["status"] == "rejected"
+    assert body["review_note"] == "count looks wrong, recount needed"
+
+    # on-hand is unchanged - the +60 never posted
+    detail = await client.get(f"/inventory/{item['id']}", headers=headers)
+    assert _dec(detail.json()["quantity_on_hand"]) == Decimal("100")
+
+    # no longer shows up in the pending queue
+    pending = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
+    assert not any(r["id"] == request_id for r in pending.json())
+
+
+async def test_manager_cannot_reject(client, test_engine):
+    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
+        client, test_engine, "owner18@example.com", "manager18@example.com"
+    )
+
+    res = await client.post(
+        f"/inventory/adjustment-requests/{request_id}/reject", json={}, headers=manager_headers
+    )
+    assert res.status_code == 403
+```
+
+- [ ] **Step 2: Run everything to verify it fails**
+
+Run: `pytest tests/test_inventory.py tests/test_inventory_adjustment_requests.py -v`
+Expected: FAIL - `AdjustRequest` doesn't accept `reason_code` yet, `/count` and `/inventory/adjustment-requests*` routes don't exist (404s), manager gets 403 on consume/transfer.
+
+- [ ] **Step 3: Implement the full route file**
 
 In `backend/app/api/routes/inventory.py`, update the imports at the top:
 
@@ -664,7 +857,7 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 ReasonCode = Literal["cycle_count", "damage", "found_stock", "shrinkage", "correction", "other"]
 ```
 
-Replace the `AdjustRequest` class with:
+Replace the `AdjustRequest` class with `_ReasonFields` + `AdjustRequest` + `CountRequest`:
 
 ```python
 class _ReasonFields(BaseModel):
@@ -685,6 +878,33 @@ class AdjustRequest(_ReasonFields):
     # read-modify-write race (see services.inventory.apply_inventory_delta).
     quantity: Decimal
     location_id: str | None = None
+
+
+class CountRequest(_ReasonFields):
+    location_id: str | None = None
+    counted_quantity: Decimal
+    reason_code: ReasonCode = "cycle_count"
+
+
+class ApproveRejectRequest(BaseModel):
+    review_note: str | None = None
+```
+
+Add the three new fields to `InventoryTransactionResponse`:
+
+```python
+class InventoryTransactionResponse(BaseModel):
+    id: str
+    location_id: str
+    location_code: str
+    transaction_type: str
+    quantity_delta: Decimal
+    reason: str | None
+    counted_quantity: Decimal | None
+    expected_quantity: Decimal | None
+    reason_note: str | None
+    created_by: str
+    created_at: datetime
 ```
 
 Add the response models right after `InventoryDetailResponse`:
@@ -715,24 +935,7 @@ class AdjustmentOutcome(BaseModel):
     request: AdjustmentRequestResponse | None = None
 ```
 
-Also add the three new fields to `InventoryTransactionResponse`:
-
-```python
-class InventoryTransactionResponse(BaseModel):
-    id: str
-    location_id: str
-    location_code: str
-    transaction_type: str
-    quantity_delta: Decimal
-    reason: str | None
-    counted_quantity: Decimal | None
-    expected_quantity: Decimal | None
-    reason_note: str | None
-    created_by: str
-    created_at: datetime
-```
-
-And update the `get_inventory` handler's construction of it (find the `InventoryTransactionResponse(` call inside `get_inventory`):
+Update `get_inventory`'s construction of `InventoryTransactionResponse` (find the existing `InventoryTransactionResponse(` call inside `get_inventory`):
 
 ```python
     transactions = [
@@ -753,7 +956,7 @@ And update the `get_inventory` handler's construction of it (find the `Inventory
     ]
 ```
 
-Now add the shared helpers right after `_item_response` (before `list_inventory`):
+Add the shared helpers right after `_item_response` (before `list_inventory`):
 
 ```python
 async def _current_on_hand(
@@ -848,7 +1051,29 @@ async def _post_or_queue_adjustment(
     return AdjustmentOutcome(applied=False, request=_adjustment_request_response(request, item, location))
 ```
 
-Finally, replace the whole `adjust_inventory` function:
+Change the role dependency on `consume_inventory` and `transfer_inventory`:
+
+```python
+@router.post("/{item_id}/consume", response_model=InventoryItemResponse)
+async def consume_inventory(
+    item_id: uuid.UUID,
+    body: ConsumeRequest,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+```python
+@router.post("/{item_id}/transfer", response_model=InventoryItemResponse)
+async def transfer_inventory(
+    item_id: uuid.UUID,
+    body: TransferRequest,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+Replace the whole `adjust_inventory` function:
 
 ```python
 @router.post("/{item_id}/adjust", response_model=AdjustmentOutcome)
@@ -894,137 +1119,7 @@ async def adjust_inventory(
     return outcome
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `pytest tests/test_inventory.py -v`
-Expected: PASS - all of `test_inventory.py`, including the rewritten adjust tests and the three new threshold-gate tests.
-
-- [ ] **Step 5: Run the full backend suite**
-
-Run: `pytest -q`
-Expected: PASS. (No other test file calls `/adjust`, so nothing else should be affected.)
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/api/routes/inventory.py backend/tests/test_inventory.py
-git commit -m "feat: require reason codes on adjust, gate over-threshold manager adjustments behind approval"
-```
-
----
-
-### Task 4: Count endpoint
-
-**Files:**
-- Modify: `backend/app/api/routes/inventory.py`
-- Modify: `backend/tests/test_inventory.py`
-
-**Interfaces:**
-- Consumes: `_ReasonFields`, `_current_on_hand`, `_post_or_queue_adjustment`, `ReasonCode` from Task 3.
-- Produces: `POST /inventory/{item_id}/count`, `CountRequest` Pydantic model.
-
-- [ ] **Step 1: Write the failing tests**
-
-Add to `backend/tests/test_inventory.py`:
-
-```python
-async def test_count_computes_variance_and_applies_within_threshold(client):
-    token = await _register_and_login(client, email="owner7@example.com")
-    headers = {"Authorization": f"Bearer {token}"}
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-    await _receive(client, token, item, supplier, 50)
-
-    res = await client.post(
-        f"/inventory/{item['id']}/count",
-        json={"counted_quantity": "42"},
-        headers=headers,
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["applied"] is True
-    assert _dec(body["item"]["quantity_on_hand"]) == Decimal("42")
-
-    detail = await _on_hand(client, token, item)
-    last_tx = detail["transactions"][-1]
-    assert last_tx["transaction_type"] == "adjustment"
-    assert _dec(last_tx["quantity_delta"]) == Decimal("-8")
-    assert _dec(last_tx["counted_quantity"]) == Decimal("42")
-    assert _dec(last_tx["expected_quantity"]) == Decimal("50")
-    assert last_tx["reason"] == "cycle_count"
-
-
-async def test_count_no_variance_rejected(client):
-    token = await _register_and_login(client, email="owner8@example.com")
-    headers = {"Authorization": f"Bearer {token}"}
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-    await _receive(client, token, item, supplier, 50)
-
-    res = await client.post(
-        f"/inventory/{item['id']}/count",
-        json={"counted_quantity": "50"},
-        headers=headers,
-    )
-    assert res.status_code == 400
-
-
-async def test_count_against_no_balance_treats_expected_as_zero(client):
-    token = await _register_and_login(client, email="owner9@example.com")
-    headers = {"Authorization": f"Bearer {token}"}
-    item = await _create_item(client, token)  # never received - no balance row
-
-    res = await client.post(
-        f"/inventory/{item['id']}/count",
-        json={"counted_quantity": "5"},
-        headers=headers,
-    )
-    assert res.status_code == 200
-    assert _dec(res.json()["item"]["quantity_on_hand"]) == Decimal("5")
-
-
-async def test_manager_count_over_threshold_creates_pending_request(client, test_engine):
-    token = await _register_and_login(client, email="owner10@example.com")
-    headers = {"Authorization": f"Bearer {token}"}
-    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-    await _receive(client, token, item, supplier, 100)
-
-    await _add_user_with_role(test_engine, org_id, "manager10@example.com", "manager")
-    manager_headers = await _login(client, "manager10@example.com")
-
-    # default threshold is 50; counting 20 (variance -80) exceeds it
-    res = await client.post(
-        f"/inventory/{item['id']}/count",
-        json={"counted_quantity": "20"},
-        headers=manager_headers,
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["applied"] is False
-    assert _dec(body["request"]["quantity_delta"]) == Decimal("-80")
-    assert _dec(body["request"]["counted_quantity"]) == Decimal("20")
-    assert body["request"]["reason_code"] == "cycle_count"
-```
-
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `pytest tests/test_inventory.py -k count -v`
-Expected: FAIL with 404 (no `/count` route yet).
-
-- [ ] **Step 3: Implement**
-
-In `backend/app/api/routes/inventory.py`, add `CountRequest` right after `AdjustRequest`:
-
-```python
-class CountRequest(_ReasonFields):
-    location_id: str | None = None
-    counted_quantity: Decimal
-    reason_code: ReasonCode = "cycle_count"
-```
-
-Add the endpoint right after `adjust_inventory`:
+Add the count endpoint right after `adjust_inventory`:
 
 ```python
 @router.post("/{item_id}/count", response_model=AdjustmentOutcome)
@@ -1072,128 +1167,7 @@ async def count_inventory(
     return outcome
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `pytest tests/test_inventory.py -k count -v`
-Expected: PASS
-
-- [ ] **Step 5: Run the full backend suite**
-
-Run: `pytest -q`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/api/routes/inventory.py backend/tests/test_inventory.py
-git commit -m "feat: add POST /inventory/{item_id}/count - variance computed from a physical count"
-```
-
----
-
-### Task 5: List pending adjustment requests
-
-**Files:**
-- Modify: `backend/app/api/routes/inventory.py`
-- Create: `backend/tests/test_inventory_adjustment_requests.py`
-
-**Interfaces:**
-- Consumes: `_add_user_with_role`, `_login`, `_register_and_login`, `_create_item`, `_create_supplier`, `_receive`, `_on_hand`, `_dec`, `PASSWORD` from `tests.test_inventory` (cross-module import, matching the existing `tests/test_rate_limit.py` -> `tests/test_auth.py` pattern).
-- Produces: `GET /inventory/adjustment-requests?status=`.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `backend/tests/test_inventory_adjustment_requests.py`:
-
-```python
-from __future__ import annotations
-
-from decimal import Decimal
-
-import pytest
-
-from tests.test_inventory import (
-    PASSWORD,
-    _add_user_with_role,
-    _create_item,
-    _create_supplier,
-    _dec,
-    _login,
-    _on_hand,
-    _receive,
-    _register_and_login,
-)
-
-pytestmark = pytest.mark.asyncio
-
-
-async def _submit_over_threshold_request(client, test_engine, owner_email, manager_email):
-    token = await _register_and_login(client, email=owner_email)
-    headers = {"Authorization": f"Bearer {token}"}
-    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-    await _receive(client, token, item, supplier, 100)
-
-    await _add_user_with_role(test_engine, org_id, manager_email, "manager")
-    manager_headers = await _login(client, manager_email)
-
-    submit = await client.post(
-        f"/inventory/{item['id']}/adjust",
-        json={"quantity": "60", "reason_code": "cycle_count"},
-        headers=manager_headers,
-    )
-    assert submit.status_code == 200
-    request_id = submit.json()["request"]["id"]
-    return headers, manager_headers, item, request_id
-
-
-async def test_owner_and_manager_can_list_pending_requests(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner11@example.com", "manager11@example.com"
-    )
-
-    owner_view = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
-    assert owner_view.status_code == 200
-    assert any(r["id"] == request_id for r in owner_view.json())
-
-    manager_view = await client.get(
-        "/inventory/adjustment-requests?status=pending", headers=manager_headers
-    )
-    assert manager_view.status_code == 200
-    assert any(r["id"] == request_id for r in manager_view.json())
-
-
-async def test_member_cannot_list_pending_requests(client, test_engine):
-    token = await _register_and_login(client, email="owner12@example.com")
-    headers = {"Authorization": f"Bearer {token}"}
-    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
-    await _add_user_with_role(test_engine, org_id, "member12@example.com", "member")
-    member_headers = await _login(client, "member12@example.com")
-
-    res = await client.get("/inventory/adjustment-requests?status=pending", headers=member_headers)
-    assert res.status_code == 403
-
-
-async def test_default_status_filter_is_pending(client, test_engine):
-    headers, _, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner13@example.com", "manager13@example.com"
-    )
-
-    res = await client.get("/inventory/adjustment-requests", headers=headers)
-    assert res.status_code == 200
-    assert all(r["status"] == "pending" for r in res.json())
-    assert any(r["id"] == request_id for r in res.json())
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `pytest tests/test_inventory_adjustment_requests.py -v`
-Expected: FAIL with 404 (no `/inventory/adjustment-requests` route yet).
-
-- [ ] **Step 3: Implement**
-
-In `backend/app/api/routes/inventory.py`, add after `count_inventory`:
+Add the list/approve/reject endpoints at the end of the file:
 
 ```python
 @router.get("/adjustment-requests", response_model=list[AdjustmentRequestResponse])
@@ -1213,147 +1187,8 @@ async def list_adjustment_requests(
         query = query.where(InventoryAdjustmentRequest.status == status_filter)
     rows = await db.execute(query)
     return [_adjustment_request_response(req, item, loc) for req, item, loc in rows.all()]
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `pytest tests/test_inventory_adjustment_requests.py -v`
-Expected: PASS
-
-- [ ] **Step 5: Run the full backend suite**
-
-Run: `pytest -q`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/api/routes/inventory.py backend/tests/test_inventory_adjustment_requests.py
-git commit -m "feat: add GET /inventory/adjustment-requests"
-```
-
----
-
-### Task 6: Approve a pending adjustment request
-
-**Files:**
-- Modify: `backend/app/api/routes/inventory.py`
-- Modify: `backend/tests/test_inventory_adjustment_requests.py`
-
-**Interfaces:**
-- Produces: `POST /inventory/adjustment-requests/{request_id}/approve`, `ApproveRejectRequest` Pydantic model (`{review_note: str | None}`).
-
-- [ ] **Step 1: Write the failing tests**
-
-Add to `backend/tests/test_inventory_adjustment_requests.py`:
-
-```python
-async def test_owner_can_approve_pending_request(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner14@example.com", "manager14@example.com"
-    )
-    # requested_by should end up as the transaction's created_by after approval -
-    # the ledger attributes the movement to whoever asked for it, not the approver.
-    pending = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
-    requested_by = next(r for r in pending.json() if r["id"] == request_id)["requested_by"]
-
-    approve = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/approve",
-        json={"review_note": "checked the shelf myself"},
-        headers=headers,
-    )
-    assert approve.status_code == 200
-    body = approve.json()
-    assert body["status"] == "approved"
-    assert body["review_note"] == "checked the shelf myself"
-
-    detail = await client.get(f"/inventory/{item['id']}", headers=headers)
-    assert _dec(detail.json()["quantity_on_hand"]) == Decimal("160")
-    last_tx = detail.json()["transactions"][-1]
-    assert last_tx["transaction_type"] == "adjustment"
-    assert _dec(last_tx["quantity_delta"]) == Decimal("60")
-    assert last_tx["created_by"] == requested_by
 
 
-async def test_manager_cannot_approve(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner15@example.com", "manager15@example.com"
-    )
-
-    res = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=manager_headers
-    )
-    assert res.status_code == 403
-
-
-async def test_approving_already_reviewed_request_conflicts(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner16@example.com", "manager16@example.com"
-    )
-
-    first = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers
-    )
-    assert first.status_code == 200
-
-    second = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/approve", json={}, headers=headers
-    )
-    assert second.status_code == 409
-```
-
-Fix the `created_by` assertion above to something meaningful - replace it with a direct comparison against the manager's user id. Update the test to capture the manager's id first:
-
-```python
-async def test_owner_can_approve_pending_request(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner14@example.com", "manager14@example.com"
-    )
-    manager_me = await client.get("/orgs/me", headers=manager_headers)
-    # /orgs/me doesn't return the user id directly - use the request's requested_by instead,
-    # which is exactly the value the transaction's created_by should match.
-    pending = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
-    requested_by = next(r for r in pending.json() if r["id"] == request_id)["requested_by"]
-
-    approve = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/approve",
-        json={"review_note": "checked the shelf myself"},
-        headers=headers,
-    )
-    assert approve.status_code == 200
-    body = approve.json()
-    assert body["status"] == "approved"
-    assert body["review_note"] == "checked the shelf myself"
-
-    detail = await client.get(f"/inventory/{item['id']}", headers=headers)
-    assert _dec(detail.json()["quantity_on_hand"]) == Decimal("160")
-    last_tx = detail.json()["transactions"][-1]
-    assert last_tx["transaction_type"] == "adjustment"
-    assert _dec(last_tx["quantity_delta"]) == Decimal("60")
-    assert last_tx["created_by"] == requested_by
-```
-
-(Delete the earlier duplicate/incorrect version of this test above - only the final corrected version should remain in the file.)
-
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `pytest tests/test_inventory_adjustment_requests.py -v`
-Expected: FAIL with 404 (no approve route yet).
-
-- [ ] **Step 3: Implement**
-
-In `backend/app/api/routes/inventory.py`, first fix the `datetime` import to include `timezone` (it's currently `from datetime import datetime` - the file needs `timezone` too for `datetime.now(timezone.utc)`; this was already added in Task 3's import block above, so this step is only needed if Task 3's import edit was skipped - verify the import line reads `from datetime import datetime, timezone` before continuing).
-
-Add `ApproveRejectRequest` right after `CountRequest`:
-
-```python
-class ApproveRejectRequest(BaseModel):
-    review_note: str | None = None
-```
-
-Add the endpoint after `list_adjustment_requests`:
-
-```python
 @router.post(
     "/adjustment-requests/{request_id}/approve", response_model=AdjustmentRequestResponse
 )
@@ -1398,89 +1233,8 @@ async def approve_adjustment_request(
     await db.commit()
     location = await get_or_404(db, Location, current.org_id, req.location_id, "Location not found")
     return _adjustment_request_response(req, item, location)
-```
-
-If `apply_inventory_delta` raises `InsufficientInventory` (409) - e.g. on-hand dropped below what's needed since the request was submitted - it raises before `req.status` is ever set, and nothing is committed, so the session's rollback-on-close (same behavior every other multi-step write in this file already relies on) leaves the request untouched at `status="pending"`. No extra try/except needed here.
-
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `pytest tests/test_inventory_adjustment_requests.py -v`
-Expected: PASS
-
-- [ ] **Step 5: Run the full backend suite**
-
-Run: `pytest -q`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/api/routes/inventory.py backend/tests/test_inventory_adjustment_requests.py
-git commit -m "feat: add POST /inventory/adjustment-requests/{id}/approve"
-```
-
----
-
-### Task 7: Reject a pending adjustment request
-
-**Files:**
-- Modify: `backend/app/api/routes/inventory.py`
-- Modify: `backend/tests/test_inventory_adjustment_requests.py`
-
-**Interfaces:**
-- Consumes: `ApproveRejectRequest` from Task 6.
-- Produces: `POST /inventory/adjustment-requests/{request_id}/reject`.
-
-- [ ] **Step 1: Write the failing test**
-
-Add to `backend/tests/test_inventory_adjustment_requests.py`:
-
-```python
-async def test_owner_can_reject_pending_request_with_no_balance_impact(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner17@example.com", "manager17@example.com"
-    )
-
-    reject = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/reject",
-        json={"review_note": "count looks wrong, recount needed"},
-        headers=headers,
-    )
-    assert reject.status_code == 200
-    body = reject.json()
-    assert body["status"] == "rejected"
-    assert body["review_note"] == "count looks wrong, recount needed"
-
-    # on-hand is unchanged - the +60 never posted
-    detail = await client.get(f"/inventory/{item['id']}", headers=headers)
-    assert _dec(detail.json()["quantity_on_hand"]) == Decimal("100")
-
-    # no longer shows up in the pending queue
-    pending = await client.get("/inventory/adjustment-requests?status=pending", headers=headers)
-    assert not any(r["id"] == request_id for r in pending.json())
 
 
-async def test_manager_cannot_reject(client, test_engine):
-    headers, manager_headers, item, request_id = await _submit_over_threshold_request(
-        client, test_engine, "owner18@example.com", "manager18@example.com"
-    )
-
-    res = await client.post(
-        f"/inventory/adjustment-requests/{request_id}/reject", json={}, headers=manager_headers
-    )
-    assert res.status_code == 403
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `pytest tests/test_inventory_adjustment_requests.py -k reject -v`
-Expected: FAIL with 404 (no reject route yet).
-
-- [ ] **Step 3: Implement**
-
-In `backend/app/api/routes/inventory.py`, add after `approve_adjustment_request`:
-
-```python
 @router.post(
     "/adjustment-requests/{request_id}/reject", response_model=AdjustmentRequestResponse
 )
@@ -1514,10 +1268,12 @@ async def reject_adjustment_request(
     return _adjustment_request_response(req, item, location)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+If `apply_inventory_delta` raises `InsufficientInventory` (409) inside `approve_adjustment_request` - e.g. on-hand dropped below what's needed since the request was submitted - it raises before `req.status` is ever set, and nothing is committed, so the session's rollback-on-close (the same behavior every other multi-step write in this file already relies on) leaves the request untouched at `status="pending"`. No extra try/except needed.
 
-Run: `pytest tests/test_inventory_adjustment_requests.py -v`
-Expected: PASS - full file.
+- [ ] **Step 4: Run everything to verify it passes**
+
+Run: `pytest tests/test_inventory.py tests/test_inventory_adjustment_requests.py -v`
+Expected: PASS - every test in both files.
 
 - [ ] **Step 5: Run the full backend suite**
 
@@ -1527,26 +1283,48 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/app/api/routes/inventory.py backend/tests/test_inventory_adjustment_requests.py
-git commit -m "feat: add POST /inventory/adjustment-requests/{id}/reject"
+git add backend/app/api/routes/inventory.py backend/tests/test_inventory.py backend/tests/test_inventory_adjustment_requests.py
+git commit -m "feat: manager role, reason codes, threshold-gated adjust/count, and the approval queue"
 ```
 
 ---
 
-### Task 8: Org approval-threshold setting
+### Task 3: Org approval-threshold setting
 
 **Files:**
 - Modify: `backend/app/api/routes/orgs.py`
-- Modify: `backend/tests/test_inventory_adjustment_requests.py`
+- Create: `backend/tests/test_org_settings.py`
 
 **Interfaces:**
+- Consumes: `Org.adjust_approval_threshold` from Task 1; calls `POST /inventory/{item_id}/adjust` (Task 2, read-only usage in a test, not an edit) to prove a changed threshold takes effect.
 - Produces: `GET /orgs/me` response gains `adjust_approval_threshold`; new `PATCH /orgs/me`.
+
+A dedicated test file (rather than adding to `test_inventory_adjustment_requests.py`) keeps Task 2's files untouched by this task.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `backend/tests/test_inventory_adjustment_requests.py`:
+Create `backend/tests/test_org_settings.py`:
 
 ```python
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from tests.test_inventory import (
+    _add_user_with_role,
+    _create_item,
+    _create_supplier,
+    _dec,
+    _login,
+    _receive,
+    _register_and_login,
+)
+
+pytestmark = pytest.mark.asyncio
+
+
 async def test_org_me_includes_default_threshold(client):
     token = await _register_and_login(client, email="owner19@example.com")
     headers = {"Authorization": f"Bearer {token}"}
@@ -1606,7 +1384,7 @@ async def test_negative_threshold_rejected(client):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/test_inventory_adjustment_requests.py -k threshold -v`
+Run: `pytest tests/test_org_settings.py -v`
 Expected: FAIL - `adjust_approval_threshold` missing from `GET /orgs/me` response, and `PATCH /orgs/me` returns 405 (not implemented).
 
 - [ ] **Step 3: Implement**
@@ -1687,34 +1465,34 @@ async def update_my_org(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pytest tests/test_inventory_adjustment_requests.py -v`
-Expected: PASS - full file.
+Run: `pytest tests/test_org_settings.py -v`
+Expected: PASS
 
 - [ ] **Step 5: Run the full backend suite**
 
 Run: `pytest -q`
-Expected: PASS. (Check `tests/test_inventory.py::test_rbac_blocks_non_owner_from_inventory_mutations` and any other test reading `/orgs/me` still passes now that the response has one more field - additive field, should be unaffected.)
+Expected: PASS. (Check that any pre-existing test reading `/orgs/me`, e.g. inside `test_inventory.py`, still passes now that the response has one more field - additive field, should be unaffected.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/app/api/routes/orgs.py backend/tests/test_inventory_adjustment_requests.py
+git add backend/app/api/routes/orgs.py backend/tests/test_org_settings.py
 git commit -m "feat: add owner-editable adjust_approval_threshold on PATCH /orgs/me"
 ```
 
 ---
 
-### Task 9: Concurrency safety - stale approval after a race
+### Task 4: Concurrency safety - stale approval after a race
 
 **Files:**
 - Modify: `backend/tests/test_concurrency.py`
 
 **Interfaces:**
-- Consumes: `_auth`, `_item`, `_supplier`, `_receive`, `PASSWORD`, `pg_client`, `pg_engine` fixtures already defined in `test_concurrency.py`.
+- Consumes: `_auth`, `_item`, `_supplier`, `_receive`, `PASSWORD`  <!-- pragma: allowlist secret -->, `pg_client`, `pg_engine` fixtures already defined in `test_concurrency.py`; `PATCH /orgs/me` (Task 3) and `POST /inventory/{item_id}/adjust` + approve (Task 2), all read-only usage.
 
 This test only runs against real Postgres (`CONCURRENCY_DATABASE_URL`), same as every other test in this file - it's skipped by default.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the test**
 
 Add to `backend/tests/test_concurrency.py`:
 
@@ -1779,26 +1557,22 @@ async def test_stale_approval_after_concurrent_consume_is_rejected(pg_client, pg
     assert Decimal(detail.json()["quantity_on_hand"]) == Decimal("50")
 ```
 
-- [ ] **Step 2: Run the test to verify it fails (or is correctly skipped)**
+- [ ] **Step 2: Confirm the skip gate, then run for real**
 
 Without `CONCURRENCY_DATABASE_URL` set:
 Run: `pytest tests/test_concurrency.py::test_stale_approval_after_concurrent_consume_is_rejected -v`
-Expected: SKIPPED (`CONCURRENCY_DATABASE_URL` not set) - this confirms the test is wired into the existing skip gate correctly.
+Expected: SKIPPED (`CONCURRENCY_DATABASE_URL` not set) - confirms the test is wired into the existing skip gate correctly.
 
 With a real local Postgres available:
 Run: `CONCURRENCY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp pytest tests/test_concurrency.py::test_stale_approval_after_concurrent_consume_is_rejected -v`  <!-- pragma: allowlist secret -->
-Expected: FAIL if Tasks 1-8 aren't complete yet in this environment; since they are (this is the last backend task), it should already PASS on first run because no new guard code is needed - the existing `apply_inventory_delta` guard already covers this. If it fails, the bug is almost certainly in Task 6's approve endpoint calling `apply_inventory_delta` in the wrong order relative to setting `req.status` - re-check that `req.status = "approved"` happens *after* the `apply_inventory_delta` call, not before.
+Expected: PASS on first run - no new guard code is needed, this is a regression test proving the safety property Task 2's `approve_adjustment_request` already provides via the shared guard in `apply_inventory_delta`. If it fails, the bug is almost certainly in Task 2's approve endpoint calling `apply_inventory_delta` in the wrong order relative to setting `req.status` - `req.status = "approved"` must happen *after* the `apply_inventory_delta` call, not before.
 
-- [ ] **Step 3: No implementation needed**
-
-This step intentionally has no code change - it's a regression test proving the safety property Task 6 already provides via the shared guard in `apply_inventory_delta`. If Step 2 passes on the real-Postgres run, there is nothing to implement.
-
-- [ ] **Step 4: Run the full concurrency suite against real Postgres**
+- [ ] **Step 3: Run the full concurrency suite against real Postgres**
 
 Run: `CONCURRENCY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp pytest tests/test_concurrency.py -v`  <!-- pragma: allowlist secret -->
 Expected: PASS - all tests in the file, including the pre-existing ones.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add backend/tests/test_concurrency.py
@@ -1807,17 +1581,17 @@ git commit -m "test: verify a stale adjustment approval is rejected, not silentl
 
 ---
 
-### Task 10: Frontend - Count form, relabeled Adjust form
+### Task 5: Frontend - Count form, relabeled Adjust form
 
 **Files:**
 - Modify: `frontend/src/pages/Inventory.tsx`
 
 **Interfaces:**
-- Consumes: `POST /inventory/{item_id}/adjust` and `POST /inventory/{item_id}/count`, both now returning `AdjustmentOutcome`; `GET /inventory/{item_id}` transactions now include `counted_quantity`, `expected_quantity`, `reason_note`.
+- Consumes: `POST /inventory/{item_id}/adjust` and `POST /inventory/{item_id}/count` (Task 2), both returning `AdjustmentOutcome`; `GET /inventory/{item_id}` transactions now include `counted_quantity`, `expected_quantity`, `reason_note`.
 
-No frontend test runner exists in this repo. Verify with `npm run build` (typecheck) after each step, and a manual pass in the dev server at the end.
+No frontend test runner exists in this repo. Verify with `npm run build` (typecheck) and `npm run lint`, plus a manual pass in the dev server.
 
-- [ ] **Step 1: Add reason-code constants and new response types**
+- [ ] **Step 1: Add reason-code constants, new types, new state, and new mutations**
 
 In `frontend/src/pages/Inventory.tsx`, add after the existing imports:
 
@@ -1864,13 +1638,6 @@ interface AdjustmentOutcome {
 }
 ```
 
-- [ ] **Step 2: Run typecheck to confirm no errors so far**
-
-Run (from `frontend/`): `npm run build`
-Expected: PASS - these are additive type changes, nothing consumes them yet.
-
-- [ ] **Step 3: Add state and mutations for Count and reason codes**
-
 Inside `InventoryPanel`, replace the existing state block:
 
 ```typescript
@@ -1892,7 +1659,7 @@ Inside `InventoryPanel`, replace the existing state block:
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
 ```
 
-Replace the existing `adjust` mutation with:
+Replace the existing `adjust` mutation and add the `count` mutation:
 
 ```typescript
   const adjust = useMutation<AdjustmentOutcome, Error>({
@@ -1933,12 +1700,7 @@ Replace the existing `adjust` mutation with:
   });
 ```
 
-- [ ] **Step 4: Run typecheck**
-
-Run: `npm run build`
-Expected: PASS
-
-- [ ] **Step 5: Update the JSX - error/pending banners, and the four-form grid**
+- [ ] **Step 2: Update the JSX - error/pending banners, and the four-form grid**
 
 Right after the existing `{error && (...)}` block, add:
 
@@ -2134,7 +1896,7 @@ Replace the `<div className="grid gap-4 md:grid-cols-3">` block (the one contain
             </div>
 ```
 
-- [ ] **Step 6: Show the variance inline in the transaction history table**
+- [ ] **Step 3: Show the variance inline in the transaction history table**
 
 In the transactions `<TBody>` map, replace the `<TD className="text-muted-foreground">{tx.reason ?? "—"}</TD>` cell with:
 
@@ -2149,23 +1911,23 @@ In the transactions `<TBody>` map, replace the `<TD className="text-muted-foregr
                       </TD>
 ```
 
-- [ ] **Step 7: Run typecheck and lint**
+- [ ] **Step 4: Run typecheck and lint**
 
-Run: `npm run build`
+Run (from `frontend/`): `npm run build`
 Expected: PASS - no type errors.
 
 Run: `npm run lint`
 Expected: PASS
 
-- [ ] **Step 8: Manual verification in the dev server**
+- [ ] **Step 5: Manual verification in the dev server**
 
-Run: `npm run dev` (from `frontend/`), with the backend running against a DB that has Tasks 1-9 applied.
+Run: `npm run dev` (from `frontend/`), with the backend running against a DB that has Tasks 1-4 applied.
 - Log in as an owner, go to Warehouse → Inventory, select an item with on-hand stock.
 - Submit a Count with a different quantity than shown - confirm on-hand updates and the transaction history row shows "counted X · expected Y".
 - Submit an Adjust with reason "Other" and no note - confirm the browser blocks submit (native `required`) or the API returns a validation error surfaced in the error banner.
 - Submit an Adjust with a valid reason - confirm it applies immediately (owner never queues).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add frontend/src/pages/Inventory.tsx
@@ -2174,14 +1936,14 @@ git commit -m "feat: add Count form and reason codes to the Warehouse Inventory 
 
 ---
 
-### Task 11: Frontend - Approvals tab and panel
+### Task 6: Frontend - Approvals tab and panel
 
 **Files:**
 - Create: `frontend/src/pages/Approvals.tsx`
 - Modify: `frontend/src/pages/Warehouse.tsx`
 
 **Interfaces:**
-- Consumes: `GET /inventory/adjustment-requests?status=pending`, `POST /inventory/adjustment-requests/{id}/approve`, `POST /inventory/adjustment-requests/{id}/reject`, `GET /orgs/me` (now includes `adjust_approval_threshold`), `PATCH /orgs/me`.
+- Consumes: `GET /inventory/adjustment-requests?status=pending`, `POST /inventory/adjustment-requests/{id}/approve`, `POST /inventory/adjustment-requests/{id}/reject` (Task 2); `GET /orgs/me` (now includes `adjust_approval_threshold`) and `PATCH /orgs/me` (Task 3).
 - Produces: `ApprovalsPanel` component, exported from `frontend/src/pages/Approvals.tsx`, imported by `Warehouse.tsx` exactly like `InventoryPanel`/`LocationsPanel` already are.
 
 - [ ] **Step 1: Create the Approvals panel**
@@ -2421,12 +2183,9 @@ export function ApprovalsPanel() {
 }
 ```
 
-- [ ] **Step 2: Run typecheck**
+If `ClipboardCheck` isn't exported by the installed `lucide-react` version, swap it for another already-used icon (e.g. `CheckCircle2`, already imported elsewhere in this codebase) - don't add a new icon library.
 
-Run (from `frontend/`): `npm run build`
-Expected: PASS. If `ClipboardCheck` isn't exported by the installed `lucide-react` version, swap it for another already-used icon (e.g. `CheckCircle2`, already imported elsewhere in this codebase) - don't add a new icon library.
-
-- [ ] **Step 3: Wire the Approvals tab into Warehouse.tsx**
+- [ ] **Step 2: Wire the Approvals tab into Warehouse.tsx**
 
 Replace the full contents of `frontend/src/pages/Warehouse.tsx`:
 
@@ -2482,23 +2241,23 @@ export function Warehouse() {
 }
 ```
 
-- [ ] **Step 4: Run typecheck and lint**
+- [ ] **Step 3: Run typecheck and lint**
 
-Run: `npm run build`
+Run (from `frontend/`): `npm run build`
 Expected: PASS
 
 Run: `npm run lint`
 Expected: PASS
 
-- [ ] **Step 5: Manual verification in the dev server**
+- [ ] **Step 4: Manual verification in the dev server**
 
 Run: `npm run dev` (from `frontend/`), backend running with all backend tasks applied.
 - As owner: go to Warehouse, confirm the "Approvals" tab is visible. Submit a manager-role over-threshold adjustment (log in as a manager in another session/incognito window, or promote a test user's role directly in the DB), confirm it shows up in the queue, approve it, confirm on-hand updates and it drops off the pending list.
 - As owner: edit the threshold value, save, confirm `GET /orgs/me` reflects the new value on reload.
 - As manager: confirm the "Approvals" tab is visible but has no Approve/Reject buttons or threshold editor.
-- As a `member`-role user (or logged out of that role): confirm the "Approvals" tab does not appear at all.
+- As a `member`-role user: confirm the "Approvals" tab does not appear at all.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add frontend/src/pages/Approvals.tsx frontend/src/pages/Warehouse.tsx
@@ -2509,8 +2268,10 @@ git commit -m "feat: add Approvals tab to the Warehouse page"
 
 ## Self-Review Notes
 
-**Spec coverage:** manager role (Task 2, 3), reason-code vocabulary (Task 3), org threshold (Task 1, 8), pending-approval queue (Task 3, 5, 6, 7), count entry point (Task 4), raw adjust kept for paperwork corrections (Task 3, unchanged endpoint), frontend Count/Adjust forms (Task 10), Approvals tab (Task 11), stale-approval concurrency guarantee (Task 9). All spec sections have a covering task.
+**Spec coverage:** manager role (Task 2), reason-code vocabulary (Task 2), org threshold (Task 1, Task 3), pending-approval queue (Task 2), count entry point (Task 2), raw adjust kept for paperwork corrections (Task 2, unchanged endpoint), frontend Count/Adjust forms (Task 5), Approvals tab (Task 6), stale-approval concurrency guarantee (Task 4). All spec sections have a covering task.
 
-**Type consistency:** `_post_or_queue_adjustment` (Task 3) is defined once and called identically by `adjust_inventory` (Task 3) and `count_inventory` (Task 4) - same parameter names throughout. `AdjustmentOutcome`/`AdjustmentRequestResponse` field names match between backend Pydantic models (Task 3) and frontend TypeScript interfaces (Tasks 10-11): `applied`, `item`, `request`, `quantity_delta`, `counted_quantity`, `expected_quantity_at_submit`, `reason_code`, `reason_note`, `status`, `requested_at`, `reviewed_by`, `reviewed_at`, `review_note`.
+**One-file-one-task check:** `inventory.py` (routes) - Task 2 only. `test_inventory.py` - Task 2 only. `test_inventory_adjustment_requests.py` - Task 2 only (created whole). `orgs.py` - Task 3 only. `test_org_settings.py` - Task 3 only (created whole). `test_concurrency.py` - Task 4 only. `Inventory.tsx` - Task 5 only. `Approvals.tsx` / `Warehouse.tsx` - Task 6 only. `tenant.py` / `inventory.py` (models) / `services/inventory.py` / the migration - Task 1 only. No file appears in two tasks.
+
+**Type consistency:** `_post_or_queue_adjustment` is defined once (Task 2) and called identically by `adjust_inventory` and `count_inventory` in that same task - same parameter names throughout. `AdjustmentOutcome`/`AdjustmentRequestResponse` field names match between backend Pydantic models (Task 2) and frontend TypeScript interfaces (Tasks 5-6): `applied`, `item`, `request`, `quantity_delta`, `counted_quantity`, `expected_quantity_at_submit`, `reason_code`, `reason_note`, `status`, `requested_at`, `reviewed_by`, `reviewed_at`, `review_note`.
 
 **Placeholder scan:** no TBD/TODO markers; every step has concrete code, exact commands, and expected output.

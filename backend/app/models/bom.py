@@ -75,6 +75,25 @@ class Item(Base):
     )
 
 
+class ItemUnit(Base):
+    __tablename__ = "item_units"
+    __table_args__ = (UniqueConstraint("item_id", "code", name="uq_item_units_item_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # A label the recipe author picks, e.g. "box", "g" - only meaningful
+    # together with factor_to_base, and only for this specific item (a box of
+    # screws and a box of bolts don't hold the same count).
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    # 1 of this unit = factor_to_base * the item's own base unit_of_measure.
+    factor_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+
+
 class Bom(Base):
     __tablename__ = "boms"
     __table_args__ = (UniqueConstraint("org_id", "item_id", "version", name="uq_boms_org_item_version"),)
@@ -143,3 +162,12 @@ class BomLine(Base):
     # planning short. Additive, not yield-based (dividing by (1 - scrap_pct/100)),
     # to keep 100%+ loss representable without a divide-by-zero at 100.
     scrap_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal(0))
+    # Optional authoring convenience: the line's quantity as typed in a unit
+    # other than the component's base unit (e.g. "500" in unit "g" on a
+    # kg-based item). `quantity` above is always the converted, canonical
+    # base-unit figure - MRP/cost rollups never need to know units exist.
+    # Both null together means "authored directly in the base unit".
+    unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("item_units.id"), nullable=True
+    )
+    unit_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)

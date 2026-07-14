@@ -18,7 +18,7 @@ from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.models.procurement import PurchaseOrder, Supplier, PurchaseOrderLine
 from app.services.demand_forecasting import DEFAULT_HORIZON_DAYS, compute_demand_forecast
-from app.services.mrp import MrpPlanLine, compute_mrp_plan, resolve_horizon
+from app.services.mrp import MrpPlanLine, compute_build_plan, compute_mrp_plan, resolve_horizon
 from app.services.pricing import latest_unit_prices
 
 # A repeat import of the same period is an upsert, so the only real collision is
@@ -146,6 +146,21 @@ class UnassignedItem(BaseModel):
 class GeneratePosResponse(BaseModel):
     created: list[GeneratedPoSummary]
     unassigned: list[UnassignedItem]
+
+
+class BuildPlanRequest(BaseModel):
+    item_id: str
+    build_quantity: Decimal
+    yield_loss_pct: Decimal = Decimal(0)
+
+
+class BuildPlanResponse(BaseModel):
+    item_id: str
+    item_sku: str
+    item_name: str
+    build_quantity: Decimal
+    yield_loss_pct: Decimal
+    lines: list[MrpPlanLine]
 
 
 # --------------------------------------------------------------------------- #
@@ -605,28 +620,20 @@ async def generate_po(
     )
 
 
-@mrp_router.post("/generate-pos", response_model=GeneratePosResponse)
-async def generate_pos(
-    body: GeneratePosRequest,
-    current: CurrentUser = Depends(require_role("owner")),
-    db: AsyncSession = Depends(get_db),
-):
-    """Automatic PO generation: take every purchased shortfall in the plan,
-    group it by the item's preferred supplier, and create one draft PO per
-    supplier. Purchased shortfalls with no preferred supplier can't be routed,
-    so they're returned as `unassigned` for the user to assign a supplier (or
-    order manually via generate-po). Manufactured items are a build action and
-    are never ordered. Like generate-po, the POs are drafts - review and submit
-    them in the PO editor.
+async def _create_pos_grouped_by_supplier(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    current: CurrentUser,
+    orderable: list[MrpPlanLine],
+    audit_action: str,
+) -> GeneratePosResponse:
+    """Shared by generate_pos (forecast-driven MRP plan) and
+    generate_pos_from_build_plan (build-quantity-driven): group purchased
+    shortfalls by preferred supplier and create one draft PO per supplier.
+    Items with no preferred supplier can't be routed automatically and come
+    back as `unassigned`. audit_action distinguishes the two call sites in
+    the audit log.
     """
-    hs, he = resolve_horizon(body.horizon_start, body.horizon_end)
-    org_id = current.org_id
-
-    orderable = [
-        line
-        for line in await compute_mrp_plan(db, org_id, hs, he)
-        if not line.is_manufactured and line.net_requirement > 0
-    ]
     if not orderable:
         return GeneratePosResponse(created=[], unassigned=[])
 
@@ -642,7 +649,6 @@ async def generate_pos(
         ).all()
     }
 
-    # Group shortfalls by preferred supplier; those without one are unassigned.
     groups: dict[uuid.UUID, list[MrpPlanLine]] = defaultdict(list)
     unassigned: list[UnassignedItem] = []
     for line in orderable:
@@ -703,10 +709,84 @@ async def generate_pos(
     if created:
         await log_event(
             db,
-            action="po.auto_generated_from_plan",
+            action=audit_action,
             org_id=org_id,
             actor_user_id=current.id,
             metadata={"po_count": len(created), "unassigned_count": len(unassigned)},
         )
     await db.commit()
     return GeneratePosResponse(created=created, unassigned=unassigned)
+
+
+@mrp_router.post("/generate-pos", response_model=GeneratePosResponse)
+async def generate_pos(
+    body: GeneratePosRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Automatic PO generation: take every purchased shortfall in the plan,
+    group it by the item's preferred supplier, and create one draft PO per
+    supplier. Purchased shortfalls with no preferred supplier can't be routed,
+    so they're returned as `unassigned` for the user to assign a supplier (or
+    order manually via generate-po). Manufactured items are a build action and
+    are never ordered. Like generate-po, the POs are drafts - review and submit
+    them in the PO editor.
+    """
+    hs, he = resolve_horizon(body.horizon_start, body.horizon_end)
+    org_id = current.org_id
+
+    orderable = [
+        line
+        for line in await compute_mrp_plan(db, org_id, hs, he)
+        if not line.is_manufactured and line.net_requirement > 0
+    ]
+    return await _create_pos_grouped_by_supplier(
+        db, org_id, current, orderable, "po.auto_generated_from_plan"
+    )
+
+
+@mrp_router.post("/build-plan", response_model=BuildPlanResponse)
+async def run_build_plan(
+    body: BuildPlanRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only build calculator: given a quantity to build and an optional
+    expected yield loss, explode the item's active BOM (netted against real
+    stock) into what needs to be bought. See services.mrp.compute_build_plan.
+    """
+    item_uuid = _parse_item_id(body.item_id)
+    item = await get_or_404(db, Item, current.org_id, item_uuid, "Item not found")
+    lines = await compute_build_plan(
+        db, current.org_id, item_uuid, body.build_quantity, body.yield_loss_pct
+    )
+    return BuildPlanResponse(
+        item_id=str(item.id),
+        item_sku=item.sku,
+        item_name=item.name,
+        build_quantity=body.build_quantity,
+        yield_loss_pct=body.yield_loss_pct,
+        lines=lines,
+    )
+
+
+@mrp_router.post("/build-plan/generate-pos", response_model=GeneratePosResponse)
+async def generate_pos_from_build_plan(
+    body: BuildPlanRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Commit a build calculation into draft POs, grouped by preferred
+    supplier - the same grouping generate_pos uses. Recomputes the plan
+    server-side from body rather than trusting any client-submitted
+    quantities, matching generate_po/generate_pos.
+    """
+    item_uuid = _parse_item_id(body.item_id)
+    await get_or_404(db, Item, current.org_id, item_uuid, "Item not found")
+    lines = await compute_build_plan(
+        db, current.org_id, item_uuid, body.build_quantity, body.yield_loss_pct
+    )
+    orderable = [line for line in lines if not line.is_manufactured and line.net_requirement > 0]
+    return await _create_pos_grouped_by_supplier(
+        db, current.org_id, current, orderable, "po.generated_from_build_plan"
+    )

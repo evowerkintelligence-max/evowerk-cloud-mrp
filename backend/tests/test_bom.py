@@ -25,10 +25,10 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return token, me.json()["id"]
 
 
-async def _create_item(client, token, sku="RAW-1", name="Steel Rod", item_type="raw_material"):
+async def _create_item(client, token, sku="RAW-1", name="Steel Rod", item_type="raw_material", unit_of_measure="ea"):
     res = await client.post(
         "/items",
-        json={"sku": sku, "name": name, "item_type": item_type, "unit_of_measure": "ea"},
+        json={"sku": sku, "name": name, "item_type": item_type, "unit_of_measure": unit_of_measure},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 201
@@ -395,3 +395,279 @@ async def test_rbac_blocks_non_owner_from_mutations(client, test_engine):
     # Reads are still open to non-owners.
     read = await client.get("/items", headers={"Authorization": f"Bearer {member_token}"})
     assert read.status_code == 200
+
+
+async def test_item_unit_create_list_and_duplicate_rejected(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-1", name="Screws", item_type="raw_material")
+
+    create = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "100"}, headers=headers
+    )
+    assert create.status_code == 201
+    body = create.json()
+    assert body["code"] == "box"
+    assert body["factor_to_base"] == "100.000000"
+
+    listed = await client.get(f"/items/{item['id']}/units", headers=headers)
+    assert listed.status_code == 200
+    assert [u["code"] for u in listed.json()] == ["box"]
+
+    dupe = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "50"}, headers=headers
+    )
+    assert dupe.status_code == 409
+
+
+async def test_item_unit_rejects_non_positive_factor(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-2", name="Bolts", item_type="raw_material")
+
+    res = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "0"}, headers=headers
+    )
+    assert res.status_code == 400
+
+
+async def test_item_unit_rejects_overlong_code(client):
+    # code is String(20) - an over-long value must be rejected with a clean
+    # 400 before it ever reaches the DB (a DataError there would otherwise
+    # surface as an unhandled 500, since only IntegrityError is caught).
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-3", name="Washers", item_type="raw_material")
+
+    res = await client.post(
+        f"/items/{item['id']}/units",
+        json={"code": "a" * 21, "factor_to_base": "100"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+
+async def test_item_unit_delete_blocked_when_in_use(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="UNIT-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="UNIT-3", name="Screws", item_type="raw_material")
+
+    unit = await client.post(
+        f"/items/{comp['id']}/units", json={"code": "box", "factor_to_base": "100"}, headers=headers
+    )
+    unit_id = unit.json()["id"]
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {
+                    "component_item_id": comp["id"],
+                    "quantity": "1",
+                    "sequence": 0,
+                    "unit_id": unit_id,
+                    "unit_quantity": "1",
+                }
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+
+    delete = await client.delete(f"/items/{comp['id']}/units/{unit_id}", headers=headers)
+    assert delete.status_code == 409
+
+
+async def test_item_unit_delete_succeeds_when_unused(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-4", name="Nuts", item_type="raw_material")
+
+    unit = await client.post(
+        f"/items/{item['id']}/units", json={"code": "box", "factor_to_base": "100"}, headers=headers
+    )
+    unit_id = unit.json()["id"]
+
+    delete = await client.delete(f"/items/{item['id']}/units/{unit_id}", headers=headers)
+    assert delete.status_code == 204
+
+
+async def test_bom_line_unit_conversion_computes_base_quantity(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="CONV-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(
+        client, token, sku="CONV-1", name="Steel", item_type="raw_material", unit_of_measure="kg"
+    )
+    unit = await client.post(
+        f"/items/{comp['id']}/units", json={"code": "g", "factor_to_base": "0.001"}, headers=headers
+    )
+    unit_id = unit.json()["id"]
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    lines = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {
+                    "component_item_id": comp["id"],
+                    # Deliberately wrong client-submitted quantity - the
+                    # server must ignore it and recompute from unit_quantity.
+                    "quantity": "999",
+                    "sequence": 0,
+                    "unit_id": unit_id,
+                    "unit_quantity": "500",
+                }
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert lines.status_code == 200
+    line = lines.json()["lines"][0]
+    assert line["quantity"] == "0.5000"
+    assert line["unit_id"] == unit_id
+    assert line["unit_quantity"] == "500.0000"
+    assert line["unit_code"] == "g"
+
+
+async def test_bom_line_unit_must_belong_to_its_component(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="CONV-FG2", name="Gadget", item_type="finished_good")
+    comp_a = await _create_item(client, token, sku="CONV-A", name="Steel", item_type="raw_material")
+    comp_b = await _create_item(client, token, sku="CONV-B", name="Copper", item_type="raw_material")
+    unit_for_a = await client.post(
+        f"/items/{comp_a['id']}/units", json={"code": "g", "factor_to_base": "0.001"}, headers=headers
+    )
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    res = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {
+                    "component_item_id": comp_b["id"],
+                    "quantity": "1",
+                    "sequence": 0,
+                    "unit_id": unit_for_a.json()["id"],
+                    "unit_quantity": "500",
+                }
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+
+async def test_revise_active_bom_copies_lines_into_new_draft(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="REV-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="REV-1", name="Bolt", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {"component_item_id": comp["id"], "quantity": "4.5", "sequence": 0, "scrap_pct": "5"}
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    activate = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+    assert activate.status_code == 200
+
+    revise = await client.post(f"/boms/{bom_data['id']}/revise", headers=headers)
+    assert revise.status_code == 201
+    revised = revise.json()
+    assert revised["status"] == "draft"
+    assert revised["version"] == 2
+    assert len(revised["lines"]) == 1
+    assert revised["lines"][0]["component_sku"] == "REV-1"
+    assert revised["lines"][0]["quantity"] == "4.5000"
+    assert revised["lines"][0]["scrap_pct"] == "5.00"
+
+    # Original active version is untouched.
+    original = await client.get(f"/boms/{bom_data['id']}", headers=headers)
+    assert original.json()["status"] == "active"
+    assert len(original.json()["lines"]) == 1
+
+
+async def test_revise_rejects_non_active_bom(client):
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="REV-2", name="Draft Only", item_type="finished_good")
+    bom = await client.post("/boms", json={"item_id": item["id"]}, headers=headers)
+
+    revise = await client.post(f"/boms/{bom.json()['id']}/revise", headers=headers)
+    assert revise.status_code == 409
+
+
+async def test_revise_bom_survives_version_collision_retry(client, monkeypatch):
+    """Regression test for the retry loop expiring `source`/`source_lines` on
+    rollback (see revise_bom): forces one IntegrityError on the first
+    version-allocation flush, so the loop takes its rollback+retry path, then
+    confirms the endpoint still succeeds and clones the source's lines
+    correctly rather than 500ing on an expired ORM attribute read.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.bom import Bom
+
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="REV-RACE-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="REV-RACE-1", name="Bolt", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {"component_item_id": comp["id"], "quantity": "4.5", "sequence": 0, "scrap_pct": "5"}
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    activate = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+    assert activate.status_code == 200
+
+    # Only intercept the flush that's about to insert the new draft Bom (the
+    # version-allocation flush inside revise_bom's retry loop) - not any of
+    # the setup flushes above, and not the second attempt's flush.
+    original_flush = AsyncSession.flush
+    state = {"raised": False}
+
+    async def flaky_flush(self, *args, **kwargs):
+        pending_boms = [obj for obj in self.new if isinstance(obj, Bom)]
+        if pending_boms and not state["raised"]:
+            state["raised"] = True
+            raise IntegrityError("INSERT INTO boms ...", {}, Exception("uq_boms_org_item_version"))
+        return await original_flush(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "flush", flaky_flush)
+
+    revise = await client.post(f"/boms/{bom_data['id']}/revise", headers=headers)
+
+    assert state["raised"], "test setup didn't actually trigger the forced collision"
+    assert revise.status_code == 201
+    revised = revise.json()
+    assert revised["status"] == "draft"
+    assert revised["version"] == 2
+    assert len(revised["lines"]) == 1
+    assert revised["lines"][0]["component_sku"] == "REV-RACE-1"
+    assert revised["lines"][0]["quantity"] == "4.5000"
+    assert revised["lines"][0]["scrap_pct"] == "5.00"

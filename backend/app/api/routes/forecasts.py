@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -451,22 +451,28 @@ async def run_mrp_plan(
 
 
 async def _new_draft_po(
-    db: AsyncSession, org_id: uuid.UUID, supplier_id: uuid.UUID, created_by: uuid.UUID
+    db: AsyncSession, org_id: uuid.UUID, supplier: Supplier, created_by: uuid.UUID
 ) -> PurchaseOrder:
     """Allocate a po_number and create a draft PO, guarded against the max+1
     read-then-insert race. Uses a per-attempt SAVEPOINT (not a plain rollback)
     so it's safe to call repeatedly within one request - generate_pos creates a
     PO per supplier, and a plain rollback on the 2nd would discard the 1st.
     """
+    expected_delivery_date = (
+        date.today() + timedelta(days=supplier.lead_time_days)
+        if supplier.lead_time_days is not None
+        else None
+    )
     for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
         max_number = await db.scalar(
             select(func.max(PurchaseOrder.po_number)).where(PurchaseOrder.org_id == org_id)
         )
         po = PurchaseOrder(
             org_id=org_id,
-            supplier_id=supplier_id,
+            supplier_id=supplier.id,
             po_number=(max_number or 0) + 1,
             status="draft",
+            expected_delivery_date=expected_delivery_date,
             created_by=created_by,
         )
         try:
@@ -577,7 +583,7 @@ async def generate_po(
         chosen.append(line)
 
     prices = await latest_unit_prices(db, org_id, {uuid.UUID(line.item_id) for line in chosen})
-    po = await _new_draft_po(db, org_id, supplier_id, current.id)
+    po = await _new_draft_po(db, org_id, supplier, current.id)
     response_lines = await _add_po_lines(db, org_id, po, chosen, prices)
     await db.flush()
 
@@ -682,7 +688,7 @@ async def generate_pos(
     # Deterministic order (by supplier name) so po_number allocation is stable.
     for supplier_id in sorted(groups, key=lambda sid: suppliers[sid].name):
         group_lines = groups[supplier_id]
-        po = await _new_draft_po(db, org_id, supplier_id, current.id)
+        po = await _new_draft_po(db, org_id, suppliers[supplier_id], current.id)
         await _add_po_lines(db, org_id, po, group_lines, prices)
         created.append(
             GeneratedPoSummary(

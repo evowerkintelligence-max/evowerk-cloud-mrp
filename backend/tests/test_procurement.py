@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -347,3 +349,47 @@ async def test_receive_rejects_quantity_rejected_exceeding_quantity(client):
         headers=headers,
     )
     assert receive.status_code == 400
+
+
+async def test_create_po_defaults_expected_delivery_date_from_supplier_lead_time(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    supplier = (
+        await client.post(
+            "/suppliers", json={"name": "Acme Metals", "lead_time_days": 14}, headers=headers
+        )
+    ).json()
+
+    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
+    assert po.status_code == 201
+    expected = (date.today() + timedelta(days=14)).isoformat()
+    assert po.json()["expected_delivery_date"] == expected
+
+
+async def test_create_po_leaves_expected_delivery_date_null_without_lead_time(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await _create_supplier(client, token)  # no lead_time_days set
+
+    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
+    assert po.status_code == 201
+    assert po.json()["expected_delivery_date"] is None
+
+
+async def test_create_po_explicit_expected_delivery_date_overrides_lead_time_default(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = (
+        await client.post(
+            "/suppliers", json={"name": "Acme Metals", "lead_time_days": 14}, headers=headers
+        )
+    ).json()
+
+    po = await client.post(
+        "/purchase-orders",
+        json={"supplier_id": supplier["id"], "expected_delivery_date": "2026-12-25"},
+        headers=headers,
+    )
+    assert po.status_code == 201
+    assert po.json()["expected_delivery_date"] == "2026-12-25"

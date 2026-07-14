@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -40,9 +41,11 @@ async def _create_item(client, token, sku, name="Item", min_order_qty=None):
     return res.json()
 
 
-async def _create_supplier(client, token, name="Acme Metals"):
+async def _create_supplier(client, token, name="Acme Metals", lead_time_days=None):
     res = await client.post(
-        "/suppliers", json={"name": name}, headers={"Authorization": f"Bearer {token}"}
+        "/suppliers",
+        json={"name": name, "lead_time_days": lead_time_days},
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 201
     return res.json()
@@ -330,3 +333,18 @@ async def test_generated_po_becomes_on_order_after_submit(client):
     line = plan.json()["lines"][0]
     assert _dec(line["on_order"]) == Decimal("100")
     assert _dec(line["net_requirement"]) == Decimal("0")
+
+
+async def test_generate_po_defaults_expected_delivery_date_from_supplier_lead_time(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, "ROD", "Steel Rod")
+    supplier = await _create_supplier(client, token, lead_time_days=14)
+    await _forecast(client, token, item, 100)
+
+    res = await _generate_po(client, token, supplier, [item["id"]])
+    assert res.status_code == 200
+
+    po = await client.get(f"/purchase-orders/{res.json()['po_id']}", headers=headers)
+    expected = (date.today() + timedelta(days=14)).isoformat()
+    assert po.json()["expected_delivery_date"] == expected

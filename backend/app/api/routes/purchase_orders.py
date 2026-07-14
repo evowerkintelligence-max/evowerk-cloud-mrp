@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -107,6 +107,10 @@ async def create_purchase_order(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid supplier_id") from None
     supplier = await get_or_404(db, Supplier, current.org_id, supplier_id, "Supplier not found")
 
+    expected_delivery_date = body.expected_delivery_date
+    if expected_delivery_date is None and supplier.lead_time_days is not None:
+        expected_delivery_date = date.today() + timedelta(days=supplier.lead_time_days)
+
     for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
         max_number = await db.scalar(
             select(func.max(PurchaseOrder.po_number)).where(PurchaseOrder.org_id == current.org_id)
@@ -116,7 +120,7 @@ async def create_purchase_order(
             supplier_id=supplier_id,
             po_number=(max_number or 0) + 1,
             status="draft",
-            expected_delivery_date=body.expected_delivery_date,
+            expected_delivery_date=expected_delivery_date,
             created_by=current.id,
         )
         # A per-attempt SAVEPOINT, not a full db.rollback(): two concurrent

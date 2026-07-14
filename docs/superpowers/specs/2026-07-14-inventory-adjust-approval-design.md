@@ -134,7 +134,11 @@ One migration adds the new column on `orgs`, the three new columns on
 
 - `AdjustRequest` gains `reason_code: ReasonCode` (required) and
   `reason_note: str | None` (required by validator when `reason_code ==
-  "other"`, otherwise optional).
+  "other"`, otherwise optional). **Breaking change**: `reason` is optional
+  today, so any existing caller of `/adjust` that omits `reason_code` starts
+  getting a 422. Accepted as part of this spec, not deferred - call it out in
+  the PR description rather than let it fall out silently under "reused, not
+  renamed."
 - `adjust_inventory`: after existing validation (non-zero, non-lot-tracked,
   location resolution), branch on role:
   - `owner`, or `manager` with `abs(quantity) <= org.adjust_approval_threshold`:
@@ -143,6 +147,10 @@ One migration adds the new column on `orgs`, the three new columns on
     `InventoryAdjustmentRequest` row (`status="pending"`,
     `expected_quantity_at_submit` = current on-hand at that location, fetched
     in the same call) and return it. No balance/transaction write happens.
+    Audit-logged via the existing `log_event` helper as
+    `inventory.adjustment_requested`, following the `inventory.consumed` /
+    `inventory.adjusted` / `inventory.transferred` naming already in this
+    file.
   - Response model becomes a small union:
     `AdjustmentOutcome { applied: bool, item: InventoryItemResponse | None,
     request: AdjustmentRequestResponse | None }` - exactly one of `item` /
@@ -176,17 +184,26 @@ One migration adds the new column on `orgs`, the three new columns on
   `counted_quantity`, `expected_quantity=expected_quantity_at_submit`, and
   **`created_by=request.requested_by`** (the ledger attributes the movement
   to whoever asked for it, not the approver - the approver is recorded on
-  the request row and in the audit log via the existing `log_event` helper).
+  the request row and in the audit log via the existing `log_event` helper,
+  action `inventory.adjustment_approved`).
   Marks the request `approved`, `reviewed_by=current.id`, `reviewed_at=now`.
 - New `POST /inventory/adjustment-requests/{id}/reject`: `owner` only, body
   `{ review_note: str | None }`. Marks `rejected`, no balance impact, audit
-  logged.
+  logged as `inventory.adjustment_rejected`.
 
 `backend/app/api/routes/orgs.py`:
 - `PATCH /orgs/me`: `owner` only, body `{ adjust_approval_threshold: Decimal
   }`. Extends the currently GET-only router with its first mutation.
+  Audit-logged as `org.threshold_updated`.
 
 ## Frontend
+
+Role gating reuses the existing pattern, not a new one: `Items.tsx` already
+fetches `/orgs/me` (`queryKey: ["org-me"]`) and derives
+`const isOwner = org.data?.role === "owner"` to gate owner-only UI. The
+Approvals tab and the manager/owner branching in `InventoryPanel` should
+fetch the same `org-me` query and derive `isOwner` / `isManager` from it,
+not invent a separate auth-state mechanism.
 
 `Inventory.tsx` (`InventoryPanel`):
 - The existing "Adjust" form stays, relabeled to make its purpose explicit

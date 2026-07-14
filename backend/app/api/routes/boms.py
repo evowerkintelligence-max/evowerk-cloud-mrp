@@ -453,13 +453,25 @@ async def revise_bom(
     )
     source_lines = source_lines_result.scalars().all()
 
+    # Hoisted into plain locals before the retry loop: a collision below calls
+    # db.rollback(), which expires every ORM instance in the session -
+    # including `source` and `source_lines`. Reading an expired attribute on
+    # an async session triggers an implicit refresh SELECT, which raises
+    # MissingGreenlet here rather than just re-fetching. Everything the loop
+    # and the post-loop cloning need has to survive as primitives instead.
+    item_id = source.item_id
+    line_data = [
+        (line.component_item_id, line.quantity, line.sequence, line.scrap_pct, line.unit_id, line.unit_quantity)
+        for line in source_lines
+    ]
+
     for attempt in range(MAX_VERSION_ATTEMPTS):
         max_version = await db.scalar(
-            select(func.max(Bom.version)).where(Bom.org_id == current.org_id, Bom.item_id == source.item_id)
+            select(func.max(Bom.version)).where(Bom.org_id == current.org_id, Bom.item_id == item_id)
         )
         new_bom = Bom(
             org_id=current.org_id,
-            item_id=source.item_id,
+            item_id=item_id,
             version=(max_version or 0) + 1,
             status="draft",
             created_by=current.id,
@@ -475,17 +487,17 @@ async def revise_bom(
                     status.HTTP_409_CONFLICT, "Could not allocate a BOM version, please retry"
                 ) from None
 
-    for line in source_lines:
+    for component_item_id, quantity, sequence, scrap_pct, unit_id, unit_quantity in line_data:
         db.add(
             BomLine(
                 org_id=current.org_id,
                 bom_id=new_bom.id,
-                component_item_id=line.component_item_id,
-                quantity=line.quantity,
-                sequence=line.sequence,
-                scrap_pct=line.scrap_pct,
-                unit_id=line.unit_id,
-                unit_quantity=line.unit_quantity,
+                component_item_id=component_item_id,
+                quantity=quantity,
+                sequence=sequence,
+                scrap_pct=scrap_pct,
+                unit_id=unit_id,
+                unit_quantity=unit_quantity,
             )
         )
     await db.flush()
@@ -496,7 +508,7 @@ async def revise_bom(
         org_id=current.org_id,
         actor_user_id=current.id,
         target=str(new_bom.id),
-        metadata={"source_bom_id": str(source.id), "item_id": str(source.item_id), "version": new_bom.version},
+        metadata={"source_bom_id": str(bom_id), "item_id": str(item_id), "version": new_bom.version},
     )
     await db.commit()
     return await get_bom(new_bom.id, current, db)

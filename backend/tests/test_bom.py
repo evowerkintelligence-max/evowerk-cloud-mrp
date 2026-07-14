@@ -431,6 +431,22 @@ async def test_item_unit_rejects_non_positive_factor(client):
     assert res.status_code == 400
 
 
+async def test_item_unit_rejects_overlong_code(client):
+    # code is String(20) - an over-long value must be rejected with a clean
+    # 400 before it ever reaches the DB (a DataError there would otherwise
+    # surface as an unhandled 500, since only IntegrityError is caught).
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="UNIT-3", name="Washers", item_type="raw_material")
+
+    res = await client.post(
+        f"/items/{item['id']}/units",
+        json={"code": "a" * 21, "factor_to_base": "100"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+
 async def test_item_unit_delete_blocked_when_in_use(client):
     token, _ = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -595,3 +611,63 @@ async def test_revise_rejects_non_active_bom(client):
 
     revise = await client.post(f"/boms/{bom.json()['id']}/revise", headers=headers)
     assert revise.status_code == 409
+
+
+async def test_revise_bom_survives_version_collision_retry(client, monkeypatch):
+    """Regression test for the retry loop expiring `source`/`source_lines` on
+    rollback (see revise_bom): forces one IntegrityError on the first
+    version-allocation flush, so the loop takes its rollback+retry path, then
+    confirms the endpoint still succeeds and clones the source's lines
+    correctly rather than 500ing on an expired ORM attribute read.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.bom import Bom
+
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="REV-RACE-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="REV-RACE-1", name="Bolt", item_type="raw_material")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {"component_item_id": comp["id"], "quantity": "4.5", "sequence": 0, "scrap_pct": "5"}
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    activate = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+    assert activate.status_code == 200
+
+    # Only intercept the flush that's about to insert the new draft Bom (the
+    # version-allocation flush inside revise_bom's retry loop) - not any of
+    # the setup flushes above, and not the second attempt's flush.
+    original_flush = AsyncSession.flush
+    state = {"raised": False}
+
+    async def flaky_flush(self, *args, **kwargs):
+        pending_boms = [obj for obj in self.new if isinstance(obj, Bom)]
+        if pending_boms and not state["raised"]:
+            state["raised"] = True
+            raise IntegrityError("INSERT INTO boms ...", {}, Exception("uq_boms_org_item_version"))
+        return await original_flush(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "flush", flaky_flush)
+
+    revise = await client.post(f"/boms/{bom_data['id']}/revise", headers=headers)
+
+    assert state["raised"], "test setup didn't actually trigger the forced collision"
+    assert revise.status_code == 201
+    revised = revise.json()
+    assert revised["status"] == "draft"
+    assert revised["version"] == 2
+    assert len(revised["lines"]) == 1
+    assert revised["lines"][0]["component_sku"] == "REV-RACE-1"
+    assert revised["lines"][0]["quantity"] == "4.5000"
+    assert revised["lines"][0]["scrap_pct"] == "5.00"

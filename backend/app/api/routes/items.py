@@ -473,6 +473,8 @@ async def create_item_unit(
     code = body.code.strip()
     if not code:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "code is required")
+    if len(code) > 20:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "code must be 20 characters or fewer")
     if body.factor_to_base <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "factor_to_base must be positive")
 

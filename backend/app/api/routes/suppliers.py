@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +20,30 @@ class SupplierCreateRequest(BaseModel):
     name: str
     email: str | None = None
     phone: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    payment_terms_days: int | None = None
+    lead_time_days: int | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class SupplierUpdateRequest(BaseModel):
     name: str
     email: str | None = None
     phone: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    payment_terms_days: int | None = None
+    lead_time_days: int | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class SupplierResponse(BaseModel):
@@ -34,6 +52,15 @@ class SupplierResponse(BaseModel):
     email: str | None
     phone: str | None
     is_active: bool
+    address_line1: str | None
+    address_line2: str | None
+    city: str | None
+    state: str | None
+    postal_code: str | None
+    country: str | None
+    payment_terms_days: int | None
+    lead_time_days: int | None
+    tags: list[str]
 
 
 def _to_response(supplier: Supplier) -> SupplierResponse:
@@ -43,6 +70,15 @@ def _to_response(supplier: Supplier) -> SupplierResponse:
         email=supplier.email,
         phone=supplier.phone,
         is_active=supplier.is_active,
+        address_line1=supplier.address_line1,
+        address_line2=supplier.address_line2,
+        city=supplier.city,
+        state=supplier.state,
+        postal_code=supplier.postal_code,
+        country=supplier.country,
+        payment_terms_days=supplier.payment_terms_days,
+        lead_time_days=supplier.lead_time_days,
+        tags=supplier.tags,
     )
 
 
@@ -52,7 +88,21 @@ async def create_supplier(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    supplier = Supplier(org_id=current.org_id, name=body.name, email=body.email, phone=body.phone)
+    supplier = Supplier(
+        org_id=current.org_id,
+        name=body.name,
+        email=body.email,
+        phone=body.phone,
+        address_line1=body.address_line1,
+        address_line2=body.address_line2,
+        city=body.city,
+        state=body.state,
+        postal_code=body.postal_code,
+        country=body.country,
+        payment_terms_days=body.payment_terms_days,
+        lead_time_days=body.lead_time_days,
+        tags=body.tags,
+    )
     db.add(supplier)
     try:
         await db.flush()
@@ -77,6 +127,7 @@ async def create_supplier(
 async def list_suppliers(
     q: str | None = Query(None),
     active_only: bool = Query(False),
+    tag: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current: CurrentUser = Depends(get_current_user),
@@ -87,7 +138,19 @@ async def list_suppliers(
         query = query.where(Supplier.name.ilike(f"%{q}%"))
     if active_only:
         query = query.where(Supplier.is_active.is_(True))
-    query = query.order_by(Supplier.name).limit(limit).offset(offset)
+    query = query.order_by(Supplier.name)
+
+    if tag:
+        # Tags are stored as JSON (portable across the Postgres prod DB and
+        # the SQLite test DB - see Supplier.tags), so "contains this tag"
+        # can't be pushed into one portable SQL WHERE. Org-scoped supplier
+        # lists are small (same reasoning the scorecard endpoint uses), so
+        # filter and paginate in Python instead for this one case.
+        result = await db.execute(query)
+        matching = [s for s in result.scalars().all() if tag in s.tags]
+        return [_to_response(s) for s in matching[offset : offset + limit]]
+
+    query = query.limit(limit).offset(offset)
     result = await db.execute(query)
     return [_to_response(supplier) for supplier in result.scalars().all()]
 
@@ -103,6 +166,15 @@ async def update_supplier(
     supplier.name = body.name
     supplier.email = body.email
     supplier.phone = body.phone
+    supplier.address_line1 = body.address_line1
+    supplier.address_line2 = body.address_line2
+    supplier.city = body.city
+    supplier.state = body.state
+    supplier.postal_code = body.postal_code
+    supplier.country = body.country
+    supplier.payment_terms_days = body.payment_terms_days
+    supplier.lead_time_days = body.lead_time_days
+    supplier.tags = body.tags
     try:
         await db.flush()
     except IntegrityError:

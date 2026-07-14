@@ -197,3 +197,53 @@ async def test_supplier_contact_mutations_require_owner(client, test_engine):
         f"/suppliers/{supplier['id']}/contacts", json={"name": "X"}, headers=member_headers
     )
     assert res.status_code == 403
+
+
+async def test_supplier_create_and_update_extended_fields(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/suppliers",
+        json={
+            "name": "Acme Metals",
+            "address_line1": "1 Foundry Rd",
+            "city": "Pittsburgh",
+            "state": "PA",
+            "postal_code": "15201",
+            "country": "USA",
+            "payment_terms_days": 30,
+            "lead_time_days": 14,
+            "tags": ["metals", "domestic"],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["city"] == "Pittsburgh"
+    assert body["payment_terms_days"] == 30
+    assert body["lead_time_days"] == 14
+    assert body["tags"] == ["metals", "domestic"]
+
+    updated = await client.patch(
+        f"/suppliers/{body['id']}",
+        json={"name": "Acme Metals", "lead_time_days": 21, "tags": ["metals"]},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["lead_time_days"] == 21
+    assert updated.json()["tags"] == ["metals"]
+
+
+async def test_list_suppliers_filters_by_tag(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    await client.post("/suppliers", json={"name": "Alpha", "tags": ["metals"]}, headers=headers)
+    await client.post("/suppliers", json={"name": "Beta", "tags": ["packaging"]}, headers=headers)
+    await client.post(
+        "/suppliers", json={"name": "Gamma", "tags": ["metals", "domestic"]}, headers=headers
+    )
+
+    res = await client.get("/suppliers?tag=metals", headers=headers)
+    assert res.status_code == 200
+    assert {s["name"] for s in res.json()} == {"Alpha", "Gamma"}

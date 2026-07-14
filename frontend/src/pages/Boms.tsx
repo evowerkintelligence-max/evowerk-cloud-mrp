@@ -23,6 +23,13 @@ interface ItemResponse {
   unit_of_measure: string;
 }
 
+interface ItemUnitResponse {
+  id: string;
+  item_id: string;
+  code: string;
+  factor_to_base: string;
+}
+
 interface BomResponse {
   id: string;
   item_id: string;
@@ -42,6 +49,9 @@ interface BomLineResponse {
   quantity: string;
   sequence: number;
   scrap_pct: string;
+  unit_id: string | null;
+  unit_quantity: string | null;
+  unit_code: string | null;
 }
 
 interface BomDetailResponse extends BomResponse {
@@ -181,6 +191,9 @@ function BomLineRow({
         </TD>
         <TD>{line.quantity}</TD>
         <TD className="text-muted-foreground">{line.unit_of_measure}</TD>
+        <TD className="text-muted-foreground">
+          {line.unit_code ? `${line.unit_quantity} ${line.unit_code}` : "-"}
+        </TD>
         <TD className="text-muted-foreground">{Number(line.scrap_pct) > 0 ? `${line.scrap_pct}%` : "-"}</TD>
         {onRemove && (
           <TD>
@@ -212,6 +225,11 @@ export function Boms() {
   const [lineComponentId, setLineComponentId] = useState("");
   const [lineQuantity, setLineQuantity] = useState("1");
   const [lineScrapPct, setLineScrapPct] = useState("0");
+  const [lineUnitId, setLineUnitId] = useState("");
+  const [lineUnitQuantity, setLineUnitQuantity] = useState("");
+  const [showNewUnit, setShowNewUnit] = useState(false);
+  const [newUnitCode, setNewUnitCode] = useState("");
+  const [newUnitFactor, setNewUnitFactor] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showBulk, setShowBulk] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -223,6 +241,38 @@ export function Boms() {
       if (!res.ok) throw new Error("Failed to load items");
       return res.json();
     },
+  });
+
+  const componentUnits = useQuery<ItemUnitResponse[]>({
+    queryKey: ["item-units", lineComponentId],
+    enabled: !!lineComponentId && lineComponentId !== "__new__",
+    queryFn: async () => {
+      const res = await apiFetch(`/items/${lineComponentId}/units`);
+      if (!res.ok) throw new Error("Failed to load units");
+      return res.json();
+    },
+  });
+
+  const createUnit = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/items/${lineComponentId}/units`, {
+        method: "POST",
+        body: JSON.stringify({ code: newUnitCode, factor_to_base: newUnitFactor }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to create unit");
+      }
+      return res.json() as Promise<ItemUnitResponse>;
+    },
+    onSuccess: (unit) => {
+      queryClient.invalidateQueries({ queryKey: ["item-units", lineComponentId] });
+      setLineUnitId(unit.id);
+      setShowNewUnit(false);
+      setNewUnitCode("");
+      setNewUnitFactor("");
+    },
+    onError: (e: Error) => setError(e.message),
   });
 
   const boms = useQuery<BomResponse[]>({
@@ -264,7 +314,14 @@ export function Boms() {
   });
 
   function patchLines(
-    lines: { component_item_id: string; quantity: string; sequence: number; scrap_pct: string }[],
+    lines: {
+      component_item_id: string;
+      quantity: string;
+      sequence: number;
+      scrap_pct: string;
+      unit_id: string | null;
+      unit_quantity: string | null;
+    }[],
   ) {
     if (!bomDetail.data) throw new Error("No BOM selected");
     return apiFetch(`/boms/${selectedBomId}`, {
@@ -280,13 +337,21 @@ export function Boms() {
         component_item_id: l.component_item_id,
         quantity: l.quantity,
         scrap_pct: l.scrap_pct,
+        unit_id: l.unit_id,
+        unit_quantity: l.unit_quantity,
       }));
       // Renumber contiguously (not just append at existingLines.length) - a
       // prior remove can leave gaps, and `sequence` has no uniqueness guard
       // server-side, so appending at a stale length can collide.
       const merged = [
         ...existingLines,
-        { component_item_id: lineComponentId, quantity: lineQuantity, scrap_pct: lineScrapPct || "0" },
+        {
+          component_item_id: lineComponentId,
+          quantity: lineUnitId ? "0" : lineQuantity,
+          scrap_pct: lineScrapPct || "0",
+          unit_id: lineUnitId || null,
+          unit_quantity: lineUnitId ? lineUnitQuantity : null,
+        },
       ].map((l, i) => ({ ...l, sequence: i }));
       const res = await patchLines(merged);
       if (!res.ok) {
@@ -299,6 +364,8 @@ export function Boms() {
       setLineComponentId("");
       setLineQuantity("1");
       setLineScrapPct("0");
+      setLineUnitId("");
+      setLineUnitQuantity("");
       queryClient.invalidateQueries({ queryKey: ["boms", selectedBomId] });
     },
     onError: (e: Error) => setError(e.message),
@@ -313,6 +380,8 @@ export function Boms() {
           component_item_id: l.component_item_id,
           quantity: l.quantity,
           scrap_pct: l.scrap_pct,
+          unit_id: l.unit_id,
+          unit_quantity: l.unit_quantity,
           sequence: i,
         }));
       if (remaining.length === 0) throw new Error("A BOM needs at least one line - delete the draft instead");
@@ -337,6 +406,8 @@ export function Boms() {
           component_item_id: l.component_item_id,
           quantity: l.quantity,
           scrap_pct: l.scrap_pct,
+          unit_id: l.unit_id,
+          unit_quantity: l.unit_quantity,
           sequence: i,
         })),
       );
@@ -377,7 +448,14 @@ export function Boms() {
     mutationFn: async () => {
       if (!bomDetail.data) throw new Error("No BOM selected");
       const bySku = new Map((items.data ?? []).map((i) => [i.sku.toLowerCase(), i]));
-      const parsed: { component_item_id: string; quantity: string; scrap_pct: string; sequence: number }[] = [];
+      const parsed: {
+        component_item_id: string;
+        quantity: string;
+        scrap_pct: string;
+        unit_id: string | null;
+        unit_quantity: string | null;
+        sequence: number;
+      }[] = [];
       const notFound: string[] = [];
       const badQuantity: string[] = [];
       const badScrapPct: string[] = [];
@@ -404,7 +482,14 @@ export function Boms() {
           badScrapPct.push(row);
           continue;
         }
-        parsed.push({ component_item_id: item.id, quantity, scrap_pct: scrapPct, sequence: 0 });
+        parsed.push({
+          component_item_id: item.id,
+          quantity,
+          scrap_pct: scrapPct,
+          unit_id: null,
+          unit_quantity: null,
+          sequence: 0,
+        });
       }
       if (notFound.length > 0) throw new Error(`SKU(s) not found: ${notFound.join(", ")}`);
       if (badQuantity.length > 0) {
@@ -419,6 +504,8 @@ export function Boms() {
         component_item_id: l.component_item_id,
         quantity: l.quantity,
         scrap_pct: l.scrap_pct,
+        unit_id: l.unit_id,
+        unit_quantity: l.unit_quantity,
         sequence: l.sequence,
       }));
       const merged = [...existingLines, ...parsed].map((l, i) => ({ ...l, sequence: i }));
@@ -593,6 +680,7 @@ export function Boms() {
                     <TH>Component</TH>
                     <TH>Quantity</TH>
                     <TH>UoM</TH>
+                    <TH>Unit</TH>
                     <TH>Scrap %</TH>
                     {bomDetail.data.status === "draft" && <TH />}
                   </TR>
@@ -621,27 +709,33 @@ export function Boms() {
               <>
                 <form
                   onSubmit={onAddLine}
-                  className="grid gap-4 sm:grid-cols-[1fr_140px_140px_auto] sm:items-end"
+                  className="grid gap-4 sm:grid-cols-[1fr_140px_140px_160px_auto] sm:items-end"
                 >
                   <Field label="Component" htmlFor="component">
                     <ItemSelect
                       id="component"
                       items={items.data}
                       value={lineComponentId}
-                      onChange={setLineComponentId}
+                      onChange={(id) => {
+                        setLineComponentId(id);
+                        setLineUnitId("");
+                        setLineUnitQuantity("");
+                      }}
                       excludeId={bomDetail.data.item_id}
                       required
                     />
                   </Field>
-                  <Field label="Quantity" htmlFor="qty">
+                  <Field label={lineUnitId ? "Quantity (in unit)" : "Quantity"} htmlFor="qty">
                     <Input
                       id="qty"
                       type="number"
                       step="0.0001"
                       min="0.0001"
-                      max={MAX_LINE_QUANTITY}
-                      value={lineQuantity}
-                      onChange={(e) => setLineQuantity(e.target.value)}
+                      max={lineUnitId ? undefined : MAX_LINE_QUANTITY}
+                      value={lineUnitId ? lineUnitQuantity : lineQuantity}
+                      onChange={(e) =>
+                        lineUnitId ? setLineUnitQuantity(e.target.value) : setLineQuantity(e.target.value)
+                      }
                       required
                     />
                   </Field>
@@ -656,6 +750,58 @@ export function Boms() {
                       onChange={(e) => setLineScrapPct(e.target.value)}
                       title="Expected material loss for this component - MRP orders this much extra"
                     />
+                  </Field>
+                  <Field label="Unit" htmlFor="line-unit">
+                    {showNewUnit ? (
+                      <div className="flex gap-1">
+                        <Input
+                          placeholder="code"
+                          value={newUnitCode}
+                          onChange={(e) => setNewUnitCode(e.target.value)}
+                        />
+                        <Input
+                          type="number"
+                          step="0.000001"
+                          min="0.000001"
+                          placeholder="factor"
+                          value={newUnitFactor}
+                          onChange={(e) => setNewUnitFactor(e.target.value)}
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="secondary"
+                          disabled={!newUnitCode || !newUnitFactor}
+                          loading={createUnit.isPending}
+                          onClick={() => createUnit.mutate()}
+                        >
+                          <Layers className="size-4" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <select
+                        id="line-unit"
+                        className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                        disabled={!lineComponentId}
+                        value={lineUnitId}
+                        onChange={(e) => {
+                          if (e.target.value === "__new__") {
+                            setShowNewUnit(true);
+                            setLineUnitId("");
+                          } else {
+                            setLineUnitId(e.target.value);
+                          }
+                        }}
+                      >
+                        <option value="">base unit</option>
+                        {componentUnits.data?.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.code}
+                          </option>
+                        ))}
+                        <option value="__new__">+ New unit...</option>
+                      </select>
+                    )}
                   </Field>
                   <Button type="submit" variant="secondary" loading={addLine.isPending}>
                     Add line

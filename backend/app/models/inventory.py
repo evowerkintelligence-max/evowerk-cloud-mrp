@@ -80,6 +80,13 @@ class InventoryTransaction(Base):
     quantity_delta: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     # e.g. "production" | "scrap" | "shipment" | "cycle count" - free text.
     reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Populated only when transaction_type="adjustment" and the adjustment came
+    # from POST /inventory/{item_id}/count - null for every other path
+    # (raw /adjust, consume, transfer, receipt).
+    counted_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    expected_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    # Elaboration for reason="other"; optional for every other reason code.
+    reason_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Set only for transaction_type="receipt": which PO receiving event fed this
     # movement. Nullable - consumptions and adjustments have no source receipt.
     source_receipt_line_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -90,3 +97,45 @@ class InventoryTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+
+class InventoryAdjustmentRequest(Base):
+    """A manager-submitted adjust/count whose |delta| exceeded the org's
+    adjust_approval_threshold, parked here until an owner approves or rejects
+    it. Approval replays quantity_delta through apply_inventory_delta, so the
+    same non-negative guard that protects every other inventory write also
+    protects a stale approval (on-hand dropped between submission and review)
+    - see apply_inventory_delta's docstring, no separate guard needed here.
+    """
+
+    __tablename__ = "inventory_adjustment_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("items.id"), nullable=False, index=True
+    )
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("locations.id", ondelete="CASCADE"), nullable=False
+    )
+    quantity_delta: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    # Set only when submitted via POST /inventory/{item_id}/count.
+    counted_quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    # Snapshot of on-hand at submission time, for display only - approval
+    # re-checks live on-hand via apply_inventory_delta's guard, not this.
+    expected_quantity_at_submit: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # pending | approved | rejected
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    requested_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(500), nullable=True)

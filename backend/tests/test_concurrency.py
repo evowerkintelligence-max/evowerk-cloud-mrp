@@ -286,3 +286,87 @@ async def test_concurrent_po_creation_never_duplicates_numbers(pg_client):
     numbers = [r.json()["po_number"] for r in results if r.status_code == 201]
     assert len(numbers) == len(set(numbers)), f"duplicate po_numbers: {sorted(numbers)}"
     assert numbers, "expected at least one PO to be created"
+
+
+async def test_concurrent_mutual_reference_activate_never_creates_a_live_cycle(pg_client):
+    """Draft A -> B and draft B -> A racing to activate. Without the org-wide
+    for_update lock in activate_bom, both requests could read the other side as
+    still-draft (invisible to the active-only cycle walk) before either commits,
+    and both activate - a real cycle in the graph MRP explosion walks. The lock
+    serializes them: the second sees the first's committed status and is
+    rejected, so exactly one side ever ends up active."""
+    headers = await _auth(pg_client)
+    item_a = await _item(pg_client, headers, sku="CYC-A")
+    item_b = await _item(pg_client, headers, sku="CYC-B")
+
+    bom_a = (await pg_client.post("/boms", json={"item_id": item_a["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/boms/{bom_a['id']}",
+        json={
+            "lines": [{"component_item_id": item_b["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_a["updated_at"],
+        },
+        headers=headers,
+    )
+    bom_b = (await pg_client.post("/boms", json={"item_id": item_b["id"]}, headers=headers)).json()
+    await pg_client.patch(
+        f"/boms/{bom_b['id']}",
+        json={
+            "lines": [{"component_item_id": item_a["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_b["updated_at"],
+        },
+        headers=headers,
+    )
+
+    results = await asyncio.gather(
+        pg_client.post(f"/boms/{bom_a['id']}/activate", headers=headers),
+        pg_client.post(f"/boms/{bom_b['id']}/activate", headers=headers),
+    )
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], statuses
+
+    detail_a = await pg_client.get(f"/boms/{bom_a['id']}", headers=headers)
+    detail_b = await pg_client.get(f"/boms/{bom_b['id']}", headers=headers)
+    # Exactly one side is active, the loser stays draft - never both, which
+    # would mean a real cycle got committed into the active-BOM graph.
+    assert sorted([detail_a.json()["status"], detail_b.json()["status"]]) == ["active", "draft"]
+
+
+async def test_concurrent_patch_same_bom_only_one_wins_via_row_version_cas(pg_client):
+    """Two PATCHes load the same draft BOM (same expected_updated_at) and fire
+    concurrently. The Python-level expected_updated_at pre-check can't catch
+    this alone - both can pass it before either flushes. Bom.row_version
+    (version_id_col) is the real guard for that gap: the loser's flush hits a
+    changed row_version, raises StaleDataError, and is converted to a clean
+    409 instead of silently clobbering the winner's write."""
+    headers = await _auth(pg_client)
+    item = await _item(pg_client, headers, sku="FG-CAS")
+    comp_x = await _item(pg_client, headers, sku="RAW-X")
+    comp_y = await _item(pg_client, headers, sku="RAW-Y")
+    bom = (await pg_client.post("/boms", json={"item_id": item["id"]}, headers=headers)).json()
+
+    results = await asyncio.gather(
+        pg_client.patch(
+            f"/boms/{bom['id']}",
+            json={
+                "lines": [{"component_item_id": comp_x["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom["updated_at"],
+            },
+            headers=headers,
+        ),
+        pg_client.patch(
+            f"/boms/{bom['id']}",
+            json={
+                "lines": [{"component_item_id": comp_y["id"], "quantity": "1", "sequence": 0}],
+                "expected_updated_at": bom["updated_at"],
+            },
+            headers=headers,
+        ),
+    )
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], statuses
+
+    # The winner's write landed cleanly - exactly one line, not a merge or
+    # duplicate of both concurrent edits.
+    winner = next(r for r in results if r.status_code == 200).json()
+    assert len(winner["lines"]) == 1

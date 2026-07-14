@@ -7,6 +7,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, require_role
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.middleware.rate_limit import rate_limit

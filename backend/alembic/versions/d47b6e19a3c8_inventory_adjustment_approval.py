@@ -1,7 +1,7 @@
 """inventory adjustment approval
 
 Revision ID: d47b6e19a3c8
-Revises: c8a1e5f93d64
+Revises: 80403c683082
 Create Date: 2026-07-15
 
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "d47b6e19a3c8"  # pragma: allowlist secret
-down_revision = "c8a1e5f93d64"  # pragma: allowlist secret
+down_revision = "80403c683082"  # pragma: allowlist secret
 branch_labels = None
 depends_on = None
 

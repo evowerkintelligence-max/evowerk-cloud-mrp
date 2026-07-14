@@ -4,7 +4,18 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -21,10 +32,52 @@ class Supplier(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Deactivated suppliers stay on past POs (FK is ON DELETE CASCADE, not
+    # used for this) but drop out of "pick a supplier" pickers - see
+    # list_suppliers' active_only filter in app.api.routes.suppliers.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    address_line1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    address_line2: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    payment_terms_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Expected days from PO submit to delivery - used to default a new PO's
+    # expected_delivery_date when the caller doesn't supply one. See
+    # app.api.routes.purchase_orders.create_purchase_order and
+    # app.api.routes.forecasts._new_draft_po.
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Freeform, user-typed - same JSON-list convention as Kpi.tags
+    # (app.models.kpi). No dedicated array type: SQLite (used by the
+    # in-memory test suite) can't compile a native array column.
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+
+class SupplierContact(Base):
+    __tablename__ = "supplier_contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Not DB-enforced as unique-per-supplier (a partial unique index would
+    # need its own transaction to swap primaries atomically). The API
+    # enforces "at most one primary" by unsetting any existing primary in
+    # the same transaction when a new one is marked - see
+    # app.api.routes.suppliers._unset_existing_primary.
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class PurchaseOrder(Base):
@@ -112,3 +165,10 @@ class PurchaseOrderReceiptLine(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # Portion of `quantity` that failed inspection - not additional to it.
+    # Only quantity - quantity_rejected is applied to inventory/lot stock
+    # (see receive_purchase_order); the full `quantity` still counts toward
+    # PurchaseOrderLine.quantity_received, closing out the ordered amount -
+    # a rejected unit still closes the line, a replacement is a new PO.
+    quantity_rejected: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal(0))
+    reject_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)

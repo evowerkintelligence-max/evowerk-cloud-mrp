@@ -86,6 +86,29 @@ async def test_save_chart_and_fetch_data(client):
     assert rows == {"A-1": 13.0, "A-2": 5.0}
 
 
+async def test_list_charts_scoped_to_org(client):
+    token_a = await _register_and_login(client, email="la@example.com", org_name="ListOrgA")
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    dataset_a = await _upload(client, token_a)
+    chart_a = await client.post(
+        "/bi/charts", headers=headers_a, json={**_chart_body(dataset_a), "name": "A's chart"}
+    )
+    assert chart_a.status_code == 201
+
+    token_b = await _register_and_login(client, email="lb@example.com", org_name="ListOrgB")
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+    dataset_b = await _upload(client, token_b)
+    chart_b = await client.post(
+        "/bi/charts", headers=headers_b, json={**_chart_body(dataset_b), "name": "B's chart"}
+    )
+    assert chart_b.status_code == 201
+
+    listed_a = await client.get("/bi/charts", headers=headers_a)
+    assert listed_a.status_code == 200
+    names_a = {c["name"] for c in listed_a.json()}
+    assert names_a == {"A's chart"}
+
+
 async def test_dashboard_crud_with_charts(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

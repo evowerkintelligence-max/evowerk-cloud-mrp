@@ -8,27 +8,18 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.bom import Item
-from app.models.report_spec import SavedReport
-from app.services import datasets as ds_service
-from app.services.mrp import resolve_horizon
-from app.services.rca import DIMENSIONS
+from app.models.report_spec import ReportInboxItem, SavedReport
 from app.services.reports import (
     FORMATS,
     KINDS,
     NARRATION_STYLES,
-    Report,
     ReportNarration,
     ReportSectionSpec,
     build_custom_report,
-    build_dataset_report,
-    build_inventory_analytics_report,
-    build_mrp_plan_report,
-    build_rca_report,
-    build_scenario_report,
+    build_report_by_kind,
     get_saved_report_or_404,
     list_saved_reports,
     narrate_report,
@@ -39,79 +30,6 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 # HTML is a document to look at; CSV and PDF are files to keep.
 _INLINE_FORMATS = ("html",)
-
-
-async def _parse_lead_times(
-    db: AsyncSession, org_id: uuid.UUID, raw: str | None
-) -> dict[uuid.UUID, int]:
-    """`lead_times=<item_id>:<days>,<item_id>:<days>` - the scenario report's
-    overrides live in the query string so a report is one GET and downloads
-    from a plain link, like every other kind."""
-    if not raw or not raw.strip():
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "scenario reports need lead_times=<item_id>:<days>[,<item_id>:<days>]",
-        )
-
-    overrides: dict[uuid.UUID, int] = {}
-    for pair in raw.split(","):
-        item_raw, sep, days_raw = pair.strip().partition(":")
-        if not sep:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Malformed lead_times entry: {pair}")
-        try:
-            item_id = uuid.UUID(item_raw)
-        except ValueError:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid item_id: {item_raw}") from None
-        try:
-            days = int(days_raw)
-        except ValueError:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid lead time: {days_raw}") from None
-        if days < 0:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"lead_time_days must be non-negative (item {item_raw})"
-            )
-        overrides[item_id] = days
-
-    found = (
-        await db.execute(select(Item.id).where(Item.org_id == org_id, Item.id.in_(overrides.keys())))
-    ).scalars().all()
-    missing = overrides.keys() - set(found)
-    if missing:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, f"Unknown item(s) for this org: {', '.join(str(m) for m in missing)}"
-        )
-    return overrides
-
-
-async def _build(
-    db: AsyncSession,
-    org_id: uuid.UUID,
-    kind: str,
-    *,
-    horizon_start: date | None,
-    horizon_end: date | None,
-    dimension: str,
-    lead_times: str | None,
-    dataset_id: str | None,
-) -> Report:
-    if kind == "mrp-plan":
-        hs, he = resolve_horizon(horizon_start, horizon_end)
-        return await build_mrp_plan_report(db, org_id, hs, he)
-    if kind == "inventory-analytics":
-        return await build_inventory_analytics_report(db, org_id)
-    if kind == "rca":
-        if dimension not in DIMENSIONS:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"dimension must be one of {sorted(DIMENSIONS)}"
-            )
-        return await build_rca_report(db, org_id, dimension)
-    if kind == "dataset":
-        if not dataset_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "dataset reports need dataset_id")
-        dataset = await ds_service.resolve_dataset(db, org_id, dataset_id)
-        return await build_dataset_report(db, org_id, dataset)
-    # kind == "scenario" - validated by the caller against KINDS.
-    return await build_scenario_report(db, org_id, await _parse_lead_times(db, org_id, lead_times))
 
 
 class SavedReportWriteRequest(BaseModel):
@@ -131,6 +49,25 @@ def _saved_report_to_response(r: SavedReport) -> SavedReportResponse:
     return SavedReportResponse(
         id=str(r.id), name=r.name, sections=r.sections,
         created_at=r.created_at.isoformat(), updated_at=r.updated_at.isoformat(),
+    )
+
+
+class InboxItemCreateRequest(ReportSectionSpec):
+    label: str
+
+
+class InboxItemResponse(BaseModel):
+    id: str
+    label: str
+    spec: dict
+    created_by: str
+    created_at: str
+
+
+def _inbox_item_to_response(item: ReportInboxItem) -> InboxItemResponse:
+    return InboxItemResponse(
+        id=str(item.id), label=item.label, spec=item.spec,
+        created_by=str(item.created_by), created_at=item.created_at.isoformat(),
     )
 
 
@@ -189,7 +126,7 @@ async def update_custom_report(
 
 @router.delete("/custom/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_custom_report(
-    report_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    report_id: uuid.UUID, current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
     report = await get_saved_report_or_404(db, current.org_id, report_id)
     await db.delete(report)
@@ -210,7 +147,7 @@ async def render_custom_report(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"format must be one of {sorted(FORMATS)}")
     saved = await get_saved_report_or_404(db, current.org_id, report_id)
     sections = [ReportSectionSpec.model_validate(s) for s in saved.sections]
-    report = await build_custom_report(db, current.org_id, saved.name, sections)
+    report = await build_custom_report(db, current, saved.name, sections)
     disposition = "inline" if format in _INLINE_FORMATS else "attachment"
     return Response(
         content=render(report, format),
@@ -230,8 +167,58 @@ async def narrate_custom_report(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"style must be one of {NARRATION_STYLES}")
     saved = await get_saved_report_or_404(db, current.org_id, report_id)
     sections = [ReportSectionSpec.model_validate(s) for s in saved.sections]
-    report = await build_custom_report(db, current.org_id, saved.name, sections)
+    report = await build_custom_report(db, current, saved.name, sections)
     return await narrate_report(report, style)
+
+
+# Registered ahead of GET /{kind} below - same reasoning as /custom above: a
+# literal path must be registered before the /{kind} wildcard or it gets
+# shadowed by it.
+@router.post("/inbox", response_model=InboxItemResponse, status_code=status.HTTP_201_CREATED)
+async def create_inbox_item(
+    req: InboxItemCreateRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    spec = ReportSectionSpec(**req.model_dump(exclude={"label"}))
+    item = ReportInboxItem(
+        org_id=current.org_id, created_by=current.id, label=req.label,
+        spec=spec.model_dump(mode="json"),
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return _inbox_item_to_response(item)
+
+
+@router.get("/inbox", response_model=list[InboxItemResponse])
+async def list_inbox_items(current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.execute(
+            select(ReportInboxItem)
+            .where(ReportInboxItem.org_id == current.org_id)
+            .order_by(ReportInboxItem.created_at.desc())
+        )
+    ).scalars().all()
+    return [_inbox_item_to_response(r) for r in rows]
+
+
+@router.delete("/inbox/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_inbox_item(
+    item_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    item = (
+        await db.execute(
+            select(ReportInboxItem).where(ReportInboxItem.id == item_id, ReportInboxItem.org_id == current.org_id)
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Inbox item not found")
+    if item.created_by != current.id and current.role != "owner":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the item's creator or an owner can delete it")
+    await db.delete(item)
+    await log_event(
+        db, action="report_inbox.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(item_id)
+    )
+    await db.commit()
 
 
 @router.get("/{kind}")
@@ -255,7 +242,7 @@ async def get_report(
     if format not in FORMATS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"format must be one of {sorted(FORMATS)}")
 
-    report = await _build(
+    report = await build_report_by_kind(
         db,
         current.org_id,
         kind,
@@ -290,7 +277,7 @@ async def narrate_report_kind(
     if style not in NARRATION_STYLES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"style must be one of {NARRATION_STYLES}")
 
-    report = await _build(
+    report = await build_report_by_kind(
         db,
         current.org_id,
         kind,

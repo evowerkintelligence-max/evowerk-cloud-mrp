@@ -271,6 +271,108 @@ export function useDatasets() {
   });
 }
 
+export interface ReportSectionSpecPayload {
+  type:
+    | "title" | "exec_summary" | "table" | "bi_chart"
+    | "findings" | "risks" | "recommendations" | "caveats" | "text"
+    | "engine" | "kind_report" | "rca_case" | "sql";
+  title?: string;
+  text?: string;
+  items?: string[];
+  dataset_id?: string;
+  // unknown, not Record<string, unknown>: callers pass through whatever
+  // useQueryBuilder().toRequestBody() or a Scenario's base_query already
+  // produced (inferred object-literal shapes), and this button only ever
+  // JSON.stringifies the whole spec - it never reads into `query` itself.
+  query?: unknown;
+  chart_id?: string;
+  engine_path?: string;
+  engine_body?: Record<string, unknown>;
+  report_kind?: string;
+  report_params?: Record<string, unknown>;
+  case_id?: string;
+  sql_text?: string;
+}
+
+export interface InboxItem {
+  id: string;
+  label: string;
+  spec: ReportSectionSpecPayload;
+  created_by: string;
+  created_at: string;
+}
+
+export function useInbox() {
+  return useQuery<InboxItem[]>({
+    queryKey: ["report-inbox"],
+    queryFn: async () => {
+      const res = await apiFetch("/reports/inbox");
+      if (!res.ok) throw new Error("Failed to load report inbox");
+      return res.json();
+    },
+  });
+}
+
+export interface CurrentUser {
+  user_id: string;
+  role: string;
+}
+
+// Shares the ["org-me"] cache with AppShell's org query - same endpoint, no extra fetch.
+export function useCurrentUser() {
+  return useQuery<CurrentUser>({
+    queryKey: ["org-me"],
+    queryFn: async () => {
+      const res = await apiFetch("/orgs/me");
+      if (!res.ok) throw new Error("Failed to load current user");
+      return res.json();
+    },
+  });
+}
+
+export function SendToReportButton({ spec, label }: { spec: ReportSectionSpecPayload; label: string }) {
+  const qc = useQueryClient();
+  const send = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/reports/inbox", {
+        method: "POST",
+        body: JSON.stringify({ label, ...spec }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to send to report");
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["report-inbox"] }),
+  });
+
+  if (send.isSuccess) {
+    return <span className="text-sm text-muted-foreground">Sent to report inbox.</span>;
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <Button variant="secondary" size="sm" loading={send.isPending} onClick={() => send.mutate()}>
+        Send to report
+      </Button>
+      {send.isError && <span className="text-sm text-destructive">{(send.error as Error).message}</span>}
+    </div>
+  );
+}
+
+export interface ChartSummary {
+  id: string;
+  name: string;
+}
+
+export function useCharts() {
+  return useQuery<ChartSummary[]>({
+    queryKey: ["charts"],
+    queryFn: async () => {
+      const res = await apiFetch("/bi/charts");
+      if (!res.ok) throw new Error("Failed to load charts");
+      return res.json();
+    },
+  });
+}
+
 export function EngineScreen<T>({
   title,
   description,
@@ -338,6 +440,8 @@ export function EngineScreen<T>({
     onError: (e: Error) => setError(e.message),
   });
 
+  const lastComputeBody = useRef<Record<string, unknown> | null>(null);
+
   const compute = useMutation({
     mutationFn: async () => {
       const body: Record<string, unknown> = { dataset_id: datasetId };
@@ -347,6 +451,7 @@ export function EngineScreen<T>({
         else if (f.kind === "select") body[f.key] = v || f.options?.[0];
         else if (v) body[f.key] = v;
       }
+      lastComputeBody.current = body;
       const res = await apiFetch(path, { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Compute failed");
       return res.json() as Promise<T>;
@@ -441,7 +546,15 @@ export function EngineScreen<T>({
         </Card>
       )}
 
-      {result !== null && children(result)}
+      {result !== null && (
+        <>
+          {children(result)}
+          <SendToReportButton
+            spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
+            label={`${title} — ${new Date().toLocaleString()}`}
+          />
+        </>
+      )}
     </div>
   );
 }

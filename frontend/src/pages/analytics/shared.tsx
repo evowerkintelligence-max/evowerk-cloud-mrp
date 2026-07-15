@@ -271,6 +271,75 @@ export function useDatasets() {
   });
 }
 
+export interface ReportSectionSpecPayload {
+  type:
+    | "title" | "exec_summary" | "table" | "bi_chart"
+    | "findings" | "risks" | "recommendations" | "caveats" | "text"
+    | "engine" | "kind_report" | "rca_case" | "sql";
+  title?: string;
+  text?: string;
+  items?: string[];
+  dataset_id?: string;
+  // unknown, not Record<string, unknown>: callers pass through whatever
+  // useQueryBuilder().toRequestBody() or a Scenario's base_query already
+  // produced (inferred object-literal shapes), and this button only ever
+  // JSON.stringifies the whole spec - it never reads into `query` itself.
+  query?: unknown;
+  chart_id?: string;
+  engine_path?: string;
+  engine_body?: Record<string, unknown>;
+  report_kind?: string;
+  report_params?: Record<string, unknown>;
+  case_id?: string;
+  sql_text?: string;
+}
+
+export interface InboxItem {
+  id: string;
+  label: string;
+  spec: ReportSectionSpecPayload;
+  created_by: string;
+  created_at: string;
+}
+
+export function useInbox() {
+  return useQuery<InboxItem[]>({
+    queryKey: ["report-inbox"],
+    queryFn: async () => {
+      const res = await apiFetch("/reports/inbox");
+      if (!res.ok) throw new Error("Failed to load report inbox");
+      return res.json();
+    },
+  });
+}
+
+export function SendToReportButton({ spec, label }: { spec: ReportSectionSpecPayload; label: string }) {
+  const qc = useQueryClient();
+  const send = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/reports/inbox", {
+        method: "POST",
+        body: JSON.stringify({ label, ...spec }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to send to report");
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["report-inbox"] }),
+  });
+
+  if (send.isSuccess) {
+    return <span className="text-sm text-muted-foreground">Sent to report inbox.</span>;
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <Button variant="secondary" size="sm" loading={send.isPending} onClick={() => send.mutate()}>
+        Send to report
+      </Button>
+      {send.isError && <span className="text-sm text-destructive">{(send.error as Error).message}</span>}
+    </div>
+  );
+}
+
 export interface ChartSummary {
   id: string;
   name: string;

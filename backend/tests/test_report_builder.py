@@ -474,3 +474,57 @@ async def test_kind_report_section_rejects_unknown_kind(client):
 
     res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
     assert res.status_code == 400
+
+
+async def test_rca_case_section_renders_causes_and_actions(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    case = await client.post(
+        "/rca-cases/cases", headers=headers,
+        json={"dataset_id": dataset_id, "title": "Line 3 OEE drop", "problem_statement": "OEE fell 15pts"},
+    )
+    assert case.status_code == 201
+    case_id = case.json()["id"]
+
+    node = await client.post(
+        f"/rca-cases/cases/{case_id}/nodes", headers=headers,
+        json={"text": "Changeover took too long", "node_type": "cause"},
+    )
+    assert node.status_code == 201
+
+    action = await client.post(
+        f"/rca-cases/cases/{case_id}/actions", headers=headers,
+        json={"description": "Standardize changeover checklist"},
+    )
+    assert action.status_code == 201
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "RCA case capture", "sections": [{"type": "rca_case", "case_id": case_id}]},
+    )
+    assert created.status_code == 201
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 200, res.text
+    assert b"Changeover took too long" in res.content
+    assert b"Standardize changeover checklist" in res.content
+
+
+async def test_rca_case_section_404s_on_unknown_case(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "Bad case",
+            "sections": [{"type": "rca_case", "case_id": "00000000-0000-0000-0000-000000000000"}],
+        },
+    )
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 404

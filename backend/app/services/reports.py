@@ -30,6 +30,7 @@ from app.models.tenant import Org
 from app.services import dataset_query as query_service
 from app.services import datasets as ds_service
 from app.services import llm
+from app.services import rca_cases as rca_cases_service
 from app.services import sql_query as sql_query_service
 from app.services.inventory_analytics import compute_inventory_analytics
 from app.services.mrp import compute_mrp_plan, resolve_horizon
@@ -705,6 +706,37 @@ async def _resolve_kind_report_sections(db: AsyncSession, org_id: uuid.UUID, spe
     return report.sections
 
 
+async def _resolve_rca_case_sections(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> list[Section]:
+    if spec.case_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "'rca_case' section needs case_id")
+    try:
+        case = await rca_cases_service.get_case_or_404(db, org_id, spec.case_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    nodes = await rca_cases_service.list_nodes(db, org_id, spec.case_id)
+    actions = await rca_cases_service.list_actions(db, org_id, spec.case_id)
+
+    causes = Section(
+        title=spec.title or f"{case.title} — Causes",
+        columns=["Text", "Type", "Category", "Status"],
+        rows=[[n.text, n.node_type, n.category or EM_DASH, n.status] for n in nodes] or [[EM_DASH] * 4],
+    )
+    actions_section = Section(
+        title=f"{case.title} — Actions",
+        columns=["Description", "Owner", "Status", "OEE Δ"],
+        rows=[
+            [
+                a.description,
+                a.owner or EM_DASH,
+                a.status,
+                _num(a.verification["delta_oee"]) if a.verification else EM_DASH,
+            ]
+            for a in actions
+        ] or [[EM_DASH] * 4],
+    )
+    return [causes, actions_section]
+
+
 async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: ReportSectionSpec) -> list[Section]:
     org_id = current.org_id
 
@@ -775,7 +807,7 @@ async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: Report
         return await _resolve_kind_report_sections(db, org_id, spec)
 
     # spec.type == "rca_case"
-    return await _resolve_rca_case_sections(db, org_id, spec)  # noqa: F821 - added in Task 6
+    return await _resolve_rca_case_sections(db, org_id, spec)
 
 
 async def build_custom_report(

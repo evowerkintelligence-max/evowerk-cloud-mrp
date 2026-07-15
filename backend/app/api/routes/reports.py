@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user
+from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
@@ -189,7 +189,7 @@ async def update_custom_report(
 
 @router.delete("/custom/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_custom_report(
-    report_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    report_id: uuid.UUID, current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
     report = await get_saved_report_or_404(db, current.org_id, report_id)
     await db.delete(report)

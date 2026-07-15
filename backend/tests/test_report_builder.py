@@ -242,6 +242,46 @@ async def test_narrate_custom_report_cross_org_isolation(client):
     assert res.status_code == 404
 
 
+async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    token = await _register_and_login(client, email="rbowner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "Owned by owner", "sections": [{"type": "text", "text": "hi"}]},
+    )
+    report_id = created.json()["id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        import uuid as uuid_module
+
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="rbmember@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+    login = await client.post("/auth/login", json={"email": "rbmember@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    res = await client.delete(f"/reports/custom/{report_id}", headers=member_headers)
+    assert res.status_code == 403
+    assert (await client.get(f"/reports/custom/{report_id}", headers=headers)).status_code == 200
+
+
 async def test_cross_org_isolation_on_custom_report(client):
     token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
     headers_a = {"Authorization": f"Bearer {token_a}"}

@@ -104,6 +104,19 @@ def _validate_chart_type(chart_type: str) -> None:
 
 # ─── Charts ─────────────────────────────────────────────────────────────────
 
+@router.get("/charts", response_model=list[ChartResponse])
+async def list_charts(
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(Chart).where(Chart.org_id == current.org_id).order_by(Chart.name)
+        )
+    ).scalars().all()
+    return [_chart_to_response(c) for c in rows]
+
+
 @router.post("/charts/preview", response_model=ChartDataResponse)
 async def preview_chart(
     req: ChartPreviewRequest,

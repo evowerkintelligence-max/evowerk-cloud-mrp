@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { FileStack } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { useDatasets } from "./analytics/shared";
+import { useCharts, useDatasets } from "./analytics/shared";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
@@ -102,6 +102,7 @@ function sectionSummary(s: Record<string, unknown>): string {
 export function ReportBuilder() {
   const qc = useQueryClient();
   const datasets = useDatasets();
+  const charts = useCharts();
 
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [name, setName] = useState("");
@@ -111,6 +112,16 @@ export function ReportBuilder() {
   const [error, setError] = useState<string | null>(null);
   const [narrationStyle, setNarrationStyle] = useState<NarrationStyle>("narrative");
   const [narration, setNarration] = useState<ReportNarration | null>(null);
+
+  const queryJsonError = useMemo(() => {
+    if (!QUERY_TYPES.has(sectionDraft.type)) return null;
+    try {
+      JSON.parse(sectionDraft.queryText || "{}");
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }, [sectionDraft.type, sectionDraft.queryText]);
 
   const reports = useQuery<SavedReportSummary[]>({
     queryKey: ["saved-reports"],
@@ -458,23 +469,34 @@ export function ReportBuilder() {
                 hint='DatasetQueryRequest shape, e.g. {"select":[{"column":"sku"},{"column":"qty","agg":"sum","alias":"total_qty"}],"group_by":["sku"]}'
               >
                 <textarea
-                  className="h-32 w-full rounded-md border border-input bg-background/60 p-2 font-mono text-xs"
+                  className={`h-32 w-full rounded-md border bg-background/60 p-2 font-mono text-xs ${
+                    queryJsonError ? "border-destructive" : "border-input"
+                  }`}
                   value={sectionDraft.queryText}
                   onChange={(e) => setSectionDraft((d) => ({ ...d, queryText: e.target.value }))}
                 />
+                {queryJsonError && <p className="mt-1 text-xs text-destructive">Invalid JSON: {queryJsonError}</p>}
               </Field>
             </>
           )}
 
           {sectionDraft.type === "bi_chart" && (
-            <Field label="Chart id" hint="copy from the BI Dashboards page">
-              <Input value={sectionDraft.chart_id} onChange={(e) => setSectionDraft((d) => ({ ...d, chart_id: e.target.value }))} />
+            <Field label="Chart">
+              <Select
+                value={sectionDraft.chart_id}
+                onChange={(e) => setSectionDraft((d) => ({ ...d, chart_id: e.target.value }))}
+              >
+                <option value="">Select a chart…</option>
+                {charts.data?.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
             </Field>
           )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => setEditingSectionIndex(null)}>Cancel</Button>
-            <Button onClick={confirmSection}>Save section</Button>
+            <Button disabled={!!queryJsonError} onClick={confirmSection}>Save section</Button>
           </div>
         </div>
       </Dialog>

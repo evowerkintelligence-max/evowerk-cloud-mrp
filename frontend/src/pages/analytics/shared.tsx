@@ -271,6 +271,22 @@ export function useDatasets() {
   });
 }
 
+export interface ChartSummary {
+  id: string;
+  name: string;
+}
+
+export function useCharts() {
+  return useQuery<ChartSummary[]>({
+    queryKey: ["charts"],
+    queryFn: async () => {
+      const res = await apiFetch("/bi/charts");
+      if (!res.ok) throw new Error("Failed to load charts");
+      return res.json();
+    },
+  });
+}
+
 export function EngineScreen<T>({
   title,
   description,

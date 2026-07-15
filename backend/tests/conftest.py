@@ -36,6 +36,7 @@ from app.models import (  # noqa: F401 - register models
     location,
     lot,
     maintenance_schedule,
+    pace_tracking,
     procurement,
     rca_case,
     realtime,

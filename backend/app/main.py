@@ -27,6 +27,7 @@ from app.api.routes import (
     mfg_forecast,
     oee,
     orgs,
+    pace_tracking,
     plant_summary,
     predictive,
     process_mining,
@@ -93,6 +94,7 @@ app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
 app.include_router(datasets.router)
 app.include_router(oee.router)
+app.include_router(pace_tracking.router)
 app.include_router(plant_summary.router)
 app.include_router(downtime.router)
 app.include_router(throughput.router)

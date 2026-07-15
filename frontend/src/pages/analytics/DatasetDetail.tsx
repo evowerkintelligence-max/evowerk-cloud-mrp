@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { SqlCodeEditor, type SqlColumn, type SqlColumnDtype } from "@/components/SqlCodeEditor";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -945,7 +946,6 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
 
 function SqlPanel({ d }: { d: DatasetDetail }) {
   const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 100`);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Same query key as Schema/HealthPanel, so this is a no-op fetch if either tab
   // was already visited. inferred_dtype (not c.dtype, which is always VARCHAR for
@@ -959,21 +959,10 @@ function SqlPanel({ d }: { d: DatasetDetail }) {
     },
   });
   const inferredByColumn = new Map(health.data?.columns.map((c) => [c.name, c.inferred_dtype]));
-
-  function insertColumn(name: string) {
-    const dtype = inferredByColumn.get(name);
-    const token =
-      dtype === "numeric" ? `CAST(${name} AS DOUBLE)` : dtype === "datetime" ? `CAST(${name} AS TIMESTAMP)` : name;
-    const el = textareaRef.current;
-    const start = el?.selectionStart ?? sql.length;
-    const end = el?.selectionEnd ?? sql.length;
-    const next = sql.slice(0, start) + token + sql.slice(end);
-    setSql(next);
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(start + token.length, start + token.length);
-    });
-  }
+  const sqlColumns: SqlColumn[] = d.columns.map((c) => ({
+    name: c.name,
+    dtype: (inferredByColumn.get(c.name) as SqlColumnDtype | undefined) ?? "text",
+  }));
 
   const query = useMutation({
     mutationFn: async () => {
@@ -993,31 +982,10 @@ function SqlPanel({ d }: { d: DatasetDetail }) {
           <CardTitle>SQL</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-1.5">
-            {d.columns.map((c) => (
-              <button
-                key={c.name}
-                type="button"
-                onClick={() => insertColumn(c.name)}
-                title={`Insert ${c.name}`}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 font-mono text-xs hover:border-primary hover:text-primary"
-              >
-                {c.name}
-                <Badge variant="neutral">{inferredByColumn.get(c.name) ?? c.dtype}</Badge>
-              </button>
-            ))}
-          </div>
-          <textarea
-            ref={textareaRef}
-            value={sql}
-            onChange={(e) => setSql(e.target.value)}
-            rows={8}
-            spellCheck={false}
-            className="w-full rounded-md border border-border bg-background p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-primary/40"
-          />
+          <SqlCodeEditor value={sql} onChange={setSql} columns={sqlColumns} />
           <p className="text-xs text-muted-foreground">
             Runs against a single read-only table named <code>dataset</code> — SELECT only, no joins to other
-            files. Click a column above to insert it — numeric/date columns insert pre-cast (
+            files. Start typing a column name for autocomplete — numeric/date columns insert pre-cast (
             <code>CAST(... AS DOUBLE)</code>).
           </p>
           <Button loading={query.isPending} onClick={() => query.mutate()}>

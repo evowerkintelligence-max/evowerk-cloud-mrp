@@ -1,6 +1,8 @@
 # backend/tests/test_pace_tracking.py
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -76,3 +78,63 @@ async def test_pace_state_machine_guards(client):
     assert res.status_code == 409
     res = await client.post(f"/pace/sessions/{session_id}/stop", headers=headers)
     assert res.status_code == 409
+
+
+async def test_pace_multi_cycle_pause_sums_not_overwrites(client):
+    token = await _register_and_login(client, "pacecycle@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = await _start_session(client, headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "breakdown"})
+    await asyncio.sleep(0.3)
+    await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "breakdown"})
+    await asyncio.sleep(0.1)
+    resumed = await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    unplanned = resumed.json()["unplanned_dt_min"]
+    expected_min = (0.3 + 0.1) / 60
+    # Both windows counted (not just the last ~0.1s one) - proves the SQL
+    # increment sums across pause/resume cycles instead of overwriting.
+    assert unplanned > expected_min * 0.5
+    assert unplanned < expected_min * 3
+
+
+async def test_pace_stop_while_paused_counts_open_pause_window(client):
+    token = await _register_and_login(client, "pacestopwhile@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = await _start_session(client, headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "setup"})
+    await asyncio.sleep(0.2)
+    # No resume call - stop must finalize the still-open pause window itself.
+    stopped = await client.post(f"/pace/sessions/{session_id}/stop", headers=headers)
+
+    assert stopped.status_code == 200
+    body = stopped.json()
+    assert body["status"] == "stopped"
+    assert body["planned_dt_min"] > 0
+
+
+async def test_pace_mixed_pause_reasons_tracked_separately(client):
+    token = await _register_and_login(client, "pacemixed@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = await _start_session(client, headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "breakdown"})
+    await asyncio.sleep(0.15)
+    await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "setup"})
+    await asyncio.sleep(0.1)
+    await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "other"})
+    await asyncio.sleep(0.1)
+    resumed = await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    body = resumed.json()
+    assert body["unplanned_dt_min"] > 0
+    assert body["planned_dt_min"] > 0
+    assert body["other_dt_min"] > 0

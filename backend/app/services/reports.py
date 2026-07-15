@@ -7,14 +7,21 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser
+from app.api.routes.downtime import DowntimeAnalyzeRequest, analyze_downtime
+from app.api.routes.oee import OeeComputeRequest, oee_compute
+from app.api.routes.plant_summary import PlantSummaryRequest, plant_summary
+from app.api.routes.scrap import ScrapComputeRequest, compute_scrap
+from app.api.routes.shifts import ShiftAnalyzeRequest, analyze_shifts
+from app.api.routes.spc import SPCRequest, analyze_spc
+from app.api.routes.throughput import ThroughputComputeRequest, compute_throughput
 from app.models.bom import Item
 from app.models.dashboard import Chart
 from app.models.dataset import Dataset
@@ -600,6 +607,88 @@ class ReportSectionSpec(BaseModel):
     sql_text: str | None = None
 
 
+def _cell(v: Any) -> str:
+    if v is None:
+        return EM_DASH
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    if isinstance(v, float):
+        return _num(v)
+    return str(v)
+
+
+def _flatten_response_to_sections(title: str, data: dict[str, Any]) -> list[Section]:
+    """Turn one analytics-engine response (already .model_dump()-ed) into
+    report Sections, with no per-engine field names hardcoded: scalar fields
+    join one "Summary" table; each list[dict] field becomes its own named
+    table; a nested dict (e.g. OEE's revenue_impact/teep/six_big_losses) is
+    flattened one level deep - its own scalars join the parent Summary under
+    a prefixed label, its own list[dict] fields become their own tables.
+    Empty/None fields are skipped so the Summary table isn't padded with
+    "not applicable for this dataset" rows."""
+    summary_rows: list[list[str]] = []
+    sections: list[Section] = []
+
+    def label(field: str) -> str:
+        return field.replace("_", " ").title()
+
+    def add_list(section_title: str, items: list) -> None:
+        if not items or not isinstance(items[0], dict):
+            return
+        columns = list(items[0].keys())
+        sections.append(Section(
+            title=section_title,
+            columns=[label(c) for c in columns],
+            rows=[[_cell(row.get(c)) for c in columns] for row in items],
+        ))
+
+    # named "key" (not "field") - "field" is already imported from dataclasses
+    # at module scope, and ruff's F402 flags a loop variable that shadows it.
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, list):
+            add_list(f"{title} — {label(key)}", value)
+        elif isinstance(value, dict):
+            for sub_field, sub_value in value.items():
+                if sub_value is None:
+                    continue
+                if isinstance(sub_value, list):
+                    add_list(f"{title} — {label(key)} — {label(sub_field)}", sub_value)
+                elif not isinstance(sub_value, dict):
+                    summary_rows.append([f"{label(key)}: {label(sub_field)}", _cell(sub_value)])
+        else:
+            summary_rows.append([label(key), _cell(value)])
+
+    if summary_rows:
+        sections.insert(0, Section(title=f"{title} — Summary", columns=["Metric", "Value"], rows=summary_rows))
+    return sections
+
+
+_ENGINE_HANDLERS: dict[str, tuple[type[BaseModel], Callable]] = {
+    "/analytics/oee": (OeeComputeRequest, oee_compute),
+    "/analytics/downtime": (DowntimeAnalyzeRequest, analyze_downtime),
+    "/analytics/throughput": (ThroughputComputeRequest, compute_throughput),
+    "/analytics/scrap": (ScrapComputeRequest, compute_scrap),
+    "/analytics/shifts": (ShiftAnalyzeRequest, analyze_shifts),
+    "/analytics/spc": (SPCRequest, analyze_spc),
+    "/analytics/plant-summary": (PlantSummaryRequest, plant_summary),
+}
+
+
+async def _resolve_engine_sections(db: AsyncSession, current: CurrentUser, spec: ReportSectionSpec) -> list[Section]:
+    if spec.engine_path not in _ENGINE_HANDLERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown engine_path: {spec.engine_path}")
+    request_model, handler = _ENGINE_HANDLERS[spec.engine_path]
+    try:
+        req = request_model.model_validate(spec.engine_body or {})
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid engine_body: {exc}") from exc
+    response = await handler(req, current, db)
+    title = spec.title or spec.engine_path.rsplit("/", 1)[-1].replace("-", " ").title()
+    return _flatten_response_to_sections(title, response.model_dump())
+
+
 async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: ReportSectionSpec) -> list[Section]:
     org_id = current.org_id
 
@@ -664,7 +753,7 @@ async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: Report
         )]
 
     if spec.type == "engine":
-        return await _resolve_engine_sections(db, current, spec)  # noqa: F821 - added in Task 4
+        return await _resolve_engine_sections(db, current, spec)
 
     if spec.type == "kind_report":
         return await _resolve_kind_report_sections(db, org_id, spec)  # noqa: F821 - added in Task 5

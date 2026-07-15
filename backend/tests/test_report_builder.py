@@ -320,6 +320,86 @@ async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
     assert (await client.get(f"/reports/custom/{report_id}", headers=headers)).status_code == 200
 
 
+async def test_engine_section_resolves_oee_into_summary_and_breakdown_tables(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(
+        client, token,
+        content=b"planned,operating,total,good,machine\n480,420,1000,950,M1\n480,400,900,850,M2\n",
+        filename="oee.csv",
+    )
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "OEE capture",
+            "sections": [{
+                "type": "engine", "title": "OEE",
+                "engine_path": "/analytics/oee",
+                "engine_body": {
+                    "dataset_id": dataset_id,
+                    "planned_time_col": "planned", "operating_time_col": "operating",
+                    "total_units_col": "total", "good_units_col": "good",
+                    "machine_col": "machine",
+                },
+            }],
+        },
+    )
+    assert created.status_code == 201
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 200, res.text
+    # a "Summary" table (scalar KPI fields) and a "Machines" table (the
+    # list[OeeMachineResult] field) should both have rendered as sections
+    assert b"OEE" in res.content
+    assert b"M1" in res.content
+    assert b"M2" in res.content
+
+
+async def test_engine_section_rejects_unknown_path(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "Bad engine",
+            "sections": [{"type": "engine", "engine_path": "/analytics/not-a-real-engine", "engine_body": {}}],
+        },
+    )
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 400
+
+
+async def test_flatten_response_to_sections_scalars_and_lists():
+    from app.services.reports import _flatten_response_to_sections
+
+    sections = _flatten_response_to_sections("Test", {
+        "oee": 72.5,
+        "performance_estimated": False,
+        "machines": [{"machine": "M1", "oee": 70.0}, {"machine": "M2", "oee": 75.0}],
+        "revenue_impact": {"unit_price": 2.5, "total_lost": 100.0, "per_machine": [{"machine": "M1", "total_lost": 50.0}]},
+        "trend": [],
+    })
+
+    titles = [s.title for s in sections]
+    assert "Test — Summary" in titles
+    assert "Test — Machines" in titles
+    assert "Test — Revenue Impact — Per Machine" in titles
+    # "trend" was an empty list - no section for it
+    assert not any("Trend" in t for t in titles)
+
+    summary = next(s for s in sections if s.title == "Test — Summary")
+    summary_labels = [row[0] for row in summary.rows]
+    assert "Oee" in summary_labels
+    assert "Performance Estimated" in summary_labels
+    # a nested dict's own scalar fields join the summary, prefixed
+    assert any("Revenue Impact" in label for label in summary_labels)
+
+
 async def test_cross_org_isolation_on_custom_report(client):
     token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
     headers_a = {"Authorization": f"Bearer {token_a}"}

@@ -423,6 +423,8 @@ export function EngineScreen<T>({
     onError: (e: Error) => setError(e.message),
   });
 
+  const lastComputeBody = useRef<Record<string, unknown> | null>(null);
+
   const compute = useMutation({
     mutationFn: async () => {
       const body: Record<string, unknown> = { dataset_id: datasetId };
@@ -432,6 +434,7 @@ export function EngineScreen<T>({
         else if (f.kind === "select") body[f.key] = v || f.options?.[0];
         else if (v) body[f.key] = v;
       }
+      lastComputeBody.current = body;
       const res = await apiFetch(path, { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Compute failed");
       return res.json() as Promise<T>;
@@ -526,7 +529,15 @@ export function EngineScreen<T>({
         </Card>
       )}
 
-      {result !== null && children(result)}
+      {result !== null && (
+        <>
+          {children(result)}
+          <SendToReportButton
+            spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
+            label={`${title} — ${new Date().toLocaleString()}`}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -13,6 +13,34 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 
+// ponytail: naive (no "Z"/offset) ISO string under SQLite (aiosqlite drops
+// tzinfo on DateTime(timezone=True) columns even though the value is UTC;
+// Postgres in prod keeps the offset) - new Date(...) would otherwise parse a
+// naive string as local time and throw the elapsed clock off by the
+// browser's UTC offset. Force UTC when no offset is present.
+export function asUtcMs(iso: string): number {
+  return new Date(/Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();
+}
+
+export function useElapsed(startedAt: string | undefined): string {
+  const [elapsed, setElapsed] = useState("00:00:00");
+  useEffect(() => {
+    if (!startedAt) return;
+    const started = asUtcMs(startedAt);
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      const h = String(Math.floor(s / 3600)).padStart(2, "0");
+      const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+      const sec = String(s % 60).padStart(2, "0");
+      setElapsed(`${h}:${m}:${sec}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  return elapsed;
+}
+
 const TV_REFRESH_MS = 30_000;
 
 // ─── Chart palette / defaults (copied from the desktop app) ──────────────────

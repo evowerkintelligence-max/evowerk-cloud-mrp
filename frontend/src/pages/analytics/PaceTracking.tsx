@@ -11,6 +11,7 @@ import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useElapsed } from "./shared";
 
 const STORAGE_KEY = "pace-tracking-session-id";
 const POLL_MS = 5000;
@@ -37,34 +38,6 @@ const PAUSE_LABELS: Record<string, string> = {
   setup: "Setup / Changeover",
   other: "Other",
 };
-
-// ponytail: the API returns a naive (no "Z"/offset) ISO string under SQLite
-// (aiosqlite drops tzinfo on DateTime(timezone=True) columns even though the
-// value is UTC; Postgres in prod keeps the offset) - `new Date(...)` would
-// otherwise parse a naive string as local time and throw the elapsed clock
-// off by the browser's UTC offset. Force UTC when no offset is present.
-function asUtcMs(iso: string): number {
-  return new Date(/Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();
-}
-
-function useElapsed(startedAt: string | undefined) {
-  const [elapsed, setElapsed] = useState("00:00:00");
-  useEffect(() => {
-    if (!startedAt) return;
-    const started = asUtcMs(startedAt);
-    const tick = () => {
-      const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
-      const h = String(Math.floor(s / 3600)).padStart(2, "0");
-      const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
-      const sec = String(s % 60).padStart(2, "0");
-      setElapsed(`${h}:${m}:${sec}`);
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
-  return elapsed;
-}
 
 export function PaceTracking() {
   const qc = useQueryClient();

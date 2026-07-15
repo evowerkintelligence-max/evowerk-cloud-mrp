@@ -1,6 +1,7 @@
 # backend/tests/test_downtime_tracking.py
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -241,3 +242,125 @@ async def test_discard_rejected_once_closed(client):
 
     res = await client.delete(f"/downtime-tracking/incidents/{incident_id}", headers=headers)
     assert res.status_code == 409
+
+
+async def test_materialization_accumulates_and_feeds_downtime_analytics(client):
+    token = await _register_and_login(client, "dte2e@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async def _cycle(machine: str, reason: str, shift: str) -> dict:
+        start = await client.post(
+            "/downtime-tracking/incidents", headers=headers,
+            json={"machine": machine, "reason": reason, "shift": shift},
+        )
+        incident_id = start.json()["id"]
+        await asyncio.sleep(0.05)
+        ended = await client.post(f"/downtime-tracking/incidents/{incident_id}/end", headers=headers)
+        return ended.json()
+
+    first = await _cycle("Line 1", "breakdown", "A")
+    dataset_id = first["live_dataset_id"]
+
+    second = await _cycle("Line 2", "changeover", "B")
+    assert second["live_dataset_id"] == dataset_id  # same dataset, not a new one
+
+    third = await _cycle("Line 1", "breakdown", "A")
+    assert third["live_dataset_id"] == dataset_id
+
+    live = await client.get("/downtime-tracking/live-dataset", headers=headers)
+    assert live.json()["dataset_id"] == dataset_id
+
+    downtime_res = await client.post(
+        "/analytics/downtime", headers=headers,
+        json={
+            "dataset_id": dataset_id,
+            "duration_col": "duration_min",
+            "category_col": "reason",
+            "machine_col": "machine",
+            "timestamp_col": "started_at",
+        },
+    )
+    assert downtime_res.status_code == 200, downtime_res.text
+    body = downtime_res.json()
+    assert body["total_incidents"] == 3
+    cats = {c["category"]: c for c in body["by_category"]}
+    assert cats["breakdown"]["incidents"] == 2
+    assert cats["changeover"]["incidents"] == 1
+    machines = {m["machine"] for m in body["by_machine"]}
+    assert machines == {"Line 1", "Line 2"}
+
+
+async def test_planned_column_lets_downtime_engine_pareto_by_planned(client):
+    token = await _register_and_login(client, "dtplanned@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for machine, reason in [("Line 1", "breakdown"), ("Line 2", "changeover"), ("Line 3", "material_shortage")]:
+        start = await client.post(
+            "/downtime-tracking/incidents", headers=headers,
+            json={"machine": machine, "reason": reason, "shift": "A"},
+        )
+        await client.post(f"/downtime-tracking/incidents/{start.json()['id']}/end", headers=headers)
+
+    live = await client.get("/downtime-tracking/live-dataset", headers=headers)
+    dataset_id = live.json()["dataset_id"]
+
+    res = await client.post(
+        "/analytics/downtime", headers=headers,
+        json={"dataset_id": dataset_id, "duration_col": "duration_min", "category_col": "planned"},
+    )
+    assert res.status_code == 200, res.text
+    cats = {c["category"] for c in res.json()["by_category"]}
+    assert cats == {"True", "False"}
+
+
+async def test_shift_column_feeds_shifts_analytics(client):
+    token = await _register_and_login(client, "dtshift@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for machine, shift in [("Line 1", "A"), ("Line 2", "B")]:
+        start = await client.post(
+            "/downtime-tracking/incidents", headers=headers,
+            json={"machine": machine, "reason": "breakdown", "shift": shift},
+        )
+        await client.post(f"/downtime-tracking/incidents/{start.json()['id']}/end", headers=headers)
+
+    live = await client.get("/downtime-tracking/live-dataset", headers=headers)
+    dataset_id = live.json()["dataset_id"]
+
+    res = await client.post(
+        "/analytics/shifts", headers=headers,
+        json={
+            "dataset_id": dataset_id, "shift_col": "shift",
+            "downtime_col": "duration_min", "downtime_category_col": "reason",
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    # Prove the two incidents actually landed under distinct shift values (not
+    # just that the endpoint didn't error) by re-grouping the same dataset's
+    # Pareto breakdown with "shift" as the category column.
+    by_shift = await client.post(
+        "/analytics/downtime", headers=headers,
+        json={"dataset_id": dataset_id, "duration_col": "duration_min", "category_col": "shift"},
+    )
+    assert by_shift.status_code == 200, by_shift.text
+    shift_cats = {c["category"]: c["incidents"] for c in by_shift.json()["by_category"]}
+    assert shift_cats == {"A": 1, "B": 1}
+
+
+async def test_repeated_overwrite_produces_correct_row_count(client):
+    token = await _register_and_login(client, "dtoverwrite@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    dataset_id = None
+    for i in range(5):
+        start = await client.post(
+            "/downtime-tracking/incidents", headers=headers,
+            json={"machine": f"Line {i}", "reason": "breakdown", "shift": "A"},
+        )
+        ended = await client.post(f"/downtime-tracking/incidents/{start.json()['id']}/end", headers=headers)
+        dataset_id = ended.json()["live_dataset_id"]
+
+    ds = await client.get(f"/datasets/{dataset_id}", headers=headers)
+    assert ds.status_code == 200
+    assert ds.json()["row_count"] == 5

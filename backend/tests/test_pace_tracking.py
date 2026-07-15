@@ -138,3 +138,121 @@ async def test_pace_mixed_pause_reasons_tracked_separately(client):
     assert body["unplanned_dt_min"] > 0
     assert body["planned_dt_min"] > 0
     assert body["other_dt_min"] > 0
+
+
+async def test_pace_shift_handoff_allows_other_member_to_act(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.core.security import hash_password
+    from app.models.user import User
+    import uuid as uuid_module
+
+    token = await _register_and_login(client, "paceowner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+
+    session_id = await _start_session(client, headers, line="Line A", operator="Alice")
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as db_session:
+        db_session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="paceoperatorb@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await db_session.commit()
+
+    login = await client.post(
+        "/auth/login", json={"email": "paceoperatorb@example.com", "password": PASSWORD}
+    )
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # Operator B (a different org member) can tap, pause, resume, and stop
+    # Operator A's still-running session - the deliberate shift-handoff allowance.
+    res = await client.post(f"/pace/sessions/{session_id}/tap", headers=member_headers, json={"kind": "good"})
+    assert res.status_code == 200
+    res = await client.post(
+        f"/pace/sessions/{session_id}/pause", headers=member_headers, json={"reason": "breakdown"}
+    )
+    assert res.status_code == 200
+    res = await client.post(f"/pace/sessions/{session_id}/resume", headers=member_headers)
+    assert res.status_code == 200
+    res = await client.post(f"/pace/sessions/{session_id}/stop", headers=member_headers)
+    assert res.status_code == 200
+    assert res.json()["status"] == "stopped"
+
+
+async def test_pace_discard_allowed_for_creator_not_other_members(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.core.security import hash_password
+    from app.models.user import User
+    import uuid as uuid_module
+
+    token = await _register_and_login(client, "pdowner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+
+    session_id = await _start_session(client, headers)
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as db_session:
+        db_session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="pdmember@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await db_session.commit()
+
+    login = await client.post("/auth/login", json={"email": "pdmember@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # a different member can't discard someone else's session...
+    res = await client.delete(f"/pace/sessions/{session_id}", headers=member_headers)
+    assert res.status_code == 403
+
+    # ...but the creator can discard their own, in any status (still "active" here).
+    res = await client.delete(f"/pace/sessions/{session_id}", headers=headers)
+    assert res.status_code == 204
+
+
+async def test_pace_discard_allowed_for_owner_deleting_someone_elses_session(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.core.security import hash_password
+    from app.models.user import User
+    import uuid as uuid_module
+
+    token = await _register_and_login(client, "pd2owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as db_session:
+        db_session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="pd2member@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await db_session.commit()
+
+    login = await client.post("/auth/login", json={"email": "pd2member@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    session_id = await _start_session(client, member_headers)
+
+    # the org owner can discard a different member's session.
+    res = await client.delete(f"/pace/sessions/{session_id}", headers=headers)
+    assert res.status_code == 204

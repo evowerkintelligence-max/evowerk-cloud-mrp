@@ -256,3 +256,68 @@ async def test_pace_discard_allowed_for_owner_deleting_someone_elses_session(cli
     # the org owner can discard a different member's session.
     res = await client.delete(f"/pace/sessions/{session_id}", headers=headers)
     assert res.status_code == 204
+
+
+async def test_pace_materialized_dataset_feeds_oee_with_unclassified_downtime(client):
+    token = await _register_and_login(client, "paceoee@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = await _start_session(client, headers, line="Line 7", operator="R. Chen")
+
+    for _ in range(10):
+        await client.post(f"/pace/sessions/{session_id}/tap", headers=headers, json={"kind": "good"})
+    for _ in range(2):
+        await client.post(f"/pace/sessions/{session_id}/tap", headers=headers, json={"kind": "reject"})
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "breakdown"})
+    await asyncio.sleep(0.15)
+    await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "setup"})
+    await asyncio.sleep(0.1)
+    await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    # >3s pushes the "other" pause past _six_big_losses' 0.05-minute floor for
+    # reporting the resulting gap as its own "Unclassified Downtime" bucket.
+    await client.post(f"/pace/sessions/{session_id}/pause", headers=headers, json={"reason": "other"})
+    await asyncio.sleep(3.2)
+    await client.post(f"/pace/sessions/{session_id}/resume", headers=headers)
+
+    stopped = await client.post(f"/pace/sessions/{session_id}/stop", headers=headers)
+    body = stopped.json()
+    dataset_id = body["dataset_id"]
+    assert body["good_count"] == 10
+    assert body["reject_count"] == 2
+
+    oee_res = await client.post(
+        "/analytics/oee",
+        headers=headers,
+        json={
+            "dataset_id": dataset_id,
+            "planned_time_col": "planned_min",
+            "operating_time_col": "operating_min",
+            "total_units_col": "total_units",
+            "good_units_col": "good_units",
+            "unplanned_downtime_col": "unplanned_dt_min",
+            "planned_downtime_col": "planned_dt_min",
+        },
+    )
+    assert oee_res.status_code == 200
+    oee = oee_res.json()
+
+    assert 0 <= oee["availability"] <= 100
+    assert 0 <= oee["quality"] <= 100
+    assert oee["total_units"] == 12
+    assert oee["good_units"] == 10
+    assert oee["quality"] == round(10 / 12 * 100, 2)
+
+    six = oee["six_big_losses"]
+    assert six is not None
+    assert six["availability_split"] is True
+    buckets = {b["key"]: b for b in six["buckets"]}
+    assert "equipment_failure" in buckets  # breakdown pause -> unplanned_dt_min column
+    assert "setup_adjustments" in buckets  # setup pause -> planned_dt_min column
+    # "other" isn't its own CSV column, so its time falls into the leftover
+    # gap between planned_min and (operating_min + unplanned + planned) -
+    # exactly what _six_big_losses buckets as Unclassified Downtime.
+    assert "unclassified_downtime" in buckets
+    assert buckets["unclassified_downtime"]["minutes"] > 0

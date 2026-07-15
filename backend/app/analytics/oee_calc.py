@@ -193,6 +193,20 @@ def oee_grouped(
     return out
 
 
+def duplicate_row_count(con, rel: str, cols: list[str]) -> int:
+    """Count of exact-duplicate rows across the given columns (extra occurrences
+    beyond the first) — catches an accidental double-upload/double-paste, the
+    most common source of an inflated, too-good-to-be-true OEE. `cols` must
+    already be validated headers (datasets.validate_columns)."""
+    group_by = ", ".join(qi(c) for c in cols)
+    sql = (
+        f"SELECT SUM(c - 1) FROM (SELECT COUNT(*) AS c FROM {rel} "  # nosec B608 - cols are qi()-quoted, validate_columns-checked
+        f"GROUP BY {group_by}) t WHERE c > 1"
+    )
+    r = con.execute(sql).fetchone()
+    return int(r[0] or 0) if r and r[0] is not None else 0
+
+
 def compute_components_ideal(
     planned: float,
     operating: float,

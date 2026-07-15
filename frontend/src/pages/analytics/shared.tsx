@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import * as echarts from "echarts";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
@@ -10,6 +12,36 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
+
+// ponytail: naive (no "Z"/offset) ISO string under SQLite (aiosqlite drops
+// tzinfo on DateTime(timezone=True) columns even though the value is UTC;
+// Postgres in prod keeps the offset) - new Date(...) would otherwise parse a
+// naive string as local time and throw the elapsed clock off by the
+// browser's UTC offset. Force UTC when no offset is present.
+export function asUtcMs(iso: string): number {
+  return new Date(/Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();
+}
+
+export function useElapsed(startedAt: string | undefined): string {
+  const [elapsed, setElapsed] = useState("00:00:00");
+  useEffect(() => {
+    if (!startedAt) return;
+    const started = asUtcMs(startedAt);
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      const h = String(Math.floor(s / 3600)).padStart(2, "0");
+      const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+      const sec = String(s % 60).padStart(2, "0");
+      setElapsed(`${h}:${m}:${sec}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  return elapsed;
+}
+
+const TV_REFRESH_MS = 30_000;
 
 // ─── Chart palette / defaults (copied from the desktop app) ──────────────────
 
@@ -394,8 +426,19 @@ export function EngineScreen<T>({
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   const datasets = useDatasets();
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    const fromUrl = searchParams.get("dataset_id");
+    if (fromUrl && datasets.data && !datasetId) pickDataset(fromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, datasets.data]);
+
   const columns = useMemo(
     () => datasets.data?.find((d) => d.id === datasetId)?.columns.map((c) => c.name) ?? [],
     [datasets.data, datasetId],
@@ -464,6 +507,28 @@ export function EngineScreen<T>({
   });
 
   const ready = Boolean(datasetId) && fields.every((f) => !f.required || form[f.key]);
+
+  // TV mode: fullscreen the results container via the native Fullscreen API,
+  // optionally polling the last-run compute body so a wall-mounted screen stays live.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => {
+      if (lastComputeBody.current) compute.mutate();
+    }, TV_REFRESH_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefresh]);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else resultsRef.current?.requestFullscreen();
+  }
 
   return (
     <div className="space-y-8">
@@ -547,13 +612,23 @@ export function EngineScreen<T>({
       )}
 
       {result !== null && (
-        <>
+        <div ref={resultsRef} className={isFullscreen ? "bg-background p-8 overflow-y-auto" : ""}>
+          <div className="mb-4 flex items-center justify-end gap-4">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+              Auto-refresh (30s)
+            </label>
+            <Button variant="ghost" size="sm" onClick={toggleFullscreen}>
+              {isFullscreen ? <Minimize2 /> : <Maximize2 />}
+              {isFullscreen ? "Exit TV mode" : "TV mode"}
+            </Button>
+          </div>
           {children(result)}
           <SendToReportButton
             spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
             label={`${title} — ${new Date().toLocaleString()}`}
           />
-        </>
+        </div>
       )}
     </div>
   );

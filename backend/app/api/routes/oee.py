@@ -18,6 +18,7 @@ from app.db.session import get_db
 from app.services import datasets as ds_service
 from app.analytics.oee_calc import (
     compute_components_ideal,
+    duplicate_row_count,
     oee_grouped,
     oee_overall,
     rate_sql_expr,
@@ -35,10 +36,10 @@ class OeeComputeRequest(BaseModel):
     operating_time_col: str = Field(..., min_length=1)
     total_units_col: str = Field(..., min_length=1)
     good_units_col: str = Field(..., min_length=1)
-    target_rate: Optional[float] = None
+    target_rate: Optional[float] = Field(default=None, gt=0)
     date_col: Optional[str] = None
     machine_col: Optional[str] = None
-    unit_price: Optional[float] = None
+    unit_price: Optional[float] = Field(default=None, gt=0)
     machine_rates: Optional[dict[str, float]] = None
     unplanned_downtime_col: Optional[str] = None
     planned_downtime_col: Optional[str] = None
@@ -143,6 +144,10 @@ class OeeComputeResponse(BaseModel):
     invalid_cells: int = 0
     blank_cells: int = 0
     rows_with_issues: int = 0
+    availability_clamped: bool = False
+    quality_clamped: bool = False
+    date_gap_days: int = 0
+    duplicate_rows: int = 0
     trend: list[OeeTrendPoint] = []
     machines: list[OeeMachineResult] = []
     revenue_impact: Optional[RevenueImpact] = None
@@ -156,7 +161,7 @@ class OeeRcaRequest(BaseModel):
     operating_time_col: str = Field(..., min_length=1)
     total_units_col: str = Field(..., min_length=1)
     good_units_col: str = Field(..., min_length=1)
-    target_rate: Optional[float] = None
+    target_rate: Optional[float] = Field(default=None, gt=0)
     machine_rates: Optional[dict[str, float]] = None
     date_col: Optional[str] = None
     machine_col: Optional[str] = None
@@ -178,11 +183,15 @@ class OeeRcaDimRow(BaseModel):
     invalid_cells: int = 0
     blank_cells: int = 0
     performance_estimated: bool = False
+    low_sample: bool = False
 
 
 # A dimension like batch/serial ID can have thousands of distinct values;
 # RCA cares about the worst performers, so keep the lowest-OEE N.
 _RCA_MAX_ROWS_PER_DIM = 50
+# Below this row count, a dimension value's OEE is too noisy to rank as a
+# genuine "worst performer" next to values backed by hundreds of rows.
+_RCA_LOW_SAMPLE_THRESHOLD = 5
 _RCA_MAX_DROP_PERIODS = 60
 
 
@@ -390,12 +399,32 @@ async def oee_compute(
             _date_span_days(con, rel, req.date_col)
             if (req.date_col and req.date_col in headers) else None
         )
+        # Duplicate rows (same date+machine+measurements) are almost always an
+        # accidental double-upload/double-paste, not a real second reading —
+        # left uncaught, they double-count toward the totals silently.
+        duplicate_rows = (
+            duplicate_row_count(con, rel, [req.date_col, machine_col, pc, oc, tc, gc])
+            if (req.date_col and req.date_col in headers and machine_col) else 0
+        )
     finally:
         con.close()
+
+    # A date column with fewer distinct days than its own calendar span means
+    # some days have zero rows — trend/TEEP silently treat that as "no
+    # production" rather than "no data", which looks the same on a chart but
+    # means something very different.
+    date_gap_days = max(0, date_span - len(trend_rows)) if date_span else 0
 
     totals = {"planned": ov["planned"], "operating": ov["operating"], "total": ov["total"], "good": ov["good"]}
     ideal_total = ov["ideal"]
     unrated_rows = 0 if fully_estimated else ov["unrated_rows"]
+
+    # Physically impossible (operating > planned, good > total) means Availability/
+    # Quality got silently clamped to 100% in compute_components_ideal — almost
+    # always a sign the column mapping is swapped, not a real 100% result. Flag it
+    # instead of showing a confident-looking number.
+    availability_clamped = totals["planned"] > 0 and totals["operating"] > totals["planned"]
+    quality_clamped = totals["total"] > 0 and totals["good"] > totals["total"]
 
     avail, perf, qual, oee, estimated = compute_components_ideal(
         totals["planned"], totals["operating"], totals["total"], totals["good"],
@@ -516,6 +545,8 @@ async def oee_compute(
         total_units=totals["total"], good_units=totals["good"],
         row_count=ov["row_count"], invalid_cells=ov["invalid_cells"],
         blank_cells=ov["blank_cells"], rows_with_issues=ov["rows_with_issues"],
+        availability_clamped=availability_clamped, quality_clamped=quality_clamped,
+        date_gap_days=date_gap_days, duplicate_rows=duplicate_rows,
         trend=trend, machines=machines, revenue_impact=revenue_impact,
         teep=teep_result, six_big_losses=six_big_losses,
     )
@@ -584,6 +615,7 @@ async def oee_rca(
                 delta_oee=round(o - overall_oee, 2),
                 invalid_cells=int(g.get("invalid_cells", 0)), blank_cells=int(g.get("blank_cells", 0)),
                 performance_estimated=est,
+                low_sample=int(g["count"]) < _RCA_LOW_SAMPLE_THRESHOLD,
             ))
         dim_rows.sort(key=lambda r: r.oee)
         total_rows = len(dim_rows)

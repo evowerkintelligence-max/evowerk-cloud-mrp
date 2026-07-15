@@ -4,6 +4,26 @@ import { AXIS_LABEL, AXIS_LINE, C, SPLIT_LINE, TOOLTIP, gradientAreaSeries } fro
 export const CHART_TYPES = ["bar", "line", "pie"] as const;
 export type ChartType = (typeof CHART_TYPES)[number];
 
+// Named color palettes a dashboard can be viewed under. Stored client-side
+// only (per-dashboard, in localStorage) - a display preference, not data, so
+// it doesn't need a backend field or migration.
+export const THEMES = {
+  default: { label: "Default", colors: [C.blue, C.green, C.amber, C.red, C.cyan, C.pink, C.indigo, C.violet] },
+  vibrant: {
+    label: "Vibrant",
+    colors: ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899"],
+  },
+  pastel: {
+    label: "Pastel",
+    colors: ["#fca5a5", "#fdba74", "#fde047", "#86efac", "#67e8f9", "#93c5fd", "#c4b5fd", "#f9a8d4"],
+  },
+  mono: {
+    label: "Monochrome",
+    colors: ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0"],
+  },
+} as const;
+export type ThemeKey = keyof typeof THEMES;
+
 export interface CategoryValueRow {
   category: string;
   value: number;
@@ -24,9 +44,10 @@ export function toCategoryValueRows(
   }));
 }
 
-export function barChartOption(data: CategoryValueRow[], name = "Value"): echarts.EChartsOption {
+export function barChartOption(data: CategoryValueRow[], name = "Value", palette?: string[]): echarts.EChartsOption {
   return {
     tooltip: TOOLTIP,
+    color: palette,
     grid: { top: 24, bottom: 48, left: 56, right: 24 },
     xAxis: {
       type: "category",
@@ -41,13 +62,13 @@ export function barChartOption(data: CategoryValueRow[], name = "Value"): echart
         type: "bar",
         barMaxWidth: 36,
         data: data.map((d) => d.value),
-        itemStyle: { color: C.blue, borderRadius: [4, 4, 0, 0] },
+        itemStyle: { color: palette?.[0] ?? C.blue, borderRadius: [4, 4, 0, 0] },
       },
     ],
   };
 }
 
-export function lineChartOption(data: CategoryValueRow[], name = "Value"): echarts.EChartsOption {
+export function lineChartOption(data: CategoryValueRow[], name = "Value", palette?: string[]): echarts.EChartsOption {
   return {
     tooltip: TOOLTIP,
     grid: { top: 24, bottom: 48, left: 56, right: 24 },
@@ -58,14 +79,15 @@ export function lineChartOption(data: CategoryValueRow[], name = "Value"): echar
       axisLine: AXIS_LINE,
     },
     yAxis: { type: "value", axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },
-    series: [gradientAreaSeries(name, data.map((d) => d.value), C.green)],
+    series: [gradientAreaSeries(name, data.map((d) => d.value), palette?.[0] ?? C.green)],
   };
 }
 
-export function pieChartOption(data: CategoryValueRow[], name = "Value"): echarts.EChartsOption {
+export function pieChartOption(data: CategoryValueRow[], name = "Value", palette?: string[]): echarts.EChartsOption {
   return {
     tooltip: { trigger: "item", backgroundColor: "#1e293b", borderColor: "#334155", textStyle: { color: "#e2e8f0", fontSize: 12 } },
     legend: { textStyle: { color: "#64748b", fontSize: 11 }, bottom: 0 },
+    color: palette,
     series: [
       {
         name,
@@ -80,8 +102,13 @@ export function pieChartOption(data: CategoryValueRow[], name = "Value"): echart
   };
 }
 
-export function chartOption(type: ChartType, data: CategoryValueRow[], name?: string): echarts.EChartsOption {
-  if (type === "line") return lineChartOption(data, name);
-  if (type === "pie") return pieChartOption(data, name);
-  return barChartOption(data, name);
+export function chartOption(
+  type: ChartType,
+  data: CategoryValueRow[],
+  name?: string,
+  palette?: string[],
+): echarts.EChartsOption {
+  if (type === "line") return lineChartOption(data, name, palette);
+  if (type === "pie") return pieChartOption(data, name, palette);
+  return barChartOption(data, name, palette);
 }

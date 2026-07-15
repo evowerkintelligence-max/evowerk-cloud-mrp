@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_or_404
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.models.dashboard import Chart, Dashboard
 from app.services import dataset_query as query_service
@@ -200,7 +200,7 @@ async def update_chart(
 @router.delete("/charts/{chart_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chart(
     chart_id: uuid.UUID,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
     chart = await get_or_404(db, Chart, current.org_id, chart_id, "Chart not found")
@@ -256,7 +256,7 @@ async def get_dashboard(
 @router.delete("/dashboards/{dashboard_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dashboard(
     dashboard_id: uuid.UUID,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
     dashboard = await get_or_404(db, Dashboard, current.org_id, dashboard_id, "Dashboard not found")

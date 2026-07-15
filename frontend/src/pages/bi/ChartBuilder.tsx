@@ -1,14 +1,17 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { EChart, QueryBuilderFields, useDatasets, useQueryBuilder, type SelectFieldRow } from "../analytics/shared";
 import { CHART_TYPES, chartOption, toCategoryValueRows, type ChartType } from "./shared";
 
@@ -28,6 +31,52 @@ interface Dashboard {
 function fieldAlias(f: SelectFieldRow): string {
   const defaultAlias = f.agg ? `${f.agg}_${f.column.replace(/\./g, "_")}` : f.column.replace(/\./g, "_");
   return f.alias.trim() || defaultAlias;
+}
+
+/** A drop target for a single field slot (category or value) - drag a field
+ * chip onto it, or click a chip while it's empty to assign it there. Click
+ * the assigned chip to clear the slot. */
+function FieldDropZone({
+  label,
+  value,
+  onAssign,
+  onClear,
+}: {
+  label: string;
+  value: string;
+  onAssign: (field: string) => void;
+  onClear: () => void;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <Field label={label}>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          const field = e.dataTransfer.getData("text/plain");
+          if (field) onAssign(field);
+        }}
+        className={cn(
+          "flex h-9 items-center rounded-md border border-dashed px-3 text-sm transition-colors",
+          over ? "border-primary bg-primary/5" : "border-border",
+        )}
+      >
+        {value ? (
+          <Badge variant="primary" className="cursor-pointer" onClick={onClear} title="Click to clear">
+            {value} <X className="size-3" />
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">Drag or click a field below…</span>
+        )}
+      </div>
+    </Field>
+  );
 }
 
 export function ChartBuilder() {
@@ -53,6 +102,14 @@ export function ChartBuilder() {
   const [dashboardId, setDashboardId] = useState("");
 
   const aliasOptions = Array.from(new Set(qb.fields.map(fieldAlias)));
+
+  // Assigns a field to whichever slot is empty (category first, then value)
+  // so clicking a chip works without dragging - the drag zones above are the
+  // fast path, this is the idiot-proof fallback.
+  function assignField(field: string) {
+    if (!categoryField) setCategoryField(field);
+    else if (!valueField) setValueField(field);
+  }
 
   const preview = useMutation({
     mutationFn: async () => {
@@ -144,27 +201,37 @@ export function ChartBuilder() {
             <QueryBuilderFields qb={qb} names={names} showOrderLimit={false} />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Category field (chart x-axis / labels)">
-                <Select value={categoryField} onChange={(e) => setCategoryField(e.target.value)}>
-                  <option value="">Select…</option>
-                  {aliasOptions.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Value field (chart values)">
-                <Select value={valueField} onChange={(e) => setValueField(e.target.value)}>
-                  <option value="">Select…</option>
-                  {aliasOptions.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              <FieldDropZone
+                label="Category field (chart x-axis / labels)"
+                value={categoryField}
+                onAssign={setCategoryField}
+                onClear={() => setCategoryField("")}
+              />
+              <FieldDropZone
+                label="Value field (chart values)"
+                value={valueField}
+                onAssign={setValueField}
+                onClear={() => setValueField("")}
+              />
             </div>
+
+            {aliasOptions.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {aliasOptions.map((a) => (
+                  <Badge
+                    key={a}
+                    variant="neutral"
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData("text/plain", a)}
+                    onClick={() => assignField(a)}
+                    className="cursor-move select-none"
+                    title="Drag onto a field above, or click to assign"
+                  >
+                    {a}
+                  </Badge>
+                ))}
+              </div>
+            )}
 
             <Button disabled={!ready || qb.healthLoading} loading={preview.isPending} onClick={() => preview.mutate()}>
               Preview

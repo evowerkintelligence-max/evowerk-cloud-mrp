@@ -5,12 +5,13 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.report_spec import SavedReport
+from app.models.report_spec import ReportInboxItem, SavedReport
 from app.services.reports import (
     FORMATS,
     KINDS,
@@ -48,6 +49,25 @@ def _saved_report_to_response(r: SavedReport) -> SavedReportResponse:
     return SavedReportResponse(
         id=str(r.id), name=r.name, sections=r.sections,
         created_at=r.created_at.isoformat(), updated_at=r.updated_at.isoformat(),
+    )
+
+
+class InboxItemCreateRequest(ReportSectionSpec):
+    label: str
+
+
+class InboxItemResponse(BaseModel):
+    id: str
+    label: str
+    spec: dict
+    created_by: str
+    created_at: str
+
+
+def _inbox_item_to_response(item: ReportInboxItem) -> InboxItemResponse:
+    return InboxItemResponse(
+        id=str(item.id), label=item.label, spec=item.spec,
+        created_by=str(item.created_by), created_at=item.created_at.isoformat(),
     )
 
 
@@ -149,6 +169,53 @@ async def narrate_custom_report(
     sections = [ReportSectionSpec.model_validate(s) for s in saved.sections]
     report = await build_custom_report(db, current, saved.name, sections)
     return await narrate_report(report, style)
+
+
+# Registered ahead of GET /{kind} below - same reasoning as /custom above: a
+# literal path must be registered before the /{kind} wildcard or it gets
+# shadowed by it.
+@router.post("/inbox", response_model=InboxItemResponse, status_code=status.HTTP_201_CREATED)
+async def create_inbox_item(
+    req: InboxItemCreateRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    spec = ReportSectionSpec(**req.model_dump(exclude={"label"}))
+    item = ReportInboxItem(
+        org_id=current.org_id, created_by=current.id, label=req.label,
+        spec=spec.model_dump(mode="json"),
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return _inbox_item_to_response(item)
+
+
+@router.get("/inbox", response_model=list[InboxItemResponse])
+async def list_inbox_items(current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.execute(
+            select(ReportInboxItem)
+            .where(ReportInboxItem.org_id == current.org_id)
+            .order_by(ReportInboxItem.created_at.desc())
+        )
+    ).scalars().all()
+    return [_inbox_item_to_response(r) for r in rows]
+
+
+@router.delete("/inbox/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_inbox_item(
+    item_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    item = (
+        await db.execute(
+            select(ReportInboxItem).where(ReportInboxItem.id == item_id, ReportInboxItem.org_id == current.org_id)
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Inbox item not found")
+    if item.created_by != current.id and current.role != "owner":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the item's creator or an owner can delete it")
+    await db.delete(item)
+    await db.commit()
 
 
 @router.get("/{kind}")

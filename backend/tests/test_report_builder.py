@@ -528,3 +528,126 @@ async def test_rca_case_section_404s_on_unknown_case(client):
 
     res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
     assert res.status_code == 404
+
+
+async def test_inbox_create_list_and_delete(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/inbox", headers=headers,
+        json={"label": "OEE — July", "type": "text", "text": "captured content"},
+    )
+    assert created.status_code == 201
+    item = created.json()
+    assert item["label"] == "OEE — July"
+    assert item["spec"]["type"] == "text"
+
+    listed = await client.get("/reports/inbox", headers=headers)
+    assert listed.status_code == 200
+    assert any(i["id"] == item["id"] for i in listed.json())
+
+    deleted = await client.delete(f"/reports/inbox/{item['id']}", headers=headers)
+    assert deleted.status_code == 204
+    assert not any(i["id"] == item["id"] for i in (await client.get("/reports/inbox", headers=headers)).json())
+
+
+async def test_inbox_delete_allowed_for_creator_not_other_members(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    token = await _register_and_login(client, email="ibowner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+
+    created = await client.post(
+        "/reports/inbox", headers=headers,
+        json={"label": "Owner's capture", "type": "text", "text": "hi"},
+    )
+    item_id = created.json()["id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        import uuid as uuid_module
+
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="ibmember@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+    login = await client.post("/auth/login", json={"email": "ibmember@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # a different member can't delete someone else's inbox item...
+    res = await client.delete(f"/reports/inbox/{item_id}", headers=member_headers)
+    assert res.status_code == 403
+
+    # ...but the creator can delete their own.
+    res = await client.delete(f"/reports/inbox/{item_id}", headers=headers)
+    assert res.status_code == 204
+
+
+async def test_inbox_delete_allowed_for_owner_deleting_someone_elses_item(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    token = await _register_and_login(client, email="ib2owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        import uuid as uuid_module
+
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="ib2member@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+    login = await client.post("/auth/login", json={"email": "ib2member@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    created = await client.post(
+        "/reports/inbox", headers=member_headers,
+        json={"label": "Member's capture", "type": "text", "text": "hi"},
+    )
+    item_id = created.json()["id"]
+
+    # the org owner can delete a different member's inbox item.
+    res = await client.delete(f"/reports/inbox/{item_id}", headers=headers)
+    assert res.status_code == 204
+
+
+async def test_inbox_cross_org_isolation(client):
+    token_a = await _register_and_login(client, email="iba@example.com", org_name="InboxOrgA")
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    created = await client.post(
+        "/reports/inbox", headers=headers_a,
+        json={"label": "OrgA capture", "type": "text", "text": "secret"},
+    )
+    item_id = created.json()["id"]
+
+    token_b = await _register_and_login(client, email="ibb@example.com", org_name="InboxOrgB")
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    listed_b = await client.get("/reports/inbox", headers=headers_b)
+    assert not any(i["id"] == item_id for i in listed_b.json())
+    assert (await client.delete(f"/reports/inbox/{item_id}", headers=headers_b)).status_code == 404

@@ -6,6 +6,18 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 
+// pydantic 422 responses send `detail` as an array of validation error
+// objects instead of a string; join their messages so Alert never receives
+// a non-string child.
+function extractErrorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail.map((d) => d?.msg).filter(Boolean);
+    if (msgs.length) return msgs.join(" ");
+  }
+  return fallback;
+}
+
 export function Register() {
   const [orgName, setOrgName] = useState("");
   const [email, setEmail] = useState("");
@@ -26,7 +38,7 @@ export function Register() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.detail ?? "Registration failed");
+        setError(extractErrorMessage(body.detail, "Registration failed"));
         return;
       }
       navigate("/login");

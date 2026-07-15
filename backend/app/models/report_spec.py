@@ -33,3 +33,25 @@ class SavedReport(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class ReportInboxItem(Base):
+    """A live reference to some result a user captured with "Send to report" -
+    an org-scoped scratch item, not a finished report. `spec` is one
+    ReportSectionSpec-shaped dict (see app.services.reports); resolved fresh
+    whenever it's added to a report and that report is rendered, same as
+    every other section - nothing about the underlying result is stored.
+    """
+
+    __tablename__ = "report_inbox_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    spec: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )

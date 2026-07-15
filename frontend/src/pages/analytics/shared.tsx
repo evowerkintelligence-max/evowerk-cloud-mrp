@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import * as echarts from "echarts";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
@@ -396,6 +397,14 @@ export function EngineScreen<T>({
   const [error, setError] = useState<string | null>(null);
 
   const datasets = useDatasets();
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    const fromUrl = searchParams.get("dataset_id");
+    if (fromUrl && datasets.data && !datasetId) pickDataset(fromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, datasets.data]);
+
   const columns = useMemo(
     () => datasets.data?.find((d) => d.id === datasetId)?.columns.map((c) => c.name) ?? [],
     [datasets.data, datasetId],

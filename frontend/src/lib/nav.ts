@@ -25,6 +25,7 @@ import {
   SplitSquareHorizontal,
   Target,
   Terminal,
+  Timer,
   TimerOff,
   TrendingUp,
   Users,
@@ -78,6 +79,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: "/analytics/plant-summary", label: "Plant Summary", icon: Factory },
       { to: "/analytics/oee", label: "OEE", icon: Gauge },
+      { to: "/analytics/pace-tracking", label: "Pace Tracking", icon: Timer },
       { to: "/analytics/downtime", label: "Downtime", icon: TimerOff },
       { to: "/analytics/throughput", label: "Throughput", icon: BarChart3 },
       { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX },

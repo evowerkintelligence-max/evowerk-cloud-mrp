@@ -182,6 +182,44 @@ async def test_table_section_escapes_formula_injection_in_csv_and_xlsx(client):
     assert xlsx_res.content.startswith(b"PK\x03\x04")
 
 
+async def test_sql_section_renders_in_report(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "SQL section",
+            "sections": [{
+                "type": "sql", "title": "Raw query", "dataset_id": dataset_id,
+                "sql_text": "SELECT sku, qty FROM dataset ORDER BY sku",
+            }],
+        },
+    )
+    assert created.status_code == 201
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 200, res.text
+    assert b"Raw query" in res.content
+    assert b"A-1" in res.content
+
+
+async def test_sql_section_requires_dataset_id_and_sql_text(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "Bad SQL section", "sections": [{"type": "sql", "title": "Missing fields"}]},
+    )
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 400
+
+
 async def test_narrate_custom_report_falls_back_without_llm_key(client):
     """No GEMINI_API_KEY is configured in tests, so narration always takes the
     deterministic fallback path - a real assertion on grounded, non-empty

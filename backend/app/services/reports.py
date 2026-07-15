@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import CurrentUser
 from app.models.bom import Item
 from app.models.dashboard import Chart
 from app.models.dataset import Dataset
@@ -22,6 +23,7 @@ from app.models.tenant import Org
 from app.services import dataset_query as query_service
 from app.services import datasets as ds_service
 from app.services import llm
+from app.services import sql_query as sql_query_service
 from app.services.inventory_analytics import compute_inventory_analytics
 from app.services.mrp import compute_mrp_plan, resolve_horizon
 from app.services.rca import DIMENSIONS, RcaResult, compute_rca
@@ -577,6 +579,7 @@ class ReportSectionSpec(BaseModel):
     type: Literal[
         "title", "exec_summary", "table", "bi_chart",
         "findings", "risks", "recommendations", "caveats", "text",
+        "engine", "kind_report", "rca_case", "sql",
     ]
     title: str | None = None
     text: str | None = None
@@ -584,23 +587,36 @@ class ReportSectionSpec(BaseModel):
     dataset_id: uuid.UUID | None = None
     query: query_service.DatasetQueryRequest | None = None
     chart_id: uuid.UUID | None = None
+    # engine - one of the 7 analytics-engine pages (all share EngineScreen)
+    engine_path: str | None = None
+    engine_body: dict | None = None
+    # kind_report - mrp-plan / inventory-analytics / rca / scenario / dataset
+    report_kind: str | None = None
+    report_params: dict | None = None
+    # rca_case - the fishbone case-management tool
+    case_id: uuid.UUID | None = None
+    # sql - SQL Editor's raw-SQL results (not a structured DatasetQueryRequest,
+    # so it can't reuse "table")
+    sql_text: str | None = None
 
 
-async def _resolve_section(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> Section:
+async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: ReportSectionSpec) -> list[Section]:
+    org_id = current.org_id
+
     if spec.type in ("title", "exec_summary", "text"):
         lines = [line for line in (spec.text or "").splitlines() if line.strip()]
-        return Section(
+        return [Section(
             title=spec.title or spec.type.replace("_", " ").title(),
             columns=["Text"],
             rows=[[line] for line in lines] or [[EM_DASH]],
-        )
+        )]
 
     if spec.type in _BULLET_LABELS:
-        return Section(
+        return [Section(
             title=spec.title or spec.type.title(),
             columns=[_BULLET_LABELS[spec.type]],
             rows=[[item] for item in (spec.items or [])] or [[EM_DASH]],
-        )
+        )]
 
     if spec.type == "table":
         if spec.dataset_id is None or spec.query is None:
@@ -608,42 +624,66 @@ async def _resolve_section(db: AsyncSession, org_id: uuid.UUID, spec: ReportSect
         dataset = await ds_service.get_dataset_or_404(db, org_id, spec.dataset_id)
         result = await query_service.run_query(db, dataset, org_id, spec.query)
         columns = result["columns"]
-        return Section(
+        return [Section(
             title=spec.title or dataset.name,
             columns=columns,
             rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
-        )
+        )]
 
-    # spec.type == "bi_chart": replay a saved Chart's query, same as GET
-    # /bi/charts/{id}/data - a table is the correct rendering here too, since
-    # a PDF/CSV export can't embed a live chart anyway.
-    if spec.chart_id is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "'bi_chart' section needs chart_id")
-    chart = (
-        await db.execute(select(Chart).where(Chart.id == spec.chart_id, Chart.org_id == org_id))
-    ).scalar_one_or_none()
-    if chart is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Chart not found: {spec.chart_id}")
-    dataset = await ds_service.get_dataset_or_404(db, org_id, chart.dataset_id)
-    query = query_service.DatasetQueryRequest.model_validate(chart.query_config)
-    result = await query_service.run_query(db, dataset, org_id, query)
-    columns = result["columns"]
-    return Section(
-        title=spec.title or chart.name,
-        columns=columns,
-        rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
-    )
+    if spec.type == "sql":
+        if spec.dataset_id is None or not spec.sql_text:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "'sql' section needs dataset_id and sql_text")
+        dataset = await ds_service.get_dataset_or_404(db, org_id, spec.dataset_id)
+        result = await sql_query_service.run_sql(dataset, spec.sql_text)
+        columns = result["columns"]
+        return [Section(
+            title=spec.title or dataset.name,
+            columns=columns,
+            rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
+        )]
+
+    if spec.type == "bi_chart":
+        # replay a saved Chart's query, same as GET /bi/charts/{id}/data - a
+        # table is the correct rendering here too, since a PDF/CSV export
+        # can't embed a live chart anyway.
+        if spec.chart_id is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "'bi_chart' section needs chart_id")
+        chart = (
+            await db.execute(select(Chart).where(Chart.id == spec.chart_id, Chart.org_id == org_id))
+        ).scalar_one_or_none()
+        if chart is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Chart not found: {spec.chart_id}")
+        dataset = await ds_service.get_dataset_or_404(db, org_id, chart.dataset_id)
+        query = query_service.DatasetQueryRequest.model_validate(chart.query_config)
+        result = await query_service.run_query(db, dataset, org_id, query)
+        columns = result["columns"]
+        return [Section(
+            title=spec.title or chart.name,
+            columns=columns,
+            rows=[[EM_DASH if r.get(c) is None else str(r.get(c)) for c in columns] for r in result["rows"]],
+        )]
+
+    if spec.type == "engine":
+        return await _resolve_engine_sections(db, current, spec)  # noqa: F821 - added in Task 4
+
+    if spec.type == "kind_report":
+        return await _resolve_kind_report_sections(db, org_id, spec)  # noqa: F821 - added in Task 5
+
+    # spec.type == "rca_case"
+    return await _resolve_rca_case_sections(db, org_id, spec)  # noqa: F821 - added in Task 6
 
 
 async def build_custom_report(
-    db: AsyncSession, org_id: uuid.UUID, name: str, sections: list[ReportSectionSpec]
+    db: AsyncSession, current: CurrentUser, name: str, sections: list[ReportSectionSpec]
 ) -> Report:
-    resolved = [await _resolve_section(db, org_id, s) for s in sections]
+    resolved: list[Section] = []
+    for s in sections:
+        resolved.extend(await _resolve_sections(db, current, s))
     return Report(
         slug="custom",
         title=name,
         subtitle=f"{len(resolved)} section(s)",
-        org_name=await _org_name(db, org_id),
+        org_name=await _org_name(db, current.org_id),
         generated_at=_now(),
         sections=resolved,
     )

@@ -127,7 +127,7 @@ async def render_custom_report(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"format must be one of {sorted(FORMATS)}")
     saved = await get_saved_report_or_404(db, current.org_id, report_id)
     sections = [ReportSectionSpec.model_validate(s) for s in saved.sections]
-    report = await build_custom_report(db, current.org_id, saved.name, sections)
+    report = await build_custom_report(db, current, saved.name, sections)
     disposition = "inline" if format in _INLINE_FORMATS else "attachment"
     return Response(
         content=render(report, format),
@@ -147,7 +147,7 @@ async def narrate_custom_report(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"style must be one of {NARRATION_STYLES}")
     saved = await get_saved_report_or_404(db, current.org_id, report_id)
     sections = [ReportSectionSpec.model_validate(s) for s in saved.sections]
-    report = await build_custom_report(db, current.org_id, saved.name, sections)
+    report = await build_custom_report(db, current, saved.name, sections)
     return await narrate_report(report, style)
 
 

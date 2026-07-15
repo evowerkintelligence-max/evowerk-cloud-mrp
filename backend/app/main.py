@@ -16,6 +16,7 @@ from app.api.routes import (
     data_chat,
     datasets,
     downtime,
+    downtime_tracking,
     forecasts,
     integrations,
     inventory,
@@ -97,6 +98,7 @@ app.include_router(oee.router)
 app.include_router(pace_tracking.router)
 app.include_router(plant_summary.router)
 app.include_router(downtime.router)
+app.include_router(downtime_tracking.router)
 app.include_router(throughput.router)
 app.include_router(scrap.router)
 app.include_router(shifts.router)

@@ -71,9 +71,15 @@ async def pause_session(db: AsyncSession, session: PaceSession, reason: str) -> 
 async def _finalize_pause(db: AsyncSession, session: PaceSession, now: datetime) -> None:
     """Accumulate the just-ended pause window into whichever bucket matches
     pause_reason, via an atomic SQL increment (not a Python load-mutate-commit
-    round trip) so two near-simultaneous requests can't lose an update. Called
-    from both resume() and stop() (when stopping while paused) - one code path,
-    so the two can't drift apart."""
+    round trip) so two concurrent increments to the same column always sum
+    correctly instead of one clobbering the other. This does NOT lock the row
+    against a genuinely concurrent pause/resume cycle: status is still a Python
+    read-check-write with no SELECT ... FOR UPDATE, so two near-simultaneous
+    resume() calls could both pass the "paused" guard and double-count the same
+    window. Acceptable for this feature's single-operator-per-session model;
+    not a general-purpose distributed lock. Called from both resume() and
+    stop() (when stopping while paused) - one code path, so the two can't
+    drift apart."""
     elapsed_min = (now - ensure_utc(session.paused_at)).total_seconds() / 60.0
     field = _PAUSE_FIELD[session.pause_reason]
     column = getattr(PaceSession, field)
@@ -107,6 +113,10 @@ async def stop_session(
     good_units, reject_units = await tap_counts(db, session.id)
     total_units = good_units + reject_units
 
+    # other_dt_min is intentionally not a CSV column: it already reduced operating_min
+    # above, and the gap it leaves between planned_min and (operating_min + unplanned_dt_min
+    # + planned_dt_min) is exactly what the OEE engine's Six Big Losses buckets as
+    # "Unclassified Downtime" - no new bucket type needed downstream.
     header = ["line", "operator", "planned_min", "operating_min", "total_units", "good_units",
               "unplanned_dt_min", "planned_dt_min"]
     row = [session.line, session.operator, planned_min, operating_min, total_units, good_units,

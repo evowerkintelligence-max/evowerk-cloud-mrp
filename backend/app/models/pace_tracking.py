@@ -35,8 +35,9 @@ class PaceSession(Base):
     pause_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Accumulators, updated atomically in-SQL by
-    # app.services.pace_tracking._finalize_pause so two near-simultaneous
-    # pause/resume calls can't lose an update.
+    # app.services.pace_tracking._finalize_pause so two concurrent increments
+    # to the same column always sum correctly. That does not guard the
+    # status transition itself (no row lock) - see _finalize_pause's docstring.
     unplanned_dt_min: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     planned_dt_min: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     other_dt_min: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

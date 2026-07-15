@@ -83,7 +83,9 @@ export function PaceTracking() {
       return res.json();
     },
     enabled: !!sessionId,
-    refetchInterval: POLL_MS,
+    // ponytail: a stopped session is terminal - its server-side state can never
+    // change again, so stop polling once we see it rather than hitting the API every 5s forever.
+    refetchInterval: (query) => (query.state.data?.status === "stopped" ? false : POLL_MS),
     retry: false,
   });
 

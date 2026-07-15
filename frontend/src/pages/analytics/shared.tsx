@@ -313,6 +313,23 @@ export function useInbox() {
   });
 }
 
+export interface CurrentUser {
+  user_id: string;
+  role: string;
+}
+
+// Shares the ["org-me"] cache with AppShell's org query - same endpoint, no extra fetch.
+export function useCurrentUser() {
+  return useQuery<CurrentUser>({
+    queryKey: ["org-me"],
+    queryFn: async () => {
+      const res = await apiFetch("/orgs/me");
+      if (!res.ok) throw new Error("Failed to load current user");
+      return res.json();
+    },
+  });
+}
+
 export function SendToReportButton({ spec, label }: { spec: ReportSectionSpecPayload; label: string }) {
   const qc = useQueryClient();
   const send = useMutation({

@@ -57,6 +57,7 @@ export function SqlCodeEditor({
     <CodeMirror
       value={value}
       onChange={onChange}
+      theme="none"
       height="12rem"
       basicSetup={{ lineNumbers: false, foldGutter: false, autocompletion: false }}
       extensions={extensions}

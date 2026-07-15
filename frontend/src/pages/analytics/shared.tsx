@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import * as echarts from "echarts";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
@@ -11,6 +12,8 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
+
+const TV_REFRESH_MS = 30_000;
 
 // ─── Chart palette / defaults (copied from the desktop app) ──────────────────
 
@@ -395,6 +398,9 @@ export function EngineScreen<T>({
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   const datasets = useDatasets();
   const [searchParams] = useSearchParams();
@@ -473,6 +479,28 @@ export function EngineScreen<T>({
   });
 
   const ready = Boolean(datasetId) && fields.every((f) => !f.required || form[f.key]);
+
+  // TV mode: fullscreen the results container via the native Fullscreen API,
+  // optionally polling the last-run compute body so a wall-mounted screen stays live.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => {
+      if (lastComputeBody.current) compute.mutate();
+    }, TV_REFRESH_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefresh]);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else resultsRef.current?.requestFullscreen();
+  }
 
   return (
     <div className="space-y-8">
@@ -556,13 +584,23 @@ export function EngineScreen<T>({
       )}
 
       {result !== null && (
-        <>
+        <div ref={resultsRef} className={isFullscreen ? "bg-background p-8 overflow-y-auto" : ""}>
+          <div className="mb-4 flex items-center justify-end gap-4">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+              Auto-refresh (30s)
+            </label>
+            <Button variant="ghost" size="sm" onClick={toggleFullscreen}>
+              {isFullscreen ? <Minimize2 /> : <Maximize2 />}
+              {isFullscreen ? "Exit TV mode" : "TV mode"}
+            </Button>
+          </div>
           {children(result)}
           <SendToReportButton
             spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
             label={`${title} — ${new Date().toLocaleString()}`}
           />
-        </>
+        </div>
       )}
     </div>
   );

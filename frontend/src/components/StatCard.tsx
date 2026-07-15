@@ -34,12 +34,15 @@ export function StatCard({
   icon,
   hint,
   tone = "primary",
+  title,
 }: {
   label: string;
   value: ReactNode;
   icon?: ReactNode;
   hint?: ReactNode;
   tone?: keyof typeof TONE;
+  /** Hover tooltip explaining what this metric means. */
+  title?: string;
 }) {
   const t = TONE[tone];
   return (
@@ -57,7 +60,13 @@ export function StatCard({
         )}
       />
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        <span
+          className={cn(
+            "text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+            title && "cursor-help",
+          )}
+          title={title}
+        >
           {label}
         </span>
         {icon && (

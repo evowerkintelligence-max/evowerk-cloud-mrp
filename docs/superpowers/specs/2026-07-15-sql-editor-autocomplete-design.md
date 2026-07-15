@@ -44,6 +44,13 @@ worker setup), and `lang-sql`'s `schema` option is built for exactly this
 "autocomplete against a known table/column list" case. React 18 + Vite 5
 (current stack) both have first-class support.
 
+The backend (`backend/app/services/sql_query.py`) runs DuckDB, not one of
+`lang-sql`'s built-in dialects. Unconfigured, `sql()` defaults to generic
+StandardSQL, which misses DuckDB syntax (`::cast`, `QUALIFY`, etc.) in both
+highlighting and keyword completion. Use `dialect: PostgreSQL` (from
+`@codemirror/lang-sql`) - DuckDB's grammar tracks Postgres closely enough
+to be the right default here.
+
 ## Component contract
 
 New file `frontend/src/components/SqlCodeEditor.tsx`:
@@ -63,9 +70,11 @@ as a prop instead of rendering chip buttons from it.
 
 Internals:
 - `EditorView`/`EditorState` via `@uiw/react-codemirror`, extensions:
-  `sql()` from `@codemirror/lang-sql` for keyword highlighting/completion,
-  plus a custom `autocompletion({ override: [...] })` completion source
-  layered on top for columns.
+  `sql({ dialect: PostgreSQL })` from `@codemirror/lang-sql` for keyword
+  highlighting/completion (DuckDB isn't a built-in dialect; PostgreSQL is
+  the closest match to what the backend actually runs), plus a custom
+  `autocompletion({ override: [...] })` completion source layered on top
+  for columns.
 - Shared helper `castedColumnToken(name, dtype)` (extracted from the
   chip-insert logic added in the prior fix) used both by the completion
   source's `apply` string and anywhere else a cast-wrapped column reference

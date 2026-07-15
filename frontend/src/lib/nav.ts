@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Bell,
   Boxes,
@@ -81,6 +82,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/analytics/oee", label: "OEE", icon: Gauge },
       { to: "/analytics/pace-tracking", label: "Pace Tracking", icon: Timer },
       { to: "/analytics/downtime", label: "Downtime", icon: TimerOff },
+      { to: "/analytics/downtime-tracking", label: "Downtime Tracking", icon: AlertTriangle },
       { to: "/analytics/throughput", label: "Throughput", icon: BarChart3 },
       { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX },
       { to: "/analytics/shifts", label: "Shifts", icon: Users },

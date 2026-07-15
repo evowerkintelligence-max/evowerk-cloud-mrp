@@ -19,6 +19,7 @@ import { Oee } from "./pages/analytics/Oee";
 import { PaceTracking } from "./pages/analytics/PaceTracking";
 import { PlantSummary } from "./pages/analytics/PlantSummary";
 import { Downtime } from "./pages/analytics/Downtime";
+import { DowntimeTracking } from "./pages/analytics/DowntimeTracking";
 import { Throughput } from "./pages/analytics/Throughput";
 import { Scrap } from "./pages/analytics/Scrap";
 import { Shifts } from "./pages/analytics/Shifts";
@@ -82,6 +83,7 @@ export function App() {
         <Route path="/analytics/pace-tracking" element={<PaceTracking />} />
         <Route path="/analytics/plant-summary" element={<PlantSummary />} />
         <Route path="/analytics/downtime" element={<Downtime />} />
+        <Route path="/analytics/downtime-tracking" element={<DowntimeTracking />} />
         <Route path="/analytics/throughput" element={<Throughput />} />
         <Route path="/analytics/scrap" element={<Scrap />} />
         <Route path="/analytics/shifts" element={<Shifts />} />

@@ -6,6 +6,7 @@ import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { errorMessage } from "@/lib/utils";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -33,7 +34,7 @@ export function Login() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.detail ?? "Login failed");
+        setError(errorMessage(body, "Login failed"));
         return;
       }
       const data = await res.json();

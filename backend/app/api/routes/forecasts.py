@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -474,7 +474,7 @@ async def _new_draft_po(
     PO per supplier, and a plain rollback on the 2nd would discard the 1st.
     """
     expected_delivery_date = (
-        date.today() + timedelta(days=supplier.lead_time_days)
+        datetime.now(timezone.utc).date() + timedelta(days=supplier.lead_time_days)
         if supplier.lead_time_days is not None
         else None
     )

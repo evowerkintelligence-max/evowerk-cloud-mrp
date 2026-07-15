@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -293,8 +293,8 @@ async def test_supplier_scorecard_on_time_and_defect_math(client):
             headers=headers,
         )
 
-    tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 
     await _po_receive(tomorrow, "10", "2")  # on time, 2 rejected
     await _po_receive(yesterday, "5", "0")  # late, none rejected

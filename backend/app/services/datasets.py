@@ -33,7 +33,9 @@ def qs(value: str) -> str:
 
 
 def open_con() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(database=":memory:")
+    con = duckdb.connect(database=":memory:")
+    con.execute("SET memory_limit=?", [get_settings().duckdb_memory_limit])
+    return con
 
 
 def relation_for(path: Path) -> str:

@@ -3,12 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { SqlCodeEditor, type SqlColumn, type SqlColumnDtype } from "@/components/SqlCodeEditor";
 import { useDatasets } from "@/pages/analytics/shared";
 
 interface QueryResult {
@@ -24,6 +24,11 @@ interface HistoryEntry {
   created_at: string;
 }
 
+interface HealthColumn {
+  name: string;
+  inferred_dtype: string;
+}
+
 const DEFAULT_SQL = "SELECT * FROM dataset LIMIT 100";
 
 export function SqlEditor() {
@@ -34,6 +39,24 @@ export function SqlEditor() {
 
   const activeDataset = datasets.data?.find((d) => d.id === datasetId) ?? datasets.data?.[0];
   const effectiveDatasetId = datasetId || activeDataset?.id || "";
+
+  // Same query key as DatasetDetail's Schema/SQL tabs, so switching to a dataset
+  // already viewed there is a no-op fetch. inferred_dtype (not column.dtype, which
+  // is always VARCHAR for CSV/TSV) is what tells us a column needs CAST(...AS DOUBLE).
+  const health = useQuery<{ columns: HealthColumn[] }>({
+    queryKey: ["dataset-health", effectiveDatasetId],
+    queryFn: async () => {
+      const res = await apiFetch(`/datasets/${effectiveDatasetId}/health`);
+      if (!res.ok) throw new Error("Failed to compute health");
+      return res.json();
+    },
+    enabled: !!effectiveDatasetId,
+  });
+  const inferredByColumn = new Map(health.data?.columns.map((c) => [c.name, c.inferred_dtype]));
+  const sqlColumns: SqlColumn[] = (activeDataset?.columns ?? []).map((c) => ({
+    name: c.name,
+    dtype: (inferredByColumn.get(c.name) as SqlColumnDtype | undefined) ?? "text",
+  }));
 
   const history = useQuery<HistoryEntry[]>({
     queryKey: ["query-history"],
@@ -87,45 +110,23 @@ export function SqlEditor() {
           {datasets.isLoading ? (
             <Skeleton className="h-10 w-64" />
           ) : (
-            <div className="flex flex-wrap items-end gap-4">
-              <div className="min-w-[16rem] space-y-1.5">
-                <label className="text-sm font-medium text-muted-foreground">Dataset</label>
-                <Select value={effectiveDatasetId} onChange={(e) => setDatasetId(e.target.value)}>
-                  {(datasets.data ?? []).map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              {activeDataset && (
-                <div className="flex flex-wrap gap-1.5 pb-2">
-                  {activeDataset.columns.map((c) => (
-                    <Badge
-                      key={c.name}
-                      variant="neutral"
-                      className="cursor-pointer"
-                      title={`Insert ${c.name}`}
-                      onClick={() => setSql((s) => (s ? `${s} ${c.name}` : c.name))}
-                    >
-                      {c.name}
-                    </Badge>
-                  ))}
-                </div>
-              )}
+            <div className="min-w-[16rem] space-y-1.5">
+              <label className="text-sm font-medium text-muted-foreground">Dataset</label>
+              <Select value={effectiveDatasetId} onChange={(e) => setDatasetId(e.target.value)}>
+                {(datasets.data ?? []).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </Select>
             </div>
           )}
 
-          <textarea
-            value={sql}
-            onChange={(e) => setSql(e.target.value)}
-            rows={8}
-            spellCheck={false}
-            className="w-full rounded-md border border-border bg-background p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-primary/40"
-          />
+          <SqlCodeEditor value={sql} onChange={setSql} columns={sqlColumns} />
           <p className="text-xs text-muted-foreground">
             Runs against a single read-only table named <code>dataset</code> — SELECT only, no joins to other
-            files. Columns are text (VARCHAR); cast numeric columns explicitly, e.g. <code>CAST(qty AS DOUBLE)</code>.
+            files. Start typing a column name for autocomplete — numeric/date columns insert pre-cast (
+            <code>CAST(... AS DOUBLE)</code>).
           </p>
           <Button disabled={!effectiveDatasetId} loading={query.isPending} onClick={() => query.mutate()}>
             Run SQL

@@ -21,9 +21,12 @@ three independent layers instead:
      run inside the same worker thread so a slow/huge dataset can't block the
      event loop or run unbounded before the query itself even starts.
 
-Errors are deliberately generic to the client — the real duckdb.Error is
-logged server-side only, since a bad query here is entirely user-authored
-input and DuckDB's error text can reference internal structure.
+Errors from the user's own SELECT (bad column, bad syntax) are shown to the
+client as-is - it's their own query, so there's nothing to leak. Errors from
+the two setup statements ahead of it (materializing the dataset, locking down
+external access) stay generic instead: those embed server-built strings, not
+user input, so their failure text could reference internal structure. See
+`_execute_with_timeout`'s `safe_to_show` check.
 """
 from __future__ import annotations
 
@@ -60,16 +63,22 @@ def _execute_with_timeout(con: duckdb.DuckDBPyConnection, statements: list[str],
     wall-clock budget as the query they're setting up for. Runs synchronously
     (called via asyncio.to_thread by run_sql)."""
     result: dict = {}
+    last_index = len(statements) - 1
 
     def _work() -> None:
         try:
             cur = None
-            for stmt in statements:
+            for i, stmt in enumerate(statements):
                 cur = con.execute(stmt)
             result["rows"] = cur.fetchall()
             result["columns"] = [d[0] for d in (cur.description or [])]
         except Exception as exc:  # noqa: BLE001 - must never leave `result` without "error"/"rows", see caller
             result["error"] = exc
+            # Only the last statement embeds user SQL - materialize + the access-lockdown
+            # pragma are server-built and never fail on user input. A duckdb.Error there
+            # describes the user's own query (bad column, bad syntax), not server
+            # internals, so it's safe to show as-is instead of the generic message below.
+            result["safe_to_show"] = isinstance(exc, duckdb.Error) and i == last_index
 
     worker = threading.Thread(target=_work, daemon=True)
     worker.start()
@@ -80,6 +89,8 @@ def _execute_with_timeout(con: duckdb.DuckDBPyConnection, statements: list[str],
         raise HTTPException(status.HTTP_408_REQUEST_TIMEOUT, "Query timed out")
     if "error" in result:
         logger.warning("sql_query failed: %s", result["error"])
+        if result.get("safe_to_show"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Query failed: {result['error']}")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Query failed: invalid SQL or unsupported operation")
     return [result["columns"], result["rows"]]
 

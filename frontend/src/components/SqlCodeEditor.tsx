@@ -28,7 +28,6 @@ function columnCompletionSource(columns: SqlColumn[]) {
         label: c.name,
         type: "variable",
         detail: c.dtype,
-        boost: 1,
         apply: castedColumnToken(c.name, c.dtype),
       })),
     };
@@ -44,13 +43,17 @@ export function SqlCodeEditor({
   onChange: (next: string) => void;
   columns: SqlColumn[];
 }) {
+  const columnsKey = JSON.stringify(columns);
   const extensions = useMemo(
     () => [
       sql({ dialect: PostgreSQL }),
       autocompletion({ override: [keywordCompletionSource(PostgreSQL), columnCompletionSource(columns)] }),
       ...sqlEditorExtensions,
     ],
-    [columns],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- columnsKey is a stable
+    // stand-in for columns (both call sites build a fresh array every render); keying
+    // on the array reference directly would defeat this memo on every keystroke.
+    [columnsKey],
   );
 
   return (

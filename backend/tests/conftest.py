@@ -28,6 +28,7 @@ from app.models import (  # noqa: F401 - register models
     bom,
     dashboard,
     dataset,
+    downtime_tracking,
     forecast,
     inventory,
     inventory_snapshot,

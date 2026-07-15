@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { FileStack } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { useCharts, useDatasets } from "./analytics/shared";
+import { useCharts, useDatasets, useInbox, type InboxItem } from "./analytics/shared";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
@@ -112,6 +112,9 @@ export function ReportBuilder() {
   const [error, setError] = useState<string | null>(null);
   const [narrationStyle, setNarrationStyle] = useState<NarrationStyle>("narrative");
   const [narration, setNarration] = useState<ReportNarration | null>(null);
+  const inbox = useInbox();
+  const [showInboxPicker, setShowInboxPicker] = useState(false);
+  const [checkedInboxIds, setCheckedInboxIds] = useState<Set<string>>(new Set());
 
   const queryJsonError = useMemo(() => {
     if (!QUERY_TYPES.has(sectionDraft.type)) return null;
@@ -171,9 +174,24 @@ export function ReportBuilder() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["saved-reports"] }),
   });
 
+  const deleteInboxItem = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiFetch(`/reports/inbox/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Delete failed");
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["report-inbox"] }),
+  });
+
   function openAddSection() {
     setSectionDraft(blankSection());
     setEditingSectionIndex(sections.length);
+  }
+
+  function addFromInbox() {
+    const chosen = (inbox.data ?? []).filter((item) => checkedInboxIds.has(item.id));
+    setSections((prev) => [...prev, ...chosen.map((item) => ({ ...item.spec, title: item.spec.title ?? item.label }))]);
+    setCheckedInboxIds(new Set());
+    setShowInboxPicker(false);
   }
 
   function openEditSection(i: number) {
@@ -318,7 +336,9 @@ export function ReportBuilder() {
                   onChange={(e) => setNarrationStyle(e.target.value as NarrationStyle)}
                 >
                   {NARRATION_STYLES.map((s) => (
-                    <option key={s} value={s}>{s}</option>
+                    <option key={s} value={s}>
+                      {s === "narrative" ? "Paragraph" : s === "bullets" ? "Bullet points" : "Brief"}
+                    </option>
                   ))}
                 </Select>
                 <Button variant="secondary" loading={narrate.isPending} onClick={() => narrate.mutate()}>
@@ -370,7 +390,10 @@ export function ReportBuilder() {
               </div>
             </div>
           ))}
-          <Button variant="secondary" size="sm" onClick={openAddSection}>+ Add section</Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" onClick={openAddSection}>+ Add section</Button>
+            <Button variant="secondary" size="sm" onClick={() => setShowInboxPicker(true)}>Add from inbox</Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -497,6 +520,48 @@ export function ReportBuilder() {
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => setEditingSectionIndex(null)}>Cancel</Button>
             <Button disabled={!!queryJsonError} onClick={confirmSection}>Save section</Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog open={showInboxPicker} onClose={() => setShowInboxPicker(false)} title="Add from inbox">
+        <div className="space-y-3">
+          {(inbox.data ?? []).length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              Nothing captured yet — use "Send to report" on any analytics page, BI chart, or RCA case.
+            </p>
+          )}
+          {(inbox.data ?? []).map((item: InboxItem) => (
+            <div key={item.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+              <label className="flex min-w-0 items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={checkedInboxIds.has(item.id)}
+                  onChange={(e) => {
+                    setCheckedInboxIds((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(item.id);
+                      else next.delete(item.id);
+                      return next;
+                    });
+                  }}
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="neutral">{item.spec.type}</Badge>
+                    <span className="truncate font-medium">{item.label}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</div>
+                </div>
+              </label>
+              <Button variant="ghost" size="sm" onClick={() => deleteInboxItem.mutate(item.id)}>Delete</Button>
+            </div>
+          ))}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setShowInboxPicker(false)}>Cancel</Button>
+            <Button disabled={checkedInboxIds.size === 0} onClick={addFromInbox}>
+              Add {checkedInboxIds.size || ""} selected
+            </Button>
           </div>
         </div>
       </Dialog>

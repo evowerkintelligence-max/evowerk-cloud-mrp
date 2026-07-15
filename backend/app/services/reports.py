@@ -689,6 +689,22 @@ async def _resolve_engine_sections(db: AsyncSession, current: CurrentUser, spec:
     return _flatten_response_to_sections(title, response.model_dump())
 
 
+async def _resolve_kind_report_sections(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> list[Section]:
+    if spec.report_kind not in KINDS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"report_kind must be one of {sorted(KINDS)}")
+    params = spec.report_params or {}
+    horizon_start = date.fromisoformat(params["horizon_start"]) if params.get("horizon_start") else None
+    horizon_end = date.fromisoformat(params["horizon_end"]) if params.get("horizon_end") else None
+    report = await build_report_by_kind(
+        db, org_id, spec.report_kind,
+        horizon_start=horizon_start, horizon_end=horizon_end,
+        dimension=params.get("dimension", "supplier"),
+        lead_times=params.get("lead_times"),
+        dataset_id=params.get("dataset_id"),
+    )
+    return report.sections
+
+
 async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: ReportSectionSpec) -> list[Section]:
     org_id = current.org_id
 
@@ -756,7 +772,7 @@ async def _resolve_sections(db: AsyncSession, current: CurrentUser, spec: Report
         return await _resolve_engine_sections(db, current, spec)
 
     if spec.type == "kind_report":
-        return await _resolve_kind_report_sections(db, org_id, spec)  # noqa: F821 - added in Task 5
+        return await _resolve_kind_report_sections(db, org_id, spec)
 
     # spec.type == "rca_case"
     return await _resolve_rca_case_sections(db, org_id, spec)  # noqa: F821 - added in Task 6

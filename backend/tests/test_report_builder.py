@@ -419,3 +419,58 @@ async def test_cross_org_isolation_on_custom_report(client):
         await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers_b)
     ).status_code == 404
     assert (await client.delete(f"/reports/custom/{report_id}", headers=headers_b)).status_code == 404
+
+
+async def test_kind_report_section_mrp_plan(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "MRP capture",
+            "sections": [{
+                "type": "kind_report", "report_kind": "mrp-plan",
+                "report_params": {"horizon_start": "2026-01-01", "horizon_end": "2026-04-01"},
+            }],
+        },
+    )
+    assert created.status_code == 201
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 200, res.text
+    assert b"Suggested actions" in res.content
+    assert b"Full plan" in res.content
+
+
+async def test_kind_report_section_inventory_analytics_needs_no_params(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={
+            "name": "Inventory capture",
+            "sections": [{"type": "kind_report", "report_kind": "inventory-analytics"}],
+        },
+    )
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 200, res.text
+    assert b"Item positions" in res.content
+
+
+async def test_kind_report_section_rejects_unknown_kind(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "Bad kind", "sections": [{"type": "kind_report", "report_kind": "not-a-kind"}]},
+    )
+    report_id = created.json()["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 400

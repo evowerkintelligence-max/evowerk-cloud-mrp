@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.analytics.oee_calc import num_invalid as _inv
-from app.analytics.oee_calc import num_val as _val
+from app.analytics.oee_calc import date_bucket_expr, date_bucket_unparsed_expr
+from app.analytics.oee_calc import inv_expr as _inv
+from app.analytics.oee_calc import val_expr as _val
 from app.analytics.oee_calc import qi
 from app.models.dataset import Dataset
 from app.services import datasets as ds_service
@@ -24,7 +25,7 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
 
     # nosec B608 - units_col/date_col/machine_col/planned_units_col are
     # validate_columns-checked by the route before reaching here, and every
-    # reference below is qi()/num_val()-quoted; no free-text SQL entry.
+    # reference below is qi()/val_expr()-quoted; no free-text SQL entry.
     con = ds_service.open_con()
     try:
         r = con.execute(
@@ -38,13 +39,16 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
         row_count = int(r[4] or 0)
 
         period_groups: dict[str, dict[str, float]] = {}
+        unparsed_date_rows = 0
         if req.date_col and req.date_col in headers:
-            dk = f"SUBSTRING(NULLIF(TRIM(CAST({qi(req.date_col)} AS VARCHAR)), ''), 1, 10)"
-            for k, u, pl in con.execute(
-                f"SELECT {dk}, SUM({_val(req.units_col)}), SUM({planned_sel}) FROM {rel} "  # nosec B608
+            dk = date_bucket_expr(req.date_col)
+            unp = date_bucket_unparsed_expr(req.date_col)
+            for k, u, pl, n in con.execute(
+                f"SELECT {dk}, SUM({_val(req.units_col)}), SUM({planned_sel}), SUM({unp}) FROM {rel} "  # nosec B608
                 f"WHERE {dk} IS NOT NULL GROUP BY 1"
             ).fetchall():
                 period_groups[str(k)] = {"units": float(u or 0.0), "planned": float(pl or 0.0)}
+                unparsed_date_rows += int(n or 0)
 
         machine_groups: dict[str, float] = {}
         if req.machine_col and req.machine_col in headers:
@@ -72,6 +76,20 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
 
     period_count = len(trend) if trend else 1
     avg_units = round(total_units / period_count, 2)
+
+    # Auto-baseline: no planned/target column mapped, so there's nothing to
+    # compare pace against. Suggest the historical per-period average as a
+    # flat target line instead of leaving the chart/gauge blank.
+    # ponytail: flat historical average, not a seasonal/weighted forecast —
+    # good enough to unblank the target line; revisit if noisy production
+    # data makes a flat average a bad baseline.
+    is_target_estimated = False
+    if not pcol and len(trend) >= 2 and avg_units > 0:
+        is_target_estimated = True
+        for t in trend:
+            t["planned"] = avg_units
+            t["efficiency_pct"] = round(t["units"] / avg_units * 100, 1)
+        total_planned = round(avg_units * period_count, 2)
 
     peak_units = 0.0
     peak_period: Optional[str] = None
@@ -107,6 +125,8 @@ def compute_throughput(dataset: Dataset, req: Any) -> dict:
         "row_count": row_count,
         "invalid_cells": invalid_cells,
         "rows_with_issues": rows_with_issues,
+        "unparsed_date_rows": unparsed_date_rows,
+        "is_target_estimated": is_target_estimated,
         "trend": trend,
         "by_machine": by_machine,
     }

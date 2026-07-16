@@ -1,3 +1,4 @@
+import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCard } from "@/components/StatCard";
 import {
@@ -21,8 +22,22 @@ interface ThroughputResult {
   peak_units: number;
   peak_period: string | null;
   efficiency_pct: number | null;
+  row_count: number;
+  invalid_cells: number;
+  rows_with_issues: number;
+  unparsed_date_rows: number;
+  is_target_estimated: boolean;
   trend: { period: string; units: number; planned: number | null; efficiency_pct?: number | null }[];
   by_machine: { machine: string; total_units: number; pct_of_total: number }[];
+}
+
+// Live-style pace status: on-pace / behind / ahead against whichever target
+// is in play (a mapped plan column, or the auto-baseline average).
+function paceStatus(pct: number): { label: string; color: string } {
+  if (pct >= 100) return { label: "Ahead of pace", color: C.green };
+  if (pct >= 85) return { label: "On pace", color: C.blue };
+  if (pct >= 60) return { label: "Behind pace", color: C.amber };
+  return { label: "Well behind pace", color: C.red };
 }
 
 const FIELDS = [
@@ -43,21 +58,29 @@ export function Throughput() {
     >
       {(r) => (
         <div className="space-y-6">
+          {(r.rows_with_issues > 0 || r.unparsed_date_rows > 0) && (
+            <Alert variant="warning">
+              {r.rows_with_issues > 0 &&
+                `${r.invalid_cells} non-numeric/negative value(s) in ${r.rows_with_issues} row(s) were treated as 0 — check that the mapped columns are the ones you intended. `}
+              {r.unparsed_date_rows > 0 &&
+                `${r.unparsed_date_rows} row(s) had a date that couldn't be parsed and were grouped by raw text instead — the trend may not be in chronological order for those.`}
+            </Alert>
+          )}
+
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard label="Total units" value={fmt(r.total_units)} tone="primary" />
             <StatCard label="Avg / period" value={fmt(r.avg_units_per_period)} hint={`${r.period_count} periods`} tone="accent" />
             <StatCard label="Peak" value={fmt(r.peak_units)} hint={r.peak_period ?? undefined} tone="success" />
             <StatCard
-              label="Plan attainment"
+              label={r.is_target_estimated ? "Pace vs. estimated target" : "Pace vs. plan"}
               value={
                 r.efficiency_pct === null ? (
                   "—"
                 ) : (
-                  <span style={{ color: r.efficiency_pct >= 100 ? C.green : r.efficiency_pct >= 85 ? C.amber : C.red }}>
-                    {pct(r.efficiency_pct)}
-                  </span>
+                  <span style={{ color: paceStatus(r.efficiency_pct).color }}>{paceStatus(r.efficiency_pct).label}</span>
                 )
               }
+              hint={r.efficiency_pct === null ? undefined : `${pct(r.efficiency_pct)} of ${r.is_target_estimated ? "historical average" : "plan"}`}
               tone="warning"
             />
           </div>
@@ -87,7 +110,7 @@ export function Throughput() {
                       ...(r.trend.some((t) => t.planned !== null)
                         ? [
                             {
-                              name: "Planned",
+                              name: r.is_target_estimated ? "Target (est.)" : "Planned",
                               type: "line" as const,
                               smooth: true,
                               symbol: "none" as const,

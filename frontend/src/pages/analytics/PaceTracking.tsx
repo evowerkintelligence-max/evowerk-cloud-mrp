@@ -120,7 +120,16 @@ export function PaceTracking() {
   });
   const stop = useMutation({
     mutationFn: () => action("stop"),
-    onSuccess: (s) => qc.setQueryData(["pace-session", sessionId], s),
+    // Stopping materializes a brand-new Dataset that "View in OEE/Throughput"
+    // immediately links to. Without this, EngineScreen's ["datasets"] query
+    // cache (already populated from an earlier visit to any analytics page)
+    // serves its stale pre-session list on that next page's mount, so its
+    // ?dataset_id= auto-column-mapping runs against an empty column list and
+    // never retries once the real list arrives.
+    onSuccess: (s) => {
+      qc.setQueryData(["pace-session", sessionId], s);
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+    },
   });
 
   const elapsed = useElapsed(session.data?.started_at);
@@ -195,9 +204,14 @@ export function PaceTracking() {
             </p>
             <div className="flex gap-2">
               {s.dataset_id && (
-                <Button onClick={() => navigate(`/analytics/oee?dataset_id=${s.dataset_id}`)}>
-                  View in OEE dashboard
-                </Button>
+                <>
+                  <Button onClick={() => navigate(`/analytics/oee?dataset_id=${s.dataset_id}`)}>
+                    View in OEE dashboard
+                  </Button>
+                  <Button variant="secondary" onClick={() => navigate(`/analytics/throughput?dataset_id=${s.dataset_id}`)}>
+                    View in Throughput
+                  </Button>
+                </>
               )}
               <Button variant="secondary" onClick={() => persist(null)}>
                 Start another session

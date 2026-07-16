@@ -78,6 +78,50 @@ def blank_expr(col: str) -> str:
     return f"CASE WHEN NULLIF(TRIM(CAST({c} AS VARCHAR)), '') IS NULL THEN 1 ELSE 0 END"
 
 
+def _date_parsed_expr(txt: str) -> str:
+    # ISO first (unambiguous), then the common non-ISO layouts a manual export
+    # produces. %m/%d/%Y before %d/%m/%Y: US-style is the more likely default
+    # for this app's userbase, and COALESCE only falls through to %d/%m/%Y when
+    # %m/%d/%Y actually failed to parse (e.g. month > 12), so this doesn't
+    # silently misread a %d/%m/%Y date that %m/%d/%Y also happens to accept.
+    return (
+        f"COALESCE("
+        f"TRY_CAST({txt} AS TIMESTAMP), "
+        f"TRY_STRPTIME({txt}, '%m/%d/%Y'), "
+        f"TRY_STRPTIME({txt}, '%m/%d/%Y %H:%M:%S'), "
+        f"TRY_STRPTIME({txt}, '%d/%m/%Y'), "
+        f"TRY_STRPTIME({txt}, '%d-%m-%Y')"
+        f")"
+    )
+
+
+def date_bucket_expr(col: str) -> str:
+    """Day-bucket grouping key for a date/timestamp column, normalized to
+    ISO YYYY-MM-DD when the cell parses as a date. Fixes two bugs in the old
+    `SUBSTRING(..., 1, 10)` approach: (1) it silently mis-grouped non-ISO
+    dates like "01/15/2026" whose first 10 characters aren't a real date
+    boundary, and (2) callers string-sort these keys directly, so a non-ISO
+    format also sorted the trend out of chronological order. ISO strings
+    sort lexically = chronologically, so normalizing here fixes both at once.
+    Falls back to the raw 10-char prefix for text that parses as neither ISO
+    nor a recognized fallback format, rather than dropping the row."""
+    c = qi(col)
+    txt = f"NULLIF(TRIM(CAST({c} AS VARCHAR)), '')"
+    parsed = _date_parsed_expr(txt)
+    fallback = f"SUBSTRING({txt}, 1, 10)"
+    return f"COALESCE(STRFTIME({parsed}, '%Y-%m-%d'), {fallback})"
+
+
+def date_bucket_unparsed_expr(col: str) -> str:
+    """1 when a non-blank date/timestamp cell couldn't be parsed by
+    date_bucket_expr and fell back to the raw-string prefix — a data-quality
+    signal for the caller to surface, same shape as num_invalid."""
+    c = qi(col)
+    txt = f"NULLIF(TRIM(CAST({c} AS VARCHAR)), '')"
+    parsed = _date_parsed_expr(txt)
+    return f"CASE WHEN {txt} IS NOT NULL AND {parsed} IS NULL THEN 1 ELSE 0 END"
+
+
 def rate_sql_expr(
     machine_col: Optional[str],
     machine_rates: Optional[dict],

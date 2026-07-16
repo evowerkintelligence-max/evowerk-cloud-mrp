@@ -30,6 +30,7 @@ _STATUS_RISK_SCORE = {
     "healthy": 0,
     "slow_moving": 1,
     "excess": 2,
+    "dead_stock": 3,
 }
 
 

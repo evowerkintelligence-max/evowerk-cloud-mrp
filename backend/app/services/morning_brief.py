@@ -25,7 +25,7 @@ COMPARISON_WINDOW_DAYS = 7
 
 # Only these statuses are worth a mention in the brief - healthy/no_data are
 # the "nothing to report" states. Order is severity, most urgent first.
-ACTIONABLE_STATUSES = ("stockout", "low", "excess", "slow_moving")
+ACTIONABLE_STATUSES = ("stockout", "low", "dead_stock", "excess", "slow_moving")
 _STATUS_PRIORITY = {status: i for i, status in enumerate(ACTIONABLE_STATUSES)}
 
 # Active lots expiring within this many days are worth flagging even though

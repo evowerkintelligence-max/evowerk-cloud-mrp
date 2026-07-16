@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { STAT_TONES, StatCard } from "@/components/StatCard";
 import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt } from "./shared";
 
-interface SpcPoint {
+export interface SpcPoint {
   label: string;
   value: number;
   range_value?: number;
@@ -34,7 +34,7 @@ const FIELDS = [
   { key: "lsl", label: "Lower spec limit", kind: "num" as const },
 ];
 
-function controlChart(points: SpcPoint[], value: (p: SpcPoint) => number | undefined, cl: number, ucl: number, lcl: number, name: string) {
+export function controlChart(points: SpcPoint[], value: (p: SpcPoint) => number | undefined, cl: number, ucl: number, lcl: number, name: string) {
   return {
     tooltip: TOOLTIP,
     grid: { top: 24, bottom: 28, left: 56, right: 88 },

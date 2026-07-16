@@ -54,6 +54,7 @@ class ScrapComputeResponse(BaseModel):
     by_reason: List[ScrapReasonResult] = []
     by_machine: List[ScrapMachineResult] = []
     trend: List[ScrapTrendPoint] = []
+    warnings: List[str] = []
 
 
 @router.post("/scrap", response_model=ScrapComputeResponse)

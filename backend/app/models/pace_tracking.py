@@ -61,4 +61,7 @@ class PaceTap(Base):
         Uuid(as_uuid=True), ForeignKey("pace_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     kind: Mapped[str] = mapped_column(String(16), nullable=False)  # good | reject
+    # Free-text reject reason - only meaningful when kind == "reject"; NULL for
+    # good taps and for rejects where the operator skipped tagging a reason.
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

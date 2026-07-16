@@ -1,3 +1,4 @@
+import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { StatCard } from "@/components/StatCard";
@@ -12,6 +13,7 @@ interface ScrapResult {
   by_reason: { reason: string; count: number; pct_of_total: number; cumulative_pct: number }[];
   by_machine: { machine: string; total_units: number; scrap_units: number; scrap_rate_pct: number }[];
   trend: { period: string; total_units: number; scrap_units: number; scrap_rate_pct: number }[];
+  warnings?: string[];
 }
 
 const FIELDS = [
@@ -26,13 +28,14 @@ export function Scrap() {
   return (
     <EngineScreen<ScrapResult>
       title="Scrap & Quality"
-      description="Scrap rate, first-pass quality, and a Pareto of defect reasons to attack first."
+      description="Scrap rate, scrap-only yield, and a Pareto of defect reasons to attack first."
       path="/analytics/scrap"
       fields={FIELDS}
       runLabel="Analyze scrap"
     >
       {(r) => (
         <div className="space-y-6">
+          {(r.warnings?.length ?? 0) > 0 && <Alert variant="destructive">{r.warnings!.join(" ")}</Alert>}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard label="Total units" value={fmt(r.total_units)} tone="primary" />
             <StatCard label="Scrap units" value={<span style={{ color: C.red }}>{fmt(r.total_scrap)}</span>} tone="accent" />
@@ -45,7 +48,7 @@ export function Scrap() {
               }
               tone="success"
             />
-            <StatCard label="First-pass quality" value={`${r.fpq_pct}%`} tone="warning" />
+            <StatCard label="Yield (100 − scrap)" value={`${r.fpq_pct}%`} tone="warning" />
             <StatCard label="Defects / 1000" value={fmt(r.defect_rate_per_1000)} tone="primary" />
           </div>
 

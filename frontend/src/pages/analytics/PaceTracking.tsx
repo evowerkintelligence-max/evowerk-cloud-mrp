@@ -28,6 +28,7 @@ interface PaceSession {
   dataset_id: string | null;
   good_count: number;
   reject_count: number;
+  reject_reasons: Record<string, number>;
   unplanned_dt_min: number;
   planned_dt_min: number;
   other_dt_min: number;
@@ -39,6 +40,24 @@ const PAUSE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+const REJECT_REASONS: Record<string, string> = {
+  dimensional: "Dimensional",
+  cosmetic: "Cosmetic / surface",
+  material: "Material defect",
+  assembly: "Assembly error",
+  other: "Other",
+};
+
+function RejectReasonBreakdown({ reasons }: { reasons: Record<string, number> }) {
+  const entries = Object.entries(reasons);
+  if (entries.length === 0) return null;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Reject reasons: {entries.map(([r, n]) => `${REJECT_REASONS[r] ?? r} (${n})`).join(", ")}
+    </p>
+  );
+}
+
 export function PaceTracking() {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -47,6 +66,8 @@ export function PaceTracking() {
   const [formError, setFormError] = useState<string | null>(null);
   const [pauseReason, setPauseReason] = useState("breakdown");
   const [showPausePicker, setShowPausePicker] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [showRejectPicker, setShowRejectPicker] = useState(false);
 
   const session = useQuery<PaceSession>({
     queryKey: ["pace-session", sessionId],
@@ -104,7 +125,7 @@ export function PaceTracking() {
   }
 
   const tap = useMutation({
-    mutationFn: (kind: "good" | "reject") => action("tap", { kind }),
+    mutationFn: (body: { kind: "good" | "reject"; reason?: string }) => action("tap", body),
     onSuccess: (s) => qc.setQueryData(["pace-session", sessionId], s),
   });
   const pause = useMutation({
@@ -202,6 +223,7 @@ export function PaceTracking() {
             <p className="text-sm text-muted-foreground">
               {s.line} — {s.operator}: {s.good_count} good, {s.reject_count} reject.
             </p>
+            <RejectReasonBreakdown reasons={s.reject_reasons} />
             <div className="flex gap-2">
               {s.dataset_id && (
                 <>
@@ -238,6 +260,8 @@ export function PaceTracking() {
         <StatCard label="Total" value={s.good_count + s.reject_count} tone="accent" />
       </div>
 
+      <RejectReasonBreakdown reasons={s.reject_reasons} />
+
       {s.status === "paused" && (
         <Alert variant="warning">Paused — {PAUSE_LABELS[s.pause_reason ?? ""] ?? s.pause_reason}</Alert>
       )}
@@ -248,7 +272,7 @@ export function PaceTracking() {
           className="h-24 text-xl"
           disabled={s.status !== "active"}
           loading={tap.isPending}
-          onClick={() => tap.mutate("good")}
+          onClick={() => tap.mutate({ kind: "good" })}
         >
           Good unit
         </Button>
@@ -257,12 +281,39 @@ export function PaceTracking() {
           variant="destructive"
           className="h-24 text-xl"
           disabled={s.status !== "active"}
-          loading={tap.isPending}
-          onClick={() => tap.mutate("reject")}
+          onClick={() => setShowRejectPicker((v) => !v)}
         >
-          Reject
+          Reject ▾
         </Button>
       </div>
+
+      {showRejectPicker && (
+        <Card>
+          <CardContent className="flex flex-wrap items-end gap-3 pt-6">
+            <Field label="Reason (optional)">
+              <Select value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}>
+                <option value="">Unspecified</option>
+                {Object.entries(REJECT_REASONS).map(([v, label]) => (
+                  <option key={v} value={v}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Button
+              variant="destructive"
+              loading={tap.isPending}
+              onClick={() => {
+                tap.mutate({ kind: "reject", reason: rejectReason || undefined });
+                setShowRejectPicker(false);
+                setRejectReason("");
+              }}
+            >
+              Record reject
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {s.status === "active" && (

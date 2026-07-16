@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from app.analytics import spc_calc
 from app.models.dataset import Dataset
 from app.services.datasets import dataframe_for
 
@@ -46,6 +47,10 @@ def analyze_quality(
     max_rows: int = 500_000,
 ) -> Dict[str, Any]:
     df = dataframe_for(dataset)
+    # Sub-analyses that fail (or inputs that look mismapped) are reported here
+    # instead of being silently dropped — an empty section must be
+    # distinguishable from a failed one.
+    warnings: List[str] = []
     rows_total = int(len(df))
     truncated = bool(max_rows and rows_total > max_rows)
     if truncated:
@@ -56,6 +61,10 @@ def analyze_quality(
 
     # Coerce defect column to numeric (0/1 or counts)
     df["_defect"] = pd.to_numeric(df[defect_column], errors="coerce").fillna(0)
+    if (df["_defect"] < 0).any():
+        warnings.append(
+            f"Column '{defect_column}' contains negative values — check that it really holds defect flags or counts."
+        )
     is_binary = df["_defect"].dropna().isin([0, 1]).all()
 
     # ── Batch-level stats ────────────────────────────────────────────────────
@@ -144,8 +153,8 @@ def analyze_quality(
                 "strength": "strong" if abs(corr) > 0.5 else ("moderate" if abs(corr) > 0.25 else "weak"),
                 "abs_corr": round(abs(corr), 4),
             })
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"Correlation for '{col}' failed: {e}")
 
     correlations.sort(key=lambda x: -x["abs_corr"])
 
@@ -169,8 +178,24 @@ def analyze_quality(
                     for idx, row in resampled.iterrows()
                     if not np.isnan(row["defect_rate"])
                 ]
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.append(f"Trend analysis failed: {e}")
+
+    # Control limits (mean +/- ~3 sigma via moving range, same math as the SPC
+    # engine's Individuals chart) turn the trend into an actual SPC chart
+    # instead of a bare line - flags periods where the defect rate moved for a
+    # special-cause reason, not just normal period-to-period noise.
+    trend_control: Optional[Dict] = None
+    if len(trend) >= 2:
+        chart = spc_calc.individuals_chart([t["defect_rate"] for t in trend], [t["date"] for t in trend])
+        trend_control = {
+            "centerline": chart["centerline"],
+            "ucl": chart["ucl"],
+            "lcl": chart["lcl"],
+            "out_of_control_count": chart["out_of_control_count"],
+        }
+        for t, p in zip(trend, chart["points"]):
+            t["in_control"] = p["in_control"]
 
     # ── Clustering ───────────────────────────────────────────────────────────
     clusters: List[Dict] = []
@@ -202,8 +227,8 @@ def analyze_quality(
                         "feature_means": {k: float(v) for k, v in means.items()},
                     })
                 clusters.sort(key=lambda c: -c["defect_rate"])
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.append(f"Clustering failed: {e}")
 
         if not clusters:
             # Quantile-based fallback (used whenever scikit-learn isn't installed —
@@ -225,8 +250,8 @@ def analyze_quality(
                         "feature_means": {},
                     })
                 clusters.sort(key=lambda c: -c["defect_rate"])
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.append(f"Fallback clustering failed: {e}")
 
     return {
         "summary": {
@@ -250,4 +275,6 @@ def analyze_quality(
         "correlations": correlations[:15],
         "clusters": clusters,
         "trend": trend,
+        "trend_control": trend_control,
+        "warnings": warnings,
     }

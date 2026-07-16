@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,7 +41,10 @@ async def quality_analyze(
     )
 
     try:
-        return analyze_quality(
+        # analyze_quality is synchronous pandas/sklearn over up to 5M rows;
+        # run it off the event loop so one analysis doesn't stall the worker.
+        return await run_in_threadpool(
+            analyze_quality,
             dataset=dataset,
             defect_column=req.defect_column,
             batch_column=req.batch_column,

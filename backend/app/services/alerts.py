@@ -190,6 +190,35 @@ def _eval_quality(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrig
     )
 
 
+def _eval_scrap(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
+    cfg = rule.config
+    scrap_col = cfg.get("scrap_col", "")
+    total_col = cfg.get("total_units_col", "")
+    group_col = cfg.get("group_col") or ""
+    threshold_pct = float(cfg.get("scrap_threshold_pct", 5.0))
+
+    col_warn = _missing_columns(dataset, {"scrap_units": scrap_col, "total_units": total_col, "group": group_col})
+    if col_warn:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold_pct, col_warn)
+
+    where_sql = _time_filter_sql(cfg)
+    if group_col:
+        by_g = _sum2_by_group(con, rel, scrap_col, total_col, group_col, where_sql)
+        rates = {g: (s / t) * 100 if t > 0 else 0.0 for g, s, t in by_g}
+        offenders = sorted(g for g, rate in rates.items() if rate > threshold_pct)
+        value = max(rates.values(), default=0.0)
+    else:
+        total_scrap, total_all = _sum2_total(con, rel, scrap_col, total_col, where_sql)
+        value = (total_scrap / total_all) * 100 if total_all > 0 else 0.0
+        offenders = [] if value <= threshold_pct else ["All"]
+
+    message = f"Scrap rate {value:.1f}% (threshold: {threshold_pct:.1f}%)" + _offenders_suffix(offenders)
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, bool(offenders), round(value, 2), threshold_pct,
+        message, offenders,
+    )
+
+
 def _eval_inventory(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
     cfg = rule.config
     qty_col = cfg.get("quantity_col", "")
@@ -334,6 +363,7 @@ async def _fire_webhook(rule: AlertRule, trigger: AlertTrigger) -> None:
 _DATASET_EVALUATORS = {
     "machine_downtime": _eval_machine_downtime,
     "quality": _eval_quality,
+    "scrap": _eval_scrap,
     "inventory": _eval_inventory,
     "production_target": _eval_production_target,
 }

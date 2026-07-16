@@ -16,7 +16,8 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { C, ColumnChecklist, QueryBuilderFields, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { C, ColumnChecklist, EChart, QueryBuilderFields, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { controlChart } from "./Spc";
 
 interface DatasetDetail extends Dataset {
   preview: Record<string, unknown>[];
@@ -71,6 +72,19 @@ interface QualityCorrelation {
   strength: string;
 }
 
+interface QualityTrendPoint {
+  date: string;
+  defect_rate: number;
+  in_control?: boolean;
+}
+
+interface QualityTrendControl {
+  centerline: number;
+  ucl: number;
+  lcl: number;
+  out_of_control_count: number;
+}
+
 interface QualityAnalyzeResponse {
   summary: {
     total_records: number;
@@ -82,6 +96,9 @@ interface QualityAnalyzeResponse {
   };
   batch_stats: QualityBatchStat[];
   correlations: QualityCorrelation[];
+  trend: QualityTrendPoint[];
+  trend_control: QualityTrendControl | null;
+  warnings: string[];
 }
 
 interface ProcessActivity {
@@ -618,11 +635,13 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
   const names = d.columns.map((c) => c.name);
   const [defectColumn, setDefectColumn] = useState("");
   const [batchColumn, setBatchColumn] = useState("");
+  const [timestampColumn, setTimestampColumn] = useState("");
 
   const quality = useMutation({
     mutationFn: async () => {
       const body: Record<string, string> = { defect_column: defectColumn };
       if (batchColumn) body.batch_column = batchColumn;
+      if (timestampColumn) body.timestamp_column = timestampColumn;
       const res = await apiFetch(`/datasets/${d.id}/quality/analyze`, { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Quality analysis failed");
       return res.json() as Promise<QualityAnalyzeResponse>;
@@ -657,6 +676,16 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
                 ))}
               </Select>
             </Field>
+            <Field label="Timestamp column (optional, enables trend chart)">
+              <Select value={timestampColumn} onChange={(e) => setTimestampColumn(e.target.value)}>
+                <option value="">(none)</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
           </div>
           <Button disabled={!defectColumn} loading={quality.isPending} onClick={() => quality.mutate()}>
             Analyze quality
@@ -667,6 +696,9 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
 
       {quality.data && (
         <>
+          {quality.data.warnings.length > 0 && (
+            <Alert variant="destructive">{quality.data.warnings.join(" ")}</Alert>
+          )}
           <Card>
             <CardContent className="pt-6 text-sm">
               <strong>
@@ -706,6 +738,36 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
                     </TBody>
                   </Table>
                 </TableWrap>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Correlation flags candidates to investigate — it does not prove a feature causes defects.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {quality.data.trend.length >= 2 && quality.data.trend_control && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Defect rate trend (SPC)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {quality.data.trend_control.out_of_control_count > 0 && (
+                  <Alert variant="destructive">
+                    {quality.data.trend_control.out_of_control_count} period(s) outside control limits —
+                    special-cause variation, not just normal noise.
+                  </Alert>
+                )}
+                <EChart
+                  height={280}
+                  option={controlChart(
+                    quality.data.trend.map((t) => ({ label: t.date, value: t.defect_rate, in_control: t.in_control ?? true })),
+                    (p) => p.value,
+                    quality.data.trend_control.centerline,
+                    quality.data.trend_control.ucl,
+                    quality.data.trend_control.lcl,
+                    "Defect rate",
+                  )}
+                />
               </CardContent>
             </Card>
           )}

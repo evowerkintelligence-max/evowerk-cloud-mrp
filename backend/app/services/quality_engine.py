@@ -8,6 +8,7 @@ consistent with every other dataset consumer in this app).
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -16,6 +17,8 @@ import pandas as pd
 from app.analytics import spc_calc
 from app.models.dataset import Dataset
 from app.services.datasets import dataframe_for
+
+logger = logging.getLogger(__name__)
 
 _HAS_SKLEARN = False
 try:
@@ -173,6 +176,7 @@ def analyze_quality(
                 "abs_corr": round(abs(corr), 4),
             })
         except Exception as e:
+            logger.warning("Correlation for %r failed", col, exc_info=True)
             warnings.append(f"Correlation for '{col}' failed: {e}")
 
     correlations.sort(key=lambda x: -x["abs_corr"])
@@ -199,6 +203,7 @@ def analyze_quality(
                     for idx, row in valid_resampled.iterrows()
                 ]
             except Exception as e:
+                logger.warning("Trend analysis failed", exc_info=True)
                 warnings.append(f"Trend analysis failed: {e}")
 
     # Control limits turn the trend into an actual SPC chart instead of a bare
@@ -280,6 +285,7 @@ def analyze_quality(
                     })
                 clusters.sort(key=lambda c: -c["defect_rate"])
             except Exception as e:
+                logger.warning("Clustering failed", exc_info=True)
                 warnings.append(f"Clustering failed: {e}")
 
         if not clusters:
@@ -303,6 +309,7 @@ def analyze_quality(
                     })
                 clusters.sort(key=lambda c: -c["defect_rate"])
             except Exception as e:
+                logger.warning("Fallback clustering failed", exc_info=True)
                 warnings.append(f"Fallback clustering failed: {e}")
 
     return {

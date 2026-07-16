@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,4 +68,6 @@ async def compute_scrap(
     ds_service.validate_columns(
         dataset, [req.total_units_col, req.scrap_col, req.reason_col, req.machine_col, req.date_col]
     )
-    return ScrapComputeResponse(**scrap_service.compute_scrap(dataset, req))
+    # Synchronous DuckDB aggregation — keep it off the event loop.
+    result = await run_in_threadpool(scrap_service.compute_scrap, dataset, req)
+    return ScrapComputeResponse(**result)

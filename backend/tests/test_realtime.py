@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from app.services import realtime as realtime_service
+from streaming.bus import FakeMessageBus
+from tests.streaming_fakes import FakeWindowingLoop
 
 PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
 
@@ -40,6 +42,28 @@ def _stop_all_runners_after_each_test():
     without this, a runner from one test could keep polling into the next."""
     yield
     realtime_service.stop_all_runners()
+
+
+@pytest.fixture(autouse=True)
+async def _fake_streaming_pipeline(monkeypatch):
+    """Swaps the real Redpanda bus for an in-memory FakeMessageBus and runs a
+    FakeWindowingLoop in place of the real Flink job, so these tests exercise
+    the full producer -> bus -> (fake) windowing -> cache -> route pipeline
+    without needing a real Redpanda/Flink cluster. See
+    docs/superpowers/specs/2026-07-16-realtime-redpanda-flink-design.md."""
+    bus = FakeMessageBus()
+    monkeypatch.setattr(realtime_service, "_bus", bus)
+    monkeypatch.setattr(realtime_service, "_loop", None)
+    monkeypatch.setattr(realtime_service, "_producers", {})
+
+    windower = FakeWindowingLoop(bus, window_seconds=0.2)
+    await windower.start()
+    await realtime_service.start_cache(group_id="test-replica")
+
+    yield
+
+    await realtime_service.stop_cache()
+    await windower.stop()
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):

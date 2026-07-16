@@ -294,10 +294,11 @@ def _eval_production_target(rule: AlertRule, dataset: Dataset, con, rel: str) ->
 
 
 def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
-    """Targets a live app.services.realtime StreamRunner instead of a dataset -
-    same threshold/offender shape as the dataset evaluators above, reading the
-    live in-memory snapshot instead of querying a Dataset file."""
-    from app.services.realtime import get_runner
+    """Targets a live app.services.realtime_cache RealtimeCache snapshot
+    instead of a dataset - same threshold/offender shape as the dataset
+    evaluators above, reading the cached windowed snapshot (fed by the Flink
+    job over Redpanda) instead of an in-process StreamRunner."""
+    from app.services.realtime import get_snapshot
 
     cfg = rule.config
     stream_id = cfg.get("stream_id", "")
@@ -305,14 +306,13 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     comparison = cfg.get("comparison", "gt")  # "gt" | "lt"
     threshold = float(cfg.get("threshold", 0))
 
-    runner = get_runner(uuid.UUID(stream_id)) if stream_id else None
-    if runner is None:
+    snap = get_snapshot(uuid.UUID(stream_id)) if stream_id else None
+    if snap is None:
         return AlertTrigger(
             str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
             "Stream not running — nothing to evaluate.",
         )
 
-    snap = runner.snapshot()
     metrics = snap.get("metrics", {})
     if metric_name not in metrics:
         return AlertTrigger(

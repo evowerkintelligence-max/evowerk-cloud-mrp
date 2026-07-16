@@ -431,6 +431,11 @@ def analyze(
         operating_time_col=operating_time_col, total_units_col=total_units_col, good_units_col=good_units_col,
         target_rate=target_rate, downtime_category_col=downtime_category_col,
     )
+    # _build_daily copies its own df internally (so it doesn't mutate ours),
+    # but analyze()'s own df is reused below for the failure_col/
+    # downtime_category_col last_fail_ago lookback and needs the same
+    # datetime-coerced date_col dtype.
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
     ml_probs, ml_drivers, ml_meta_raw = _ml_analyze(daily_ml)
     model_meta = ModelMeta(**ml_meta_raw) if ml_meta_raw else None

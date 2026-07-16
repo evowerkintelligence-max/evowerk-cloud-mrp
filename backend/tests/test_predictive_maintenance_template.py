@@ -7,21 +7,28 @@ from app.services.automl_templates import predictive_maintenance as pm
 
 # M1: healthy at 0.8 OEE for 30 days. M2: healthy for 10 days, then 20 days
 # of failures/low OEE - enough history for the rolling-window featurizer to
-# produce >= 40 training rows with a balanced-ish positive rate.
+# produce >= 40 training rows with a balanced-ish positive rate. The training
+# target (daily_ml["is_failure"]) is driven by downtime_category_col
+# (matched against legacy._UNPLANNED_CATS), matching predictive.py's
+# _build_daily exactly - failure_col is a separate, legitimate-but-unused-
+# here column that only feeds analyze()'s RUL "last failure days ago"
+# lookback, never the ML training target.
 _ROWS = []
 for day in range(1, 31):
-    _ROWS.append(f"2026-01-{day:02d},M1,480,470,920,900,")
-    fail = "1" if day in (11, 18, 25) else ""
+    _ROWS.append(f"2026-01-{day:02d},M1,480,470,920,900,,")
+    is_fail_day = day in (11, 18, 25)
+    fail = "1" if is_fail_day else ""
+    category = "Mechanical Failure" if is_fail_day else ""
     operating = 150 if day >= 11 else 470
     total = 200 if day >= 11 else 920
     good = 150 if day >= 11 else 900
-    _ROWS.append(f"2026-01-{day:02d},M2,480,{operating},{total},{good},{fail}")
+    _ROWS.append(f"2026-01-{day:02d},M2,480,{operating},{total},{good},{fail},{category}")
 PREDICTIVE_CSV_ROWS = "\n".join(_ROWS)
 
 
 def _fixture_df() -> pd.DataFrame:
     from io import StringIO
-    return pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure\n" + PREDICTIVE_CSV_ROWS + "\n"))
+    return pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure,downtime_category\n" + PREDICTIVE_CSV_ROWS + "\n"))
 
 
 def test_preprocess_returns_engine_ready_result_with_enough_history():
@@ -30,7 +37,7 @@ def test_preprocess_returns_engine_ready_result_with_enough_history():
         "column_map": {
             "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
             "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
-            "failure_col": "failure",
+            "failure_col": "failure", "downtime_category_col": "downtime_category",
         },
     }
     result = pm.preprocess(df, config)

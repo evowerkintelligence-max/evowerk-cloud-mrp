@@ -93,29 +93,6 @@ _SAFE_ALGORITHMS = [
 ]
 
 
-def _merge_failure_flag(daily_ml: pd.DataFrame, df: pd.DataFrame, cols: dict[str, str]) -> pd.DataFrame:
-    """OR the optional per-row failure_col (a 0/1 flag, distinct from
-    _build_daily's category-name-based downtime_category_col) into
-    daily_ml["is_failure"], so build_training_frame's is_failure_next has a
-    ground-truth signal even when no downtime_category_col is mapped."""
-    failure_col = cols.get("failure_col")
-    if not failure_col or failure_col not in df.columns:
-        return daily_ml
-
-    fdf = df[[cols["machine_col"], cols["date_col"], failure_col]].copy()
-    fdf[cols["date_col"]] = pd.to_datetime(fdf[cols["date_col"]], errors="coerce")
-    fdf = fdf.dropna(subset=[cols["date_col"]])
-    fdf["_flag"] = pd.to_numeric(fdf[failure_col], errors="coerce").fillna(0) > 0
-    flag_daily = (
-        fdf.groupby([cols["machine_col"], pd.Grouper(key=cols["date_col"], freq="D")])["_flag"]
-        .max().reset_index()
-        .rename(columns={cols["machine_col"]: "machine", cols["date_col"]: "date", "_flag": "_flag_fail"})
-    )
-    daily_ml = daily_ml.merge(flag_daily, on=["machine", "date"], how="left")
-    daily_ml["is_failure"] = (daily_ml["is_failure"].astype(bool) | daily_ml["_flag_fail"].fillna(False)).astype(int)
-    return daily_ml.drop(columns=["_flag_fail"])
-
-
 def preprocess(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
     cols = config.get("column_map", {})
     required = ["date_col", "machine_col", "planned_time_col", "operating_time_col", "total_units_col", "good_units_col"]
@@ -132,7 +109,6 @@ def preprocess(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
         total_units_col=cols["total_units_col"], good_units_col=cols["good_units_col"],
         target_rate=config.get("target_rate"), downtime_category_col=cols.get("downtime_category_col"),
     )
-    daily_ml = _merge_failure_flag(daily_ml, df, cols)
 
     training_df, last_x = build_training_frame(daily_ml)
     context = {

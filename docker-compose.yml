@@ -25,11 +25,28 @@ services:
       timeout: 5s
       retries: 10
 
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0 --check=false
+    ports:
+      - "9092:9092"
+
+  flink-jobmanager:
+    image: flink:1.19-scala_2.12
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: "jobmanager.rpc.address: flink-jobmanager"
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./backend:/opt/flink/backend
+
   backend:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/evowerk_cloud_mrp
       REDIS_URL: redis://redis:6379/0
+      REDPANDA_BROKERS: redpanda:9092
       JWT_SECRET_KEY: dev-only-secret-change-me
       # Dev-only placeholder - generate a real key before running this anywhere but
       # a laptop: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -42,6 +59,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redpanda:
+        condition: service_started
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 

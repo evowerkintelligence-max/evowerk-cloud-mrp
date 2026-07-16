@@ -136,3 +136,133 @@ def preprocess(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
         notes=[f"Trained on {len(training_df)} rolling 7-day windows across all machines."],
         context=context,
     )
+
+
+def _machine_risk_from_prob(
+    machine: str, fail_prob: float, ml_powered: bool, drivers: list[dict],
+    oee_s: list[float], avail_s: list[float], perf_s: list[float], qual_s: list[float],
+    last_fail_ago: float | None, days_per_period: float,
+) -> tuple[dict, str]:
+    current_oee = oee_s[-1]
+    slope = legacy._recent_slope(oee_s)
+    avg_a, avg_p, avg_q = sum(avail_s) / len(avail_s), sum(perf_s) / len(perf_s), sum(qual_s) / len(qual_s)
+    driver = legacy._top_driver(avg_a, avg_p, avg_q)
+
+    accel = 0.0
+    if len(oee_s) >= 14:
+        accel = legacy._linreg_slope(oee_s[-7:]) - legacy._linreg_slope(oee_s[-14:-7])
+    rul = legacy._rul_days(current_oee, slope, days_per_period, accel=accel)
+
+    if fail_prob >= 0.65 or current_oee < legacy._CRITICAL_OEE:
+        risk = "high"
+    elif fail_prob >= 0.35 or current_oee < legacy._WARN_OEE:
+        risk = "medium"
+    else:
+        risk = "low"
+
+    return {
+        "machine": machine, "current_oee": round(current_oee, 4), "trend_slope": round(slope, 5),
+        "failure_probability": round(fail_prob, 3), "risk_level": risk, "top_driver": driver, "rul_days": rul,
+        "last_failure_days_ago": last_fail_ago, "ml_powered": ml_powered, "ml_drivers": drivers,
+    }, risk
+
+
+def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    grouped = context["grouped"]
+    days_per_period = context["days_per_period"]
+    hourly_value = float(context.get("hourly_value") or 1000.0)
+    cols = context["column_map"]
+    machine_col, date_col = cols["machine_col"], cols["date_col"]
+
+    pipeline = engine_result["pipeline"] if engine_result else None
+    model_meta_dict: dict[str, Any] | None = None
+    if engine_result:
+        best_scores = engine_result["meta"]["scores"]
+        model_meta_dict = {
+            "algorithm": engine_result["meta"]["model_name"],
+            "accuracy_pct": round(float(best_scores.get("accuracy", 0.0)) * 100, 1),
+            "n_training_samples": context.get("n_training_rows", 0),
+            "top_features": [],  # filled in by Plan 2's explainability layer
+        }
+
+    machines_out: list[dict] = []
+    recs_out: list[dict] = []
+
+    for machine, mdf in grouped.groupby(machine_col):
+        mdf = mdf.sort_values(date_col)
+        oee_s, avail_s, perf_s, qual_s = mdf["oee"].tolist(), mdf["avail"].tolist(), mdf["perf"].tolist(), mdf["qual"].tolist()
+        if not oee_s:
+            continue
+        machine_key = str(machine)
+
+        last_fail_ago: float | None = None
+        machine_max_date = mdf[date_col].max()
+        # `grouped` doesn't retain the raw failure_col/downtime_category_col rows
+        # (they're aggregated away) - last-failure lookback re-derives from
+        # daily_ml's own is_failure column instead of the original df, since
+        # that's what's already available in context and matches what
+        # build_training_frame trained on.
+        mfail = context["daily_ml"][(context["daily_ml"]["machine"] == machine_key) & (context["daily_ml"]["is_failure"] > 0)]
+        if not mfail.empty:
+            last_fail_ago = float((machine_max_date - mfail["date"].max()).days)
+
+        if pipeline is not None and machine_key in context["last_x"]:
+            x_row = context["last_x"][machine_key]
+            feature_cols = ["oee_7d", "oee_slope_7d", "scrap_rate_7d", "dt_rate_7d", "fail_count_7d", "days_since_fail"]
+            x_df = pd.DataFrame([dict(zip(feature_cols, x_row))])
+            fail_prob = float(pipeline.predict_proba(x_df)[0][1])
+            ml_powered = True
+            drivers: list[dict] = []
+        else:
+            fail_prob, driver_contribs = legacy._stat_analyze(
+                oee_s, avail_s, perf_s, qual_s, last_fail_ago,
+                fleet_oee_median=sorted(oee_s)[len(oee_s) // 2] if oee_s else 0.0,
+            )
+            ml_powered = False
+            drivers = driver_contribs
+
+        machine_dict, risk = _machine_risk_from_prob(
+            machine_key, fail_prob, ml_powered, drivers, oee_s, avail_s, perf_s, qual_s, last_fail_ago, days_per_period,
+        )
+        machines_out.append(machine_dict)
+
+        priority = {"high": "immediate", "medium": "scheduled", "low": "monitor"}[risk]
+        action, reason = legacy._ACTIONS.get(machine_dict["top_driver"], ("General inspection recommended", "Multiple metrics declining"))
+        pm_hours = legacy._PM_HOURS[priority]
+        avoided_h = round(fail_prob * 48.0, 1)
+        net_saving = round((avoided_h - pm_hours) * hourly_value, 2)
+        recs_out.append({
+            "machine": machine_key, "priority": priority, "action": action, "reason": reason,
+            "estimated_pm_hours": pm_hours, "avoided_downtime_hours": avoided_h, "net_saving": net_saving,
+        })
+
+    risk_order = {"high": 0, "medium": 1, "low": 2}
+    machines_out.sort(key=lambda m: (risk_order.get(m["risk_level"], 3), -m["failure_probability"]))
+    recs_out.sort(key=lambda r: {"immediate": 0, "scheduled": 1, "monitor": 2}.get(r["priority"], 3))
+
+    at_risk = sum(1 for m in machines_out if m["risk_level"] in ("high", "medium"))
+    total_avoided = sum(r["avoided_downtime_hours"] * hourly_value for r in recs_out)
+    total_pm = sum(r["estimated_pm_hours"] * hourly_value for r in recs_out)
+    net_savings = round(total_avoided - total_pm, 2)
+    roi_pct = round((net_savings / total_pm * 100) if total_pm > 0 else 0.0, 1)
+
+    predictive_result = {
+        "machines": machines_out,
+        "recommendations": recs_out,
+        "cost_summary": {
+            "total_avoided_cost": round(total_avoided, 2), "total_pm_cost": round(total_pm, 2),
+            "net_savings": net_savings, "roi_pct": roi_pct, "machines_at_risk": at_risk,
+        },
+        "model_meta": model_meta_dict,
+    }
+
+    return {
+        "predictive_result": predictive_result,
+        "pipeline": pipeline,
+        "explain_X": engine_result["explain_X"] if engine_result else None,
+        "explain_y": engine_result["explain_y"] if engine_result else None,
+        "leaderboard": engine_result["leaderboard"] if engine_result else [],
+        "best_model_name": engine_result["meta"]["model_name"] if engine_result else None,
+        "metric_name": engine_result["meta"]["metric_name"] if engine_result else None,
+        "metric_value": engine_result["meta"]["metric_value"] if engine_result else None,
+    }

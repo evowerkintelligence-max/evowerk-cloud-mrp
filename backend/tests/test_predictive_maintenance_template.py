@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from app.services import automl_engine
 from app.services.automl_templates import predictive_maintenance as pm
 
 # M1: healthy at 0.8 OEE for 30 days. M2: healthy for 10 days, then 20 days
@@ -66,6 +67,58 @@ def test_preprocess_flags_insufficient_signal_for_short_history():
     assert result.skip_ml is True
     assert any("not enough" in n.lower() or "insufficient" in n.lower() for n in result.notes)
     assert "grouped" in result.context  # postprocess() still needs this for the statistical fallback
+
+
+def test_postprocess_with_trained_model_produces_predictive_result():
+    df = _fixture_df()
+    config = {
+        "column_map": {
+            "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+            "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+            "failure_col": "failure", "downtime_category_col": "downtime_category",
+        },
+        "hourly_value": 1000.0,
+    }
+    pre = pm.preprocess(df, config)
+    assert pre.skip_ml is False
+
+    engine_result = automl_engine.train_automl_baseline(
+        pre.df, pre.target_col, automl_engine.AutoMLTask(pre.task),
+        feature_columns=pre.feature_cols, algorithms=pre.algorithms, thoroughness="fast",
+    )
+
+    out = pm.postprocess(engine_result, config, pre.context)
+    result = out["predictive_result"]
+    machines = {m["machine"]: m for m in result["machines"]}
+    assert "M1" in machines and "M2" in machines
+    assert all(0.0 <= m["failure_probability"] <= 1.0 for m in machines.values())
+    assert all(m["ml_powered"] is True for m in machines.values())
+    assert result["model_meta"] is not None
+    assert result["model_meta"]["algorithm"] in pm._SAFE_ALGORITHMS
+    assert out["pipeline"] is not None
+    assert out["explain_X"] is not None
+    assert result["cost_summary"]["machines_at_risk"] >= 0
+
+
+def test_postprocess_without_trained_model_falls_back_to_statistical():
+    rows = [f"2026-01-{day:02d},M1,480,{150 if day > 5 else 470},{200 if day > 5 else 920},{150 if day > 5 else 900}," for day in range(1, 9)]
+    from io import StringIO
+    df = pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure\n" + "\n".join(rows) + "\n"))
+    config = {"column_map": {
+        "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+        "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+    }, "hourly_value": 1000.0}
+
+    pre = pm.preprocess(df, config)
+    assert pre.skip_ml is True
+
+    out = pm.postprocess(None, config, pre.context)
+    result = out["predictive_result"]
+    assert len(result["machines"]) == 1
+    assert result["machines"][0]["ml_powered"] is False
+    assert result["model_meta"] is None
+    assert out["pipeline"] is None
+    assert out["explain_X"] is None
 
 
 def test_preprocess_rejects_missing_columns():

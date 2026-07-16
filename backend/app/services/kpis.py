@@ -94,13 +94,16 @@ async def _compute_breakdown(dataset: Dataset, kpi: Kpi) -> list[tuple[str, floa
     breakdown rather than failing the whole KPI compute."""
     if not kpi.breakdown_group_col:
         return None
+    agg = kpi.breakdown_agg or "count"
+    if agg not in ("count", "avg", "sum"):
+        return None
     try:
         ds_service.validate_columns(
             dataset,
             [kpi.breakdown_group_col, kpi.breakdown_value_col] if kpi.breakdown_value_col else [kpi.breakdown_group_col],
         )
         sql = _replace_table_placeholder(
-            _breakdown_sql(kpi.breakdown_group_col, kpi.breakdown_agg or "count", kpi.breakdown_value_col)
+            _breakdown_sql(kpi.breakdown_group_col, agg, kpi.breakdown_value_col)
         )
         result = await run_sql(dataset, sql, row_limit=10)
     except (HTTPException, ValueError):

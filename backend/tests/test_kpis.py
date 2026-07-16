@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
+
+from app.db import session as db_session
+from app.models.dataset import Dataset
+from app.models.kpi import Kpi
+from app.services.kpis import _compute_breakdown
 
 pytestmark = pytest.mark.asyncio
 
@@ -181,6 +188,29 @@ async def test_kpi_breakdown_avg_per_group(client):
     labels = {b["label"]: b["value"] for b in item["breakdown"]}
     assert labels["M1"] == pytest.approx(4.0)
     assert labels["M2"] == pytest.approx(5.0)
+
+
+async def test_kpi_breakdown_invalid_agg_fails_soft(client):
+    """_compute_breakdown docs promise it degrades to None on a bad breakdown
+    config rather than raising. breakdown_agg outside count/avg/sum used to
+    blow through the dict lookup in _breakdown_sql with a raw KeyError."""
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token, content=CSV_BREAKDOWN, filename="scrap4.csv")
+
+    async with db_session.async_session_factory() as session:
+        dataset = await session.get(Dataset, uuid.UUID(dataset_id))
+        kpi = Kpi(
+            org_id=dataset.org_id,
+            dataset_id=dataset.id,
+            name="Bad Agg",
+            sql="SELECT 1 FROM {table}",
+            created_by=uuid.uuid4(),
+            breakdown_group_col="reason",
+            breakdown_agg="median",
+        )
+        result = await _compute_breakdown(dataset, kpi)
+
+    assert result is None
 
 
 async def test_seed_manufacturing_skips_existing(client):

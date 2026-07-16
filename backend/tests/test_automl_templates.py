@@ -1,10 +1,20 @@
 from __future__ import annotations
 
-import pytest
-import pandas as pd
+import uuid
 
+import pandas as pd
+import pytest
+from sqlalchemy import select
+
+from app.db import session as db_session
+from app.models.automl_run import AutoMLRun
+from app.models.dataset import Dataset
+from app.models.user import User
 from app.services import automl_templates as templates
 from app.services.automl_templates import predictive_maintenance as pm
+from app.services.automl_runner import execute_automl_run
+
+PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
 
 
 def test_register_and_get_template():
@@ -79,3 +89,52 @@ def test_has_ml_signal_requires_min_rows_and_balanced_positive_rate():
 
     all_positive = pd.DataFrame({"is_failure_next": [1] * 50})  # pos_rate=1.0 > 0.90
     assert pm.has_ml_signal(all_positive) is False
+
+
+@pytest.mark.asyncio
+async def test_execute_automl_run_routes_through_template(client):
+    # Register a trivial template that always skips ML, to test the runner's
+    # branch/persistence logic in isolation from any real training.
+    t = templates.AutoMLTemplate(
+        id="_test_runner_template",
+        label="Test Runner Template",
+        roles=[],
+        preprocess=lambda df, config: templates.PreprocessResult(skip_ml=True, notes=["always skips"], context={"seen_rows": len(df)}),
+        postprocess=lambda engine_result, config, context: {
+            "predictive_result": {"marker": "ok", "rows": context["seen_rows"]},
+            "pipeline": None, "explain_X": None, "explain_y": None,
+            "leaderboard": [], "best_model_name": None, "metric_name": None, "metric_value": None,
+        },
+    )
+    templates.register_template(t)
+
+    reg = await client.post("/auth/register", json={"org_name": "Acme", "email": "owner@example.com", "password": PASSWORD})
+    assert reg.status_code == 201
+    login = await client.post("/auth/login", json={"email": "owner@example.com", "password": PASSWORD})
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    up = await client.post("/datasets", headers=headers, files={"file": ("t.csv", b"a,b\n1,2\n3,4\n", "text/csv")})
+    dataset_id = up.json()["id"]
+
+    async with db_session.async_session_factory() as db:
+        ds_row = (await db.execute(select(Dataset).where(Dataset.id == uuid.UUID(dataset_id)))).scalar_one()
+        owner = (await db.execute(select(User).where(User.org_id == ds_row.org_id))).scalars().first()
+        run = AutoMLRun(
+            org_id=ds_row.org_id, dataset_id=ds_row.id, created_by=owner.id,
+            name="test", task="classification", target_column="b", template_id="_test_runner_template", status="queued",
+        )
+        db.add(run)
+        await db.commit()
+        await db.refresh(run)
+        run_id, org_id_val = str(run.id), str(run.org_id)
+
+    await execute_automl_run(run_id, org_id_val)
+
+    async with db_session.async_session_factory() as db:
+        refreshed = (await db.execute(select(AutoMLRun).where(AutoMLRun.id == uuid.UUID(run_id)))).scalar_one()
+        assert refreshed.status == "success"
+        assert refreshed.meta["predictive_result"] == {"marker": "ok", "rows": 2}
+        assert refreshed.model_path is None
+
+    del templates._REGISTRY["_test_runner_template"]

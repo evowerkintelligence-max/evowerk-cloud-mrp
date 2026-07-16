@@ -27,7 +27,11 @@ services:
 
   redpanda:
     image: redpandadata/redpanda:latest
-    command: redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0 --check=false
+    # Must advertise its compose-network hostname, not the default 127.0.0.1 -
+    # otherwise backend/Flink resolve the bootstrap server but then get told
+    # the broker lives at localhost and every metadata lookup dead-ends.
+    # (Clients on the host machine need to override to localhost:9092.)
+    command: redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0 --check=false --kafka-addr PLAINTEXT://0.0.0.0:9092 --advertise-kafka-addr PLAINTEXT://redpanda:9092
     ports:
       - "9092:9092"
 

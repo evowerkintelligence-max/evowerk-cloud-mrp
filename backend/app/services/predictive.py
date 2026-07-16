@@ -355,17 +355,17 @@ def _top_driver(avg_a: float, avg_p: float, avg_q: float) -> str:
     return min(components, key=components.get)
 
 
-def analyze(
-    dataset: Dataset, *, date_col: str, machine_col: str, planned_time_col: str, operating_time_col: str,
-    total_units_col: str, good_units_col: str, target_rate: float | None, failure_col: str | None,
-    downtime_category_col: str | None, hourly_value: float,
-) -> PredictiveResult:
-    ds_service.validate_columns(dataset, [
-        date_col, machine_col, planned_time_col, operating_time_col, total_units_col, good_units_col,
-        failure_col, downtime_category_col,
-    ])
-    df = ds_service.dataframe_for(dataset)
-
+def _build_daily(
+    df: pd.DataFrame, *, date_col: str, machine_col: str, planned_time_col: str, operating_time_col: str,
+    total_units_col: str, good_units_col: str, target_rate: float | None, downtime_category_col: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame, float]:
+    """Per-machine daily OEE aggregation, extracted from the old analyze()
+    unchanged - shared by the AutoML template's preprocess()/postprocess()
+    (app/services/automl_templates/predictive_maintenance.py). Returns
+    (grouped, daily_ml, days_per_period): `grouped` keeps the original
+    machine_col/date_col names (for postprocess()'s per-machine loop),
+    `daily_ml` is renamed to machine/date (for build_training_frame)."""
+    df = df.copy()
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.dropna(subset=[date_col]).sort_values(date_col)
     for col in (planned_time_col, operating_time_col, total_units_col, good_units_col):
@@ -411,6 +411,26 @@ def analyze(
         daily_ml["is_failure"] = daily_ml["is_failure"].fillna(0).astype(int)
     else:
         daily_ml["is_failure"] = 0
+
+    return grouped, daily_ml, days_per_period
+
+
+def analyze(
+    dataset: Dataset, *, date_col: str, machine_col: str, planned_time_col: str, operating_time_col: str,
+    total_units_col: str, good_units_col: str, target_rate: float | None, failure_col: str | None,
+    downtime_category_col: str | None, hourly_value: float,
+) -> PredictiveResult:
+    ds_service.validate_columns(dataset, [
+        date_col, machine_col, planned_time_col, operating_time_col, total_units_col, good_units_col,
+        failure_col, downtime_category_col,
+    ])
+    df = ds_service.dataframe_for(dataset)
+
+    grouped, daily_ml, days_per_period = _build_daily(
+        df, date_col=date_col, machine_col=machine_col, planned_time_col=planned_time_col,
+        operating_time_col=operating_time_col, total_units_col=total_units_col, good_units_col=good_units_col,
+        target_rate=target_rate, downtime_category_col=downtime_category_col,
+    )
 
     ml_probs, ml_drivers, ml_meta_raw = _ml_analyze(daily_ml)
     model_meta = ModelMeta(**ml_meta_raw) if ml_meta_raw else None

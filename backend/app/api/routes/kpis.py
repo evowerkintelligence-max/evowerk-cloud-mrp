@@ -5,16 +5,18 @@ backend/routes/kpis.py; compute/compare/eval logic lives in app.services.kpis.
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_or_404
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.kpi import Kpi, KpiValue
+from app.models.dataset import Dataset
+from app.models.kpi import Kpi, KpiDashboard, KpiValue
 from app.services import datasets as ds_service
 from app.services import kpis as kpi_service
 
@@ -67,6 +69,9 @@ class KpiWriteRequest(BaseModel):
     enabled: bool = True
     eval_policy: KpiEvalPolicy | None = None
     tags: list[str] = Field(default_factory=list)
+    breakdown_group_col: str | None = None
+    breakdown_agg: Literal["count", "avg", "sum"] | None = None
+    breakdown_value_col: str | None = None
 
 
 class KpiPatchRequest(BaseModel):
@@ -79,6 +84,9 @@ class KpiPatchRequest(BaseModel):
     enabled: bool | None = None
     eval_policy: KpiEvalPolicy | None = None
     tags: list[str] | None = None
+    breakdown_group_col: str | None = None
+    breakdown_agg: Literal["count", "avg", "sum"] | None = None
+    breakdown_value_col: str | None = None
 
 
 class KpiResponse(BaseModel):
@@ -92,6 +100,9 @@ class KpiResponse(BaseModel):
     enabled: bool
     eval_policy: dict | None
     tags: list[str]
+    breakdown_group_col: str | None
+    breakdown_agg: str | None
+    breakdown_value_col: str | None
     created_at: str
     updated_at: str
 
@@ -121,6 +132,7 @@ class KpiComputeItemResponse(BaseModel):
     cache_hit: bool
     error: str | None
     eval: dict | None
+    breakdown: list[dict] | None
 
 
 class KpiCompareRequest(BaseModel):
@@ -156,6 +168,9 @@ def _kpi_to_response(k: Kpi) -> KpiResponse:
         enabled=k.enabled,
         eval_policy=k.eval_policy,
         tags=k.tags,
+        breakdown_group_col=k.breakdown_group_col,
+        breakdown_agg=k.breakdown_agg,
+        breakdown_value_col=k.breakdown_value_col,
         created_at=k.created_at.isoformat(),
         updated_at=k.updated_at.isoformat(),
     )
@@ -176,6 +191,7 @@ def _item_to_response(i: kpi_service.KpiComputeItem) -> KpiComputeItemResponse:
     return KpiComputeItemResponse(
         kpi_id=str(i.kpi_id), value=i.value, meta=i.meta, computed_at=i.computed_at.isoformat(),
         cache_hit=i.cache_hit, error=i.error, eval=i.eval,
+        breakdown=[{"label": label, "value": v} for label, v in i.breakdown] if i.breakdown else None,
     )
 
 
@@ -184,6 +200,17 @@ def _compare_item_to_response(i: kpi_service.KpiCompareItem) -> KpiCompareItemRe
         kpi_id=str(i.kpi_id), a_value=i.a_value, b_value=i.b_value, delta=i.delta, pct_delta=i.pct_delta,
         a_error=i.a_error, b_error=i.b_error, a_eval=i.a_eval, b_eval=i.b_eval,
     )
+
+
+def _validate_breakdown(dataset: Dataset, group_col: str | None, agg: str | None, value_col: str | None) -> None:
+    if not group_col:
+        return
+    cols = [group_col]
+    if agg and agg != "count":
+        if not value_col:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "breakdown_value_col is required when breakdown_agg is not 'count'")
+        cols.append(value_col)
+    ds_service.validate_columns(dataset, cols)
 
 
 # -----------------------------
@@ -200,9 +227,10 @@ async def list_kpis(current: CurrentUser = Depends(get_current_user), db: AsyncS
 
 @router.post("", response_model=KpiResponse, status_code=status.HTTP_201_CREATED)
 async def create_kpi(
-    req: KpiWriteRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    req: KpiWriteRequest, current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
-    await ds_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
+    dataset = await ds_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
+    _validate_breakdown(dataset, req.breakdown_group_col, req.breakdown_agg, req.breakdown_value_col)
     kpi = Kpi(
         org_id=current.org_id,
         dataset_id=req.dataset_id,
@@ -214,6 +242,9 @@ async def create_kpi(
         enabled=req.enabled,
         eval_policy=req.eval_policy.model_dump(exclude_none=True) if req.eval_policy else None,
         tags=req.tags,
+        breakdown_group_col=req.breakdown_group_col,
+        breakdown_agg=req.breakdown_agg,
+        breakdown_value_col=req.breakdown_value_col,
         created_by=current.id,
     )
     db.add(kpi)
@@ -235,7 +266,7 @@ async def get_kpi(
 async def update_kpi(
     kpi_id: uuid.UUID,
     patch: KpiPatchRequest,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
     kpi = await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
@@ -245,6 +276,15 @@ async def update_kpi(
         await ds_service.get_dataset_or_404(db, current.org_id, patch.dataset_id)
     if "eval_policy" in updates:
         updates["eval_policy"] = patch.eval_policy.model_dump(exclude_none=True) if patch.eval_policy else None
+
+    if {"breakdown_group_col", "breakdown_agg", "breakdown_value_col"} & updates.keys():
+        dataset = await ds_service.get_dataset_or_404(db, current.org_id, patch.dataset_id or kpi.dataset_id)
+        _validate_breakdown(
+            dataset,
+            updates.get("breakdown_group_col", kpi.breakdown_group_col),
+            updates.get("breakdown_agg", kpi.breakdown_agg),
+            updates.get("breakdown_value_col", kpi.breakdown_value_col),
+        )
 
     for field_name, value in updates.items():
         setattr(kpi, field_name, value)
@@ -257,10 +297,22 @@ async def update_kpi(
 
 @router.delete("/{kpi_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_kpi(
-    kpi_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    kpi_id: uuid.UUID, current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
     kpi = await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
     await db.delete(kpi)
+
+    # kpi_ids is a JSON list column (no portable containment query across
+    # SQLite/Postgres) — dashboard/KPI counts are small here, so a full scan
+    # and filter in Python is fine.
+    kpi_id_str = str(kpi_id)
+    dashboards = (
+        await db.execute(select(KpiDashboard).where(KpiDashboard.org_id == current.org_id))
+    ).scalars().all()
+    for dashboard in dashboards:
+        if kpi_id_str in dashboard.kpi_ids:
+            dashboard.kpi_ids = [k for k in dashboard.kpi_ids if k != kpi_id_str]
+
     await log_event(db, action="kpi.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(kpi_id))
     await db.commit()
 
@@ -449,7 +501,7 @@ class MfgSeedResponse(BaseModel):
 
 @router.post("/seed/manufacturing", response_model=MfgSeedResponse)
 async def seed_manufacturing_kpis(
-    req: MfgSeedRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    req: MfgSeedRequest, current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
     """Create pre-built manufacturing KPI templates for a dataset. SQL uses
     common column name conventions — edit after seeding if your columns differ."""

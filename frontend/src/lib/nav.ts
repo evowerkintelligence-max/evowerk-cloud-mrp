@@ -20,6 +20,7 @@ import {
   PackageX,
   Plug,
   Radio,
+  Rows3,
   Search,
   ShoppingCart,
   Sparkles,
@@ -88,6 +89,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/analytics/shifts", label: "Shifts", icon: Users },
       { to: "/analytics/spc", label: "SPC", icon: Activity },
       { to: "/kpis", label: "KPIs", icon: Target },
+      { to: "/kpis/dashboards", label: "KPI Dashboards", icon: Rows3 },
     ],
   },
   {

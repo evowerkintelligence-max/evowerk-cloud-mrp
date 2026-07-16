@@ -35,6 +35,7 @@ import { ReportBuilder } from "./pages/ReportBuilder";
 import { AutoML } from "./pages/AutoML";
 import { AutoMLRun } from "./pages/automl/AutoMLRun";
 import { Kpis } from "./pages/Kpis";
+import { KpiDashboards } from "./pages/KpiDashboards";
 import { Integrations } from "./pages/Integrations";
 import { Realtime } from "./pages/Realtime";
 import { RcaCases } from "./pages/RcaCases";
@@ -104,6 +105,7 @@ export function App() {
         <Route path="/automl" element={<AutoML />} />
         <Route path="/automl/:id" element={<AutoMLRun />} />
         <Route path="/kpis" element={<Kpis />} />
+        <Route path="/kpis/dashboards" element={<KpiDashboards />} />
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/realtime" element={<Realtime />} />
         <Route path="/rca-cases" element={<RcaCases />} />

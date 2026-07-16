@@ -1081,6 +1081,13 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
   );
 }
 
+// Strips DuckDB's internal error-class jargon ("Binder Error:", "Parser Error:", ...)
+// from the message the backend passes through as-is (see sql_query.py) so the
+// user sees the useful part (what's wrong with their query) without the label.
+function friendlySqlError(detail: string): string {
+  return detail.replace(/^Query failed: (Binder|Parser|Catalog|Conversion|Syntax) Error:\s*/i, "Query failed: ");
+}
+
 function SqlPanel({ d }: { d: DatasetDetail }) {
   const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 100`);
 
@@ -1107,7 +1114,7 @@ function SqlPanel({ d }: { d: DatasetDetail }) {
         method: "POST",
         body: JSON.stringify({ sql, limit: 500 }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
+      if (!res.ok) throw new Error(friendlySqlError((await res.json()).detail ?? "Query failed"));
       return res.json() as Promise<QueryResult>;
     },
   });

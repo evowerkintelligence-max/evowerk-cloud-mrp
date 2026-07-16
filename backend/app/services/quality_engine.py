@@ -27,6 +27,14 @@ except Exception:
     pass
 
 
+def _sigma_level(dpmo: float) -> float:
+    """Six Sigma process-sigma from DPMO, with the conventional 1.5-sigma
+    long-term shift baked in."""
+    from scipy.stats import norm
+    yield_ = max(1e-9, min(1 - 1e-9, 1 - dpmo / 1_000_000))
+    return round(float(norm.ppf(yield_)) + 1.5, 2)
+
+
 def _label_cluster(defect_rate: float, avg_rate: float) -> str:
     if defect_rate > avg_rate * 2:
         return "High-defect"
@@ -45,6 +53,8 @@ def analyze_quality(
     feature_columns: Optional[List[str]] = None,
     n_clusters: int = 3,
     max_rows: int = 500_000,
+    opportunities_per_unit: float = 1.0,
+    cost_per_defect: Optional[float] = None,
 ) -> Dict[str, Any]:
     df = dataframe_for(dataset)
     # Sub-analyses that fail (or inputs that look mismapped) are reported here
@@ -121,6 +131,15 @@ def analyze_quality(
         metric_label = "Defects / Record"
         metric_suffix = ""
 
+    # DPMO normalizes across products with different defect-opportunity counts
+    # per unit — the metric Six Sigma-literate customers expect by name.
+    dpmo = (
+        round(total_defects / (total_records * opportunities_per_unit) * 1_000_000, 1)
+        if total_records and opportunities_per_unit > 0 else None
+    )
+    sigma_level = _sigma_level(dpmo) if dpmo is not None else None
+    total_cost_of_quality = round(total_defects * cost_per_defect, 2) if cost_per_defect is not None else None
+
     # ── Feature correlations with defect ────────────────────────────────────
     correlations: List[Dict] = []
     feat_cols = feature_columns or []
@@ -160,6 +179,7 @@ def analyze_quality(
 
     # ── Trend over time ──────────────────────────────────────────────────────
     trend: List[Dict] = []
+    valid_resampled = None
     if timestamp_column and timestamp_column in df.columns:
         df["_ts"] = pd.to_datetime(df[timestamp_column], errors="coerce")
         df_t = df.dropna(subset=["_ts"]).copy()
@@ -173,29 +193,61 @@ def analyze_quality(
                     resampled["defect_rate"] = (resampled["sum"] / resampled["count"] * 100).round(2)
                 else:
                     resampled = df_t["_defect"].resample(freq).mean().round(3).to_frame("defect_rate")
+                valid_resampled = resampled.dropna(subset=["defect_rate"])
                 trend = [
                     {"date": str(idx.date()), "defect_rate": float(row["defect_rate"])}
-                    for idx, row in resampled.iterrows()
-                    if not np.isnan(row["defect_rate"])
+                    for idx, row in valid_resampled.iterrows()
                 ]
             except Exception as e:
                 warnings.append(f"Trend analysis failed: {e}")
 
-    # Control limits (mean +/- ~3 sigma via moving range, same math as the SPC
-    # engine's Individuals chart) turn the trend into an actual SPC chart
-    # instead of a bare line - flags periods where the defect rate moved for a
-    # special-cause reason, not just normal period-to-period noise.
+    # Control limits turn the trend into an actual SPC chart instead of a bare
+    # line - flags periods where the defect rate moved for a special-cause
+    # reason, not just normal period-to-period noise. Binary defect data is a
+    # proportion, so it gets a proper p-chart (control limits widen/narrow
+    # with each period's sample size) instead of an I-MR chart run over the
+    # rate, which assumes one fixed sigma throughout.
     trend_control: Optional[Dict] = None
     if len(trend) >= 2:
-        chart = spc_calc.individuals_chart([t["defect_rate"] for t in trend], [t["date"] for t in trend])
-        trend_control = {
-            "centerline": chart["centerline"],
-            "ucl": chart["ucl"],
-            "lcl": chart["lcl"],
-            "out_of_control_count": chart["out_of_control_count"],
-        }
-        for t, p in zip(trend, chart["points"]):
-            t["in_control"] = p["in_control"]
+        if is_binary and valid_resampled is not None:
+            counts = valid_resampled["sum"].astype(int).tolist()
+            sizes = valid_resampled["count"].astype(int).tolist()
+            chart = spc_calc.p_chart(counts, sizes, [t["date"] for t in trend])
+            # ponytail: display line uses the average sample size across
+            # periods (a single UCL/LCL to draw); the in_control flags below
+            # still come from each period's own sample-size-adjusted limits.
+            # Upgrade to a per-point band series if subgroup sizes vary a lot.
+            p_bar = chart["centerline"] / 100
+            avg_n = sum(sizes) / len(sizes) if sizes else 0
+            avg_sigma = (p_bar * (1 - p_bar) / avg_n) ** 0.5 if avg_n and 0 < p_bar < 1 else 0.0
+            trend_control = {
+                "chart_type": "p",
+                "centerline": chart["centerline"],
+                "ucl": round(min(100.0, (p_bar + 3 * avg_sigma) * 100), 4),
+                "lcl": round(max(0.0, (p_bar - 3 * avg_sigma) * 100), 4),
+                "out_of_control_count": chart["out_of_control_count"],
+                "low_sample_warning": chart["low_sample_warning"],
+                "min_baseline": chart["min_baseline"],
+            }
+            for t, p in zip(trend, chart["points"]):
+                t["in_control"] = p["in_control"]
+                t["violations"] = p["violations"]
+                t["ucl"] = p["ucl"]
+                t["lcl"] = p["lcl"]
+        else:
+            chart = spc_calc.individuals_chart([t["defect_rate"] for t in trend], [t["date"] for t in trend])
+            trend_control = {
+                "chart_type": "individuals",
+                "centerline": chart["centerline"],
+                "ucl": chart["ucl"],
+                "lcl": chart["lcl"],
+                "out_of_control_count": chart["out_of_control_count"],
+                "low_sample_warning": chart["low_sample_warning"],
+                "min_baseline": chart["min_baseline"],
+            }
+            for t, p in zip(trend, chart["points"]):
+                t["in_control"] = p["in_control"]
+                t["violations"] = p["violations"]
 
     # ── Clustering ───────────────────────────────────────────────────────────
     clusters: List[Dict] = []
@@ -262,6 +314,10 @@ def analyze_quality(
             "defect_metric": defect_metric,
             "metric_label": metric_label,
             "metric_suffix": metric_suffix,
+            "dpmo": dpmo,
+            "sigma_level": sigma_level,
+            "cost_per_defect": cost_per_defect,
+            "total_cost_of_quality": total_cost_of_quality,
             "worst_batch": worst_batch,
             "worst_batch_records": worst_batch_records,
             "clusters_found": len(clusters),

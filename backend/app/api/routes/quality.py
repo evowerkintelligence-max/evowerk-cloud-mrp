@@ -26,6 +26,8 @@ class QualityRequest(BaseModel):
     feature_columns: Optional[List[str]] = Field(default=None, description="Process parameter columns to analyze")
     n_clusters: int = Field(default=3, ge=2, le=10)
     max_rows: int = Field(default=500_000, ge=100, le=5_000_000)
+    opportunities_per_unit: float = Field(default=1.0, gt=0, description="Defect opportunities per unit, for DPMO")
+    cost_per_defect: Optional[float] = Field(default=None, ge=0, description="$ cost per defect, for Cost of Quality")
 
 
 @router.post("/analyze")
@@ -52,6 +54,8 @@ async def quality_analyze(
             feature_columns=req.feature_columns,
             n_clusters=req.n_clusters,
             max_rows=req.max_rows,
+            opportunities_per_unit=req.opportunities_per_unit,
+            cost_per_defect=req.cost_per_defect,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

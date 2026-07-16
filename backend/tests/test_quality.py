@@ -57,6 +57,43 @@ async def test_quality_analyze_flags_worst_batch_and_correlation(client):
     assert corr["correlation"] > 0.5
 
 
+async def test_quality_dpmo_and_cost_of_quality(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload_dataset(client, token)
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/quality/analyze",
+        headers=headers,
+        json={"defect_column": "defect", "opportunities_per_unit": 2, "cost_per_defect": 15},
+    )
+    assert res.status_code == 200
+    summary = res.json()["summary"]
+
+    # 6 defects / (12 records * 2 opportunities) * 1e6
+    assert summary["dpmo"] == 250_000.0
+    assert summary["sigma_level"] is not None
+    assert summary["total_cost_of_quality"] == 90.0  # 6 defects * $15
+
+
+async def test_quality_dpmo_and_cost_of_quality_default_off(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload_dataset(client, token)
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/quality/analyze",
+        headers=headers,
+        json={"defect_column": "defect"},
+    )
+    assert res.status_code == 200
+    summary = res.json()["summary"]
+
+    assert summary["dpmo"] is not None  # opportunities_per_unit defaults to 1
+    assert summary["cost_per_defect"] is None
+    assert summary["total_cost_of_quality"] is None
+
+
 async def test_quality_counts_column_uses_dpu_metric(client):
     # defect column holds counts (values > 1) → DPU, not a bogus percentage.
     counts_csv = (
@@ -175,11 +212,14 @@ async def test_quality_trend_gets_control_limits_and_flags_spike(client):
     assert len(body["trend"]) == 15
     tc = body["trend_control"]
     assert tc is not None
+    assert tc["chart_type"] == "p"  # binary defect column -> proportion chart
     assert tc["lcl"] <= tc["centerline"] <= tc["ucl"]
     assert tc["out_of_control_count"] >= 1
+    assert tc["low_sample_warning"] is True  # 15 periods, under the 20-period baseline minimum
 
     spike = next(t for t in body["trend"] if t["date"] == "2026-01-08")
     assert spike["in_control"] is False
+    assert 1 in spike["violations"]
 
 
 async def test_quality_analyze_rejects_unknown_defect_column(client):

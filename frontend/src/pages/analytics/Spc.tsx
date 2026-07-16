@@ -8,6 +8,27 @@ export interface SpcPoint {
   value: number;
   range_value?: number;
   in_control: boolean;
+  violations?: number[];
+}
+
+// Mirrors backend/app/analytics/spc_calc.py RULE_DESCRIPTIONS.
+export const NELSON_RULE_DESCRIPTIONS: Record<number, string> = {
+  1: "Point beyond 3σ (outside control limits)",
+  2: "9 points in a row on the same side of the centerline",
+  3: "6 points in a row steadily increasing or decreasing",
+  4: "14 points in a row alternating up and down",
+  5: "2 of 3 points beyond 2σ on the same side",
+  6: "4 of 5 points beyond 1σ on the same side",
+  7: "15 points in a row within 1σ of the centerline (stratification)",
+  8: "8 points in a row beyond 1σ with none within 1σ (mixture)",
+};
+
+interface SpcNormality {
+  tested: boolean;
+  reason?: string | null;
+  statistic?: number | null;
+  p_value?: number | null;
+  is_normal: boolean | null;
 }
 
 interface SpcResult {
@@ -23,7 +44,12 @@ interface SpcResult {
   out_of_control_count: number;
   row_count: number;
   truncated: boolean;
-  capability?: { mean: number; sigma_within: number; sigma_overall: number; usl: number | null; lsl: number | null; cp: number | null; cpk: number | null; pp: number | null; ppk: number | null };
+  low_sample_warning: boolean;
+  min_baseline: number;
+  capability?: {
+    mean: number; sigma_within: number; sigma_overall: number; usl: number | null; lsl: number | null;
+    cp: number | null; cpk: number | null; pp: number | null; ppk: number | null; normality?: SpcNormality | null;
+  };
 }
 
 const FIELDS = [
@@ -36,7 +62,19 @@ const FIELDS = [
 
 export function controlChart(points: SpcPoint[], value: (p: SpcPoint) => number | undefined, cl: number, ucl: number, lcl: number, name: string) {
   return {
-    tooltip: TOOLTIP,
+    tooltip: {
+      ...TOOLTIP,
+      formatter: (params: unknown) => {
+        const p = (Array.isArray(params) ? params[0] : params) as { dataIndex: number };
+        const pt = points[p.dataIndex];
+        if (!pt) return "";
+        const lines = [pt.label, `${name}: ${value(pt) ?? "—"}`];
+        for (const rule of pt.violations ?? []) {
+          lines.push(`⚠ Rule ${rule}: ${NELSON_RULE_DESCRIPTIONS[rule] ?? "control-chart rule violation"}`);
+        }
+        return lines.join("<br/>");
+      },
+    },
     grid: { top: 24, bottom: 28, left: 56, right: 88 },
     xAxis: {
       type: "category" as const,
@@ -85,9 +123,22 @@ export function Spc() {
           {r.truncated && (
             <Alert variant="warning">Large dataset — chart shows the first {fmt(r.row_count)} points.</Alert>
           )}
+          {r.low_sample_warning && (
+            <Alert variant="warning">
+              Only {fmt(r.row_count)} point(s) — control limits need at least {r.min_baseline} to be statistically
+              reliable. Treat these limits as provisional until more data comes in.
+            </Alert>
+          )}
           {r.out_of_control_count > 0 && (
             <Alert variant="destructive">
               {r.out_of_control_count} point(s) outside control limits — the process shows special-cause variation.
+              Hover a red point for which rule it broke.
+            </Alert>
+          )}
+          {r.capability?.normality?.tested && r.capability.normality.is_normal === false && (
+            <Alert variant="warning">
+              Data fails the Shapiro-Wilk normality test (p={r.capability.normality.p_value}) — Cp/Cpk/Pp/Ppk assume
+              a normal distribution, so treat these capability indices with caution.
             </Alert>
           )}
 

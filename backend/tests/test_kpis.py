@@ -213,6 +213,85 @@ async def test_kpi_breakdown_invalid_agg_fails_soft(client):
     assert result is None
 
 
+async def test_kpi_breakdown_avg_requires_value_col(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=CSV_BREAKDOWN, filename="scrap4.csv")
+
+    create = await client.post(
+        "/kpis",
+        headers=headers,
+        json={
+            "name": "Bad breakdown",
+            "dataset_id": dataset_id,
+            "sql": "SELECT AVG(TRY_CAST(scrap_units AS DOUBLE)) FROM {table}",
+            "breakdown_group_col": "machine_id",
+            "breakdown_agg": "avg",
+        },
+    )
+    assert create.status_code == 400
+
+
+async def test_kpi_breakdown_rejects_unknown_column(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=CSV_BREAKDOWN, filename="scrap5.csv")
+
+    create = await client.post(
+        "/kpis",
+        headers=headers,
+        json={
+            "name": "Bad column",
+            "dataset_id": dataset_id,
+            "sql": "SELECT AVG(TRY_CAST(scrap_units AS DOUBLE)) FROM {table}",
+            "breakdown_group_col": "not_a_real_column",
+            "breakdown_agg": "count",
+        },
+    )
+    assert create.status_code == 400
+
+
+async def test_rbac_blocks_non_owner_from_kpi_mutations(client, test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    token = await _register_and_login(client, email="owner3@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+    dataset_id = await _upload(client, token)
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        import uuid as uuid_module
+
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="member3@example.com",
+                password_hash=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+    login = await client.post("/auth/login", json={"email": "member3@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    res = await client.post(
+        "/kpis",
+        headers=member_headers,
+        json={"name": "x", "dataset_id": dataset_id, "sql": "SELECT 1 FROM {table}"},
+    )
+    assert res.status_code == 403
+
+    res = await client.post("/kpis/seed/manufacturing", headers=member_headers, json={"dataset_id": dataset_id})
+    assert res.status_code == 403
+
+
 async def test_seed_manufacturing_skips_existing(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

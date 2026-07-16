@@ -68,6 +68,15 @@ export const AXIS_LABEL = { color: "#64748b", fontSize: 10 };
 export const SPLIT_LINE = { lineStyle: { color: "rgba(100,116,139,0.15)" } };
 export const AXIS_LINE = { lineStyle: { color: "rgba(100,116,139,0.25)" } };
 
+// Live-style pace status: on-pace / behind / ahead against whichever target
+// is in play (a mapped plan column, or an auto-baseline average).
+export function paceStatus(pct: number): { label: string; color: string } {
+  if (pct >= 100) return { label: "Ahead of pace", color: C.green };
+  if (pct >= 85) return { label: "On pace", color: C.blue };
+  if (pct >= 60) return { label: "Behind pace", color: C.amber };
+  return { label: "Well behind pace", color: C.red };
+}
+
 export function oeeColor(pct: number): string {
   if (pct >= 85) return C.green;
   if (pct >= 65) return C.blue;

@@ -112,6 +112,18 @@ def date_bucket_expr(col: str) -> str:
     return f"COALESCE(STRFTIME({parsed}, '%Y-%m-%d'), {fallback})"
 
 
+def date_bucket_hour_expr(col: str) -> str:
+    """Hour-bucket grouping key for a date/timestamp column, normalized to
+    "YYYY-MM-DD HH:00" the same way date_bucket_expr normalizes to a day —
+    same parser, same fallback, just a finer STRFTIME format. Used for
+    intra-shift hourly pacing, where day granularity is too coarse."""
+    c = qi(col)
+    txt = f"NULLIF(TRIM(CAST({c} AS VARCHAR)), '')"
+    parsed = _date_parsed_expr(txt)
+    fallback = f"SUBSTRING({txt}, 1, 13)"
+    return f"COALESCE(STRFTIME({parsed}, '%Y-%m-%d %H:00'), {fallback})"
+
+
 def date_bucket_unparsed_expr(col: str) -> str:
     """1 when a non-blank date/timestamp cell couldn't be parsed by
     date_bucket_expr and fell back to the raw-string prefix — a data-quality

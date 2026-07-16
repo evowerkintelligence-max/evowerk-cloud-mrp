@@ -41,6 +41,7 @@ from app.models import (  # noqa: F401 - register models on the metadata
     realtime,
     report_spec,
     scenario,
+    shift_schedule,
     telemetry,
     tenant,
     user,

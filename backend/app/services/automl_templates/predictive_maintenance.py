@@ -111,10 +111,20 @@ def preprocess(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
     )
 
     training_df, last_x = build_training_frame(daily_ml)
+
+    # Raw per-row df, coerced/sorted the same way legacy analyze() does before
+    # its last_fail_ago lookback (predictive.py:438-439), so postprocess() can
+    # reproduce that lookback's failure_col/downtime_category_col preference
+    # order exactly - `grouped`/`daily_ml` have already aggregated those raw
+    # columns away.
+    df_ready = df.copy()
+    df_ready[cols["date_col"]] = pd.to_datetime(df_ready[cols["date_col"]], errors="coerce")
+    df_ready = df_ready.dropna(subset=[cols["date_col"]]).sort_values(cols["date_col"])
+
     context = {
         "grouped": grouped, "daily_ml": daily_ml, "days_per_period": days_per_period,
         "last_x": last_x, "column_map": cols, "hourly_value": config.get("hourly_value", 1000.0),
-        "n_training_rows": len(training_df),
+        "n_training_rows": len(training_df), "df": df_ready,
         "failure_col": cols.get("failure_col"), "downtime_category_col": cols.get("downtime_category_col"),
     }
 
@@ -188,6 +198,22 @@ def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], co
     machines_out: list[dict] = []
     recs_out: list[dict] = []
 
+    # Fleet-relative baseline, computed once from every machine's latest OEE -
+    # matches legacy analyze() (predictive.py:444-450), which builds this
+    # before the per-machine loop and passes the SAME value into every
+    # machine's _stat_analyze() call (not each machine's own history).
+    fleet_last_oee: list[float] = []
+    for _, fmdf in grouped.groupby(machine_col):
+        fvals = fmdf.sort_values(date_col)["oee"].tolist()
+        if fvals:
+            fleet_last_oee.append(fvals[-1])
+    fleet_last_oee.sort()
+    fleet_oee_median = fleet_last_oee[len(fleet_last_oee) // 2] if fleet_last_oee else 0.0
+
+    raw_df = context["df"]
+    failure_col = context.get("failure_col")
+    downtime_category_col = context.get("downtime_category_col")
+
     for machine, mdf in grouped.groupby(machine_col):
         mdf = mdf.sort_values(date_col)
         oee_s, avail_s, perf_s, qual_s = mdf["oee"].tolist(), mdf["avail"].tolist(), mdf["perf"].tolist(), mdf["qual"].tolist()
@@ -195,28 +221,34 @@ def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], co
             continue
         machine_key = str(machine)
 
+        # Dual-source last-failure lookback on the raw per-row df, preferring
+        # failure_col over downtime_category_col - matches legacy analyze()
+        # exactly (predictive.py:466-477). `grouped`/`daily_ml` aggregate the
+        # raw failure_col away, so this must read context["df"], not daily_ml.
         last_fail_ago: float | None = None
         machine_max_date = mdf[date_col].max()
-        # `grouped` doesn't retain the raw failure_col/downtime_category_col rows
-        # (they're aggregated away) - last-failure lookback re-derives from
-        # daily_ml's own is_failure column instead of the original df, since
-        # that's what's already available in context and matches what
-        # build_training_frame trained on.
-        mfail = context["daily_ml"][(context["daily_ml"]["machine"] == machine_key) & (context["daily_ml"]["is_failure"] > 0)]
-        if not mfail.empty:
-            last_fail_ago = float((machine_max_date - mfail["date"].max()).days)
+        if failure_col and failure_col in raw_df.columns:
+            mfail_df = raw_df[raw_df[machine_col] == machine].copy()
+            mfail_df[failure_col] = pd.to_numeric(mfail_df[failure_col], errors="coerce").fillna(0)
+            mfail = mfail_df[mfail_df[failure_col] > 0]
+            if not mfail.empty:
+                last_fail_ago = float((machine_max_date - mfail[date_col].max()).days)
+        elif downtime_category_col and downtime_category_col in raw_df.columns:
+            mfail = raw_df[(raw_df[machine_col] == machine) & raw_df[downtime_category_col].isin(legacy._UNPLANNED_CATS)]
+            if not mfail.empty:
+                last_fail_ago = float((machine_max_date - mfail[date_col].max()).days)
 
         if pipeline is not None and machine_key in context["last_x"]:
             x_row = context["last_x"][machine_key]
             feature_cols = ["oee_7d", "oee_slope_7d", "scrap_rate_7d", "dt_rate_7d", "fail_count_7d", "days_since_fail"]
             x_df = pd.DataFrame([dict(zip(feature_cols, x_row))])
-            fail_prob = float(pipeline.predict_proba(x_df)[0][1])
+            fail_prob = min(float(pipeline.predict_proba(x_df)[0][1]), 0.99)
             ml_powered = True
             drivers: list[dict] = []
         else:
             fail_prob, driver_contribs = legacy._stat_analyze(
                 oee_s, avail_s, perf_s, qual_s, last_fail_ago,
-                fleet_oee_median=sorted(oee_s)[len(oee_s) // 2] if oee_s else 0.0,
+                fleet_oee_median=fleet_oee_median,
             )
             ml_powered = False
             drivers = driver_contribs

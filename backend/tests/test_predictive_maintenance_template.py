@@ -121,6 +121,66 @@ def test_postprocess_without_trained_model_falls_back_to_statistical():
     assert out["explain_X"] is None
 
 
+def test_fleet_oee_median_is_shared_across_machines_not_per_machine(monkeypatch):
+    # 3 machines, all too short for ML (< _W+_H+1 rows each), so all take the
+    # statistical fallback. Each machine's own OEE history differs sharply
+    # (M1 healthy, M2 degrading, M3 crashed), so if fleet_oee_median were
+    # computed per-machine from its own history (the bug) instead of once
+    # from the fleet's latest-OEE values, the three calls below would see
+    # different fleet_oee_median values instead of one shared value.
+    rows = []
+    for day in range(1, 9):
+        rows.append(f"2026-01-{day:02d},M1,480,470,920,900,")
+        rows.append(f"2026-01-{day:02d},M2,480,{460 - day * 20},{900 - day * 20},{880 - day * 20},")
+        rows.append(f"2026-01-{day:02d},M3,480,100,200,150,")
+    from io import StringIO
+    df = pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure\n" + "\n".join(rows) + "\n"))
+    config = {"column_map": {
+        "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+        "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+    }, "hourly_value": 1000.0}
+
+    pre = pm.preprocess(df, config)
+    assert pre.skip_ml is True
+
+    seen_medians: list[float] = []
+    real_stat_analyze = pm.legacy._stat_analyze
+
+    def _spy(oee_s, avail_s, perf_s, qual_s, last_fail_days, fleet_oee_median):
+        seen_medians.append(fleet_oee_median)
+        return real_stat_analyze(oee_s, avail_s, perf_s, qual_s, last_fail_days, fleet_oee_median)
+
+    monkeypatch.setattr(pm.legacy, "_stat_analyze", _spy)
+    out = pm.postprocess(None, config, pre.context)
+    assert len(out["predictive_result"]["machines"]) == 3
+    assert len(seen_medians) == 3
+    assert len(set(seen_medians)) == 1, f"fleet_oee_median must be the same single value for every machine, got {seen_medians}"
+
+
+def test_last_failure_days_ago_uses_failure_col_when_downtime_category_unmapped():
+    # failure_col mapped, downtime_category_col NOT mapped - a legitimate
+    # legacy-supported configuration. daily_ml["is_failure"] is exclusively
+    # downtime_category_col-derived (Task 4 behavior, must stay that way), so
+    # it's all zero here; last_failure_days_ago must come from context["df"]'s
+    # raw failure_col instead, matching legacy analyze()'s preference order.
+    rows = [f"2026-01-{day:02d},M1,480,470,920,900,{'1' if day == 3 else ''}" for day in range(1, 9)]
+    from io import StringIO
+    df = pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure\n" + "\n".join(rows) + "\n"))
+    config = {"column_map": {
+        "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+        "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+        "failure_col": "failure",
+    }, "hourly_value": 1000.0}
+
+    pre = pm.preprocess(df, config)
+    assert pre.skip_ml is True
+    assert (pre.context["daily_ml"]["is_failure"] == 0).all()
+
+    out = pm.postprocess(None, config, pre.context)
+    machine = out["predictive_result"]["machines"][0]
+    assert machine["last_failure_days_ago"] == 5.0  # day 8 (last row) - day 3 (failure) = 5 days
+
+
 def test_preprocess_rejects_missing_columns():
     df = _fixture_df()
     config = {"column_map": {

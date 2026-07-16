@@ -47,6 +47,35 @@ async def test_pace_full_lifecycle_no_pauses(client):
     assert body["dataset_id"]
 
 
+async def test_pace_reject_reason_captured_and_tallied(client):
+    token = await _register_and_login(client, "pacereason@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = await _start_session(client, headers)
+
+    res = await client.post(
+        f"/pace/sessions/{session_id}/tap", headers=headers, json={"kind": "reject", "reason": "dimensional"}
+    )
+    assert res.status_code == 200
+    assert res.json()["reject_reasons"] == {"dimensional": 1}
+
+    res = await client.post(
+        f"/pace/sessions/{session_id}/tap", headers=headers, json={"kind": "reject", "reason": "dimensional"}
+    )
+    assert res.json()["reject_reasons"] == {"dimensional": 2}
+
+    # No reason supplied -> bucketed as "Unspecified", not dropped.
+    res = await client.post(f"/pace/sessions/{session_id}/tap", headers=headers, json={"kind": "reject"})
+    assert res.json()["reject_reasons"] == {"dimensional": 2, "Unspecified": 1}
+
+    # A reason on a "good" tap is ignored - reason only applies to rejects.
+    res = await client.post(
+        f"/pace/sessions/{session_id}/tap", headers=headers, json={"kind": "good", "reason": "dimensional"}
+    )
+    body = res.json()
+    assert body["good_count"] == 1
+    assert body["reject_reasons"] == {"dimensional": 2, "Unspecified": 1}
+
+
 async def test_pace_state_machine_guards(client):
     token = await _register_and_login(client, "paceguard@example.com")
     headers = {"Authorization": f"Bearer {token}"}

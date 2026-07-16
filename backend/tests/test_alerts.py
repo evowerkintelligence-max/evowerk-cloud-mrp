@@ -20,6 +20,12 @@ QUALITY_CSV = (
     b"M2,60,100\n"
 )
 
+SCRAP_CSV = (
+    b"machine,scrap_units,total_units\n"
+    b"M1,2,100\n"
+    b"M2,40,100\n"
+)
+
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
     reg = await client.post("/auth/register", json={"org_name": org_name, "email": email, "password": PASSWORD})
@@ -111,6 +117,31 @@ async def test_quality_scan_computes_defect_rate_per_machine(client):
     assert body["triggered_count"] == 1
     trigger = body["results"][0]
     # M2's defect rate is 40% (60/100 good), well over the 5% threshold.
+    assert trigger["offenders"] == ["M2"]
+    assert trigger["value"] == 40.0
+
+
+async def test_scrap_scan_flags_offending_machine(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token, SCRAP_CSV, name="scrap.csv")
+
+    create = await client.post(
+        "/alerts/rules", headers=_h(token),
+        json={
+            "name": "Scrap watch", "type": "scrap", "dataset_id": dataset_id,
+            "config": {"scrap_col": "scrap_units", "total_units_col": "total_units",
+                       "group_col": "machine", "scrap_threshold_pct": 5.0},
+        },
+    )
+    assert create.status_code == 201, create.text
+
+    res = await client.post("/alerts/scan", headers=_h(token))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["evaluated_count"] == 1
+    assert body["triggered_count"] == 1
+    trigger = body["results"][0]
+    # M2's scrap rate is 40% (40/100), well over the 5% threshold; M1 (2%) is fine.
     assert trigger["offenders"] == ["M2"]
     assert trigger["value"] == 40.0
 

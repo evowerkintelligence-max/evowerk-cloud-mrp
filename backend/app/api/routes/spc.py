@@ -29,6 +29,15 @@ class SPCPoint(BaseModel):
     value: float
     range_value: Optional[float] = None
     in_control: bool
+    violations: List[int] = Field(default_factory=list)
+
+
+class SPCNormality(BaseModel):
+    tested: bool
+    reason: Optional[str] = None
+    statistic: Optional[float] = None
+    p_value: Optional[float] = None
+    is_normal: Optional[bool] = None
 
 
 class SPCCapability(BaseModel):
@@ -41,6 +50,7 @@ class SPCCapability(BaseModel):
     cpk: Optional[float] = None
     pp: Optional[float] = None
     ppk: Optional[float] = None
+    normality: Optional[SPCNormality] = None
 
 
 class SPCResponse(BaseModel):
@@ -56,6 +66,8 @@ class SPCResponse(BaseModel):
     out_of_control_count: int
     row_count: int
     truncated: bool
+    low_sample_warning: bool = False
+    min_baseline: int = 20
     capability: Optional[SPCCapability] = None
 
 

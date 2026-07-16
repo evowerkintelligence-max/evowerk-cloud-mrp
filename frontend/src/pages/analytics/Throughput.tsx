@@ -11,6 +11,7 @@ import {
   TOOLTIP,
   fmt,
   gradientAreaSeries,
+  paceStatus,
   pct,
   rankedBarOption,
 } from "./shared";
@@ -29,15 +30,6 @@ interface ThroughputResult {
   is_target_estimated: boolean;
   trend: { period: string; units: number; planned: number | null; efficiency_pct?: number | null }[];
   by_machine: { machine: string; total_units: number; pct_of_total: number }[];
-}
-
-// Live-style pace status: on-pace / behind / ahead against whichever target
-// is in play (a mapped plan column, or the auto-baseline average).
-function paceStatus(pct: number): { label: string; color: string } {
-  if (pct >= 100) return { label: "Ahead of pace", color: C.green };
-  if (pct >= 85) return { label: "On pace", color: C.blue };
-  if (pct >= 60) return { label: "Behind pace", color: C.amber };
-  return { label: "Well behind pace", color: C.red };
 }
 
 const FIELDS = [

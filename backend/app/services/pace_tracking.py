@@ -49,13 +49,25 @@ async def tap_counts(db: AsyncSession, session_id: uuid.UUID) -> tuple[int, int]
     return counts.get("good", 0), counts.get("reject", 0)
 
 
-async def record_tap(db: AsyncSession, session: PaceSession, kind: str) -> PaceTap:
+async def record_tap(db: AsyncSession, session: PaceSession, kind: str, reason: str | None = None) -> PaceTap:
     if session.status != "active":
         raise HTTPException(status.HTTP_409_CONFLICT, f"Session is {session.status}, not active")
-    tap = PaceTap(session_id=session.id, kind=kind)
+    clean_reason = (reason or "").strip() or None
+    tap = PaceTap(session_id=session.id, kind=kind, reason=clean_reason if kind == "reject" else None)
     db.add(tap)
     await db.flush()
     return tap
+
+
+async def reason_counts(db: AsyncSession, session_id: uuid.UUID) -> dict[str, int]:
+    rows = (
+        await db.execute(
+            select(PaceTap.reason, func.count())
+            .where(PaceTap.session_id == session_id, PaceTap.kind == "reject")
+            .group_by(PaceTap.reason)
+        )
+    ).all()
+    return {(reason or "Unspecified"): int(n) for reason, n in rows}
 
 
 async def pause_session(db: AsyncSession, session: PaceSession, reason: str) -> PaceSession:

@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,8 @@ class QualityRequest(BaseModel):
     feature_columns: Optional[List[str]] = Field(default=None, description="Process parameter columns to analyze")
     n_clusters: int = Field(default=3, ge=2, le=10)
     max_rows: int = Field(default=500_000, ge=100, le=5_000_000)
+    opportunities_per_unit: float = Field(default=1.0, gt=0, description="Defect opportunities per unit, for DPMO")
+    cost_per_defect: Optional[float] = Field(default=None, ge=0, description="$ cost per defect, for Cost of Quality")
 
 
 @router.post("/analyze")
@@ -40,7 +43,10 @@ async def quality_analyze(
     )
 
     try:
-        return analyze_quality(
+        # analyze_quality is synchronous pandas/sklearn over up to 5M rows;
+        # run it off the event loop so one analysis doesn't stall the worker.
+        return await run_in_threadpool(
+            analyze_quality,
             dataset=dataset,
             defect_column=req.defect_column,
             batch_column=req.batch_column,
@@ -48,6 +54,8 @@ async def quality_analyze(
             feature_columns=req.feature_columns,
             n_clusters=req.n_clusters,
             max_rows=req.max_rows,
+            opportunities_per_unit=req.opportunities_per_unit,
+            cost_per_defect=req.cost_per_defect,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

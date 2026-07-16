@@ -69,6 +69,33 @@ async def test_scrap_metrics(client):
     assert len(b["trend"]) == 2
 
 
+async def test_scrap_swapped_columns_warn(client):
+    # Mapping scrap↔total swapped gives a >100% rate — must come back flagged.
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    res = await client.post(
+        "/analytics/scrap",
+        json={"dataset_id": dataset_id, "total_units_col": "scrap", "scrap_col": "total"},
+        headers=_h(token),
+    )
+    assert res.status_code == 200
+    b = res.json()
+    assert b["scrap_rate_pct"] > 100
+    assert any("swapped" in w or "exceed" in w.lower() for w in b["warnings"])
+
+
+async def test_scrap_clean_data_has_no_warnings(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    res = await client.post(
+        "/analytics/scrap",
+        json={"dataset_id": dataset_id, "total_units_col": "total", "scrap_col": "scrap"},
+        headers=_h(token),
+    )
+    assert res.status_code == 200
+    assert res.json()["warnings"] == []
+
+
 async def test_scrap_required_column_rejected(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

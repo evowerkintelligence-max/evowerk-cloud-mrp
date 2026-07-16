@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 // stream, instead of a background job - the user clicks Scan (or opens this
 // page) to evaluate every enabled rule right now.
 
-type AlertType = "machine_downtime" | "quality" | "inventory" | "production_target" | "stream_metric";
+type AlertType = "machine_downtime" | "quality" | "scrap" | "inventory" | "production_target" | "stream_metric";
 type Severity = "critical" | "warning" | "info";
 
 interface AlertRule {
@@ -65,6 +65,7 @@ async function j<T>(resPromise: Promise<Response>): Promise<T> {
 const TYPE_LABELS: Record<AlertType, string> = {
   machine_downtime: "Machine Downtime",
   quality: "Quality",
+  scrap: "Scrap",
   inventory: "Inventory",
   production_target: "Production Target",
   stream_metric: "Stream Metric",
@@ -222,6 +223,14 @@ function RuleForm({
             {numField("defect_threshold_pct", "Defect Threshold %", "e.g. 5", true)}
           </div>
         )}
+        {type === "scrap" && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {colField("scrap_col", "Scrap Units Column", true)}
+            {colField("total_units_col", "Total Units Column", true)}
+            {colField("group_col", "Machine/Reason Column (optional)")}
+            {numField("scrap_threshold_pct", "Scrap Threshold %", "e.g. 5", true)}
+          </div>
+        )}
         {type === "inventory" && (
           <div className="grid gap-4 sm:grid-cols-3">
             {colField("quantity_col", "Quantity Column", true)}
@@ -303,6 +312,11 @@ function buildConfig(type: AlertType, form: FormState): Record<string, unknown> 
       return {
         good_units_col: form.good_units_col ?? "", total_units_col: form.total_units_col ?? "",
         machine_col: str("machine_col"), defect_threshold_pct: num("defect_threshold_pct") ?? 5, ...lookback, ...webhook,
+      };
+    case "scrap":
+      return {
+        scrap_col: form.scrap_col ?? "", total_units_col: form.total_units_col ?? "",
+        group_col: str("group_col"), scrap_threshold_pct: num("scrap_threshold_pct") ?? 5, ...lookback, ...webhook,
       };
     case "inventory":
       return { quantity_col: form.quantity_col ?? "", item_col: str("item_col"), min_threshold: num("min_threshold") ?? 100, ...lookback, ...webhook };

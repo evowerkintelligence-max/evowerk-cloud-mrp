@@ -54,6 +54,16 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
     fpq = round(100.0 - scrap_rate, 2)
     defect_per_1000 = round(total_scrap / total_units * 1000, 2) if total_units > 0 else 0.0
 
+    # Wrong column mappings produce plausible-looking garbage; flag the two
+    # cases that can only mean a mismapped column so the UI can warn.
+    warnings: list[str] = []
+    if total_scrap > total_units > 0:
+        warnings.append(
+            "Scrap units exceed total units — the scrap and total columns are likely swapped or mismapped."
+        )
+    if total_units < 0 or total_scrap < 0:
+        warnings.append("Negative unit totals found — check the column mapping.")
+
     by_reason: list[dict] = []
     if reason_groups:
         sorted_reasons = sorted(reason_groups.items(), key=lambda x: x[1], reverse=True)
@@ -106,4 +116,5 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
         "by_reason": by_reason,
         "by_machine": by_machine,
         "trend": trend,
+        "warnings": warnings,
     }

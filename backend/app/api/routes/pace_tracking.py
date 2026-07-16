@@ -31,6 +31,7 @@ class PaceSessionCreateRequest(BaseModel):
 
 class PaceTapRequest(BaseModel):
     kind: str
+    reason: Optional[str] = None
 
 
 class PacePauseRequest(BaseModel):
@@ -49,6 +50,7 @@ class PaceSessionResponse(BaseModel):
     dataset_id: Optional[str]
     good_count: int
     reject_count: int
+    reject_reasons: dict[str, int]
     unplanned_dt_min: float
     planned_dt_min: float
     other_dt_min: float
@@ -56,6 +58,7 @@ class PaceSessionResponse(BaseModel):
 
 async def _to_response(db: AsyncSession, session: PaceSession) -> PaceSessionResponse:
     good, reject = await pace_service.tap_counts(db, session.id)
+    reasons = await pace_service.reason_counts(db, session.id)
     return PaceSessionResponse(
         id=str(session.id),
         line=session.line,
@@ -68,6 +71,7 @@ async def _to_response(db: AsyncSession, session: PaceSession) -> PaceSessionRes
         dataset_id=str(session.dataset_id) if session.dataset_id else None,
         good_count=good,
         reject_count=reject,
+        reject_reasons=reasons,
         unplanned_dt_min=session.unplanned_dt_min,
         planned_dt_min=session.planned_dt_min,
         other_dt_min=session.other_dt_min,
@@ -121,7 +125,7 @@ async def tap_session(
     if req.kind not in _TAP_KINDS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"kind must be one of {sorted(_TAP_KINDS)}")
     session = await _get_session(db, current, session_id)
-    await pace_service.record_tap(db, session, req.kind)
+    await pace_service.record_tap(db, session, req.kind, req.reason)
     await db.commit()
     await db.refresh(session)
     return await _to_response(db, session)

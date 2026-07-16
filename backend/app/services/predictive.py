@@ -436,6 +436,7 @@ def analyze(
     # downtime_category_col last_fail_ago lookback and needs the same
     # datetime-coerced date_col dtype.
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col]).sort_values(date_col)
 
     ml_probs, ml_drivers, ml_meta_raw = _ml_analyze(daily_ml)
     model_meta = ModelMeta(**ml_meta_raw) if ml_meta_raw else None

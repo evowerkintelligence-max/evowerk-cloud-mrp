@@ -57,3 +57,8 @@ pyodbc>=5.1.0       # SQL Server - also needs the Microsoft ODBC driver installe
 oracledb>=2.0.0     # Oracle - thin mode, no Oracle Instant Client needed
 paho-mqtt>=1.6.1,<2 # MQTT
 asyncua>=1.1.0      # OPC-UA
+
+# Realtime streaming: Redpanda (Kafka-wire-protocol) client for the tick
+# producer and metrics cache consumer - see
+# docs/superpowers/specs/2026-07-16-realtime-redpanda-flink-design.md.
+aiokafka>=0.11.0

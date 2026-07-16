@@ -61,6 +61,7 @@ const STATUS_BORDER: Record<string, string> = {
   low: "border-l-amber-500",
   excess: "border-l-sky-500",
   slow_moving: "border-l-slate-500",
+  dead_stock: "border-l-orange-500",
 };
 
 const REASON_BORDER: Record<string, string> = {

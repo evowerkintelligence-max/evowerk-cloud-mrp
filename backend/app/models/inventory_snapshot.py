@@ -35,7 +35,7 @@ class InventoryDailySnapshot(Base):
     on_hand: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     avg_daily_demand: Mapped[float] = mapped_column(Float, nullable=False)
     days_of_supply: Mapped[float | None] = mapped_column(Float, nullable=True)
-    # stockout | low | excess | slow_moving | healthy | no_data - see
+    # stockout | low | dead_stock | excess | slow_moving | healthy | no_data - see
     # app.services.inventory_analytics._status.
     status: Mapped[str] = mapped_column(String(20), nullable=False)
 

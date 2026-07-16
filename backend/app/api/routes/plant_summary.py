@@ -16,9 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.oee_calc import (
     compute_components_ideal,
+    date_bucket_expr,
     oee_grouped,
     oee_overall,
-    qi,
     rate_sql_expr,
     val_expr,
 )
@@ -117,7 +117,7 @@ async def plant_summary(
         )
         scrap_trend: dict[str, float] = {}
         if scrap_col and req.date_col and req.date_col in headers:
-            dk = f"SUBSTRING(NULLIF(TRIM(CAST({qi(req.date_col)} AS VARCHAR)), ''), 1, 10)"
+            dk = date_bucket_expr(req.date_col)
             # nosec B608 - dk/scrap_col are qi()/val_expr-quoted, validate_columns-checked above
             sql = f"SELECT {dk}, SUM({val_expr(scrap_col)}) FROM {rel} WHERE {dk} IS NOT NULL GROUP BY 1"  # nosec B608
             for k, s in con.execute(sql).fetchall():

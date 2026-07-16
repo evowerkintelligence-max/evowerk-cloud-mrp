@@ -46,6 +46,8 @@ class ThroughputComputeResponse(BaseModel):
     row_count: int
     invalid_cells: int = 0
     rows_with_issues: int = 0
+    unparsed_date_rows: int = 0
+    is_target_estimated: bool = False
     trend: List[ThroughputTrendPoint] = []
     by_machine: List[ThroughputMachineResult] = []
 

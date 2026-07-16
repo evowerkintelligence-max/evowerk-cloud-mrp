@@ -32,6 +32,7 @@ export function humanize(value: string): string {
 const INVENTORY_STATUS: Record<string, Variant> = {
   stockout: "danger",
   low: "warning",
+  dead_stock: "warning",
   excess: "info",
   slow_moving: "neutral",
   healthy: "success",

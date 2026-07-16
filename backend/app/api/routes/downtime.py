@@ -29,6 +29,7 @@ class DowntimeCategoryRow(BaseModel):
     total_minutes: float
     pct_of_total: float
     cumulative_pct: float
+    invalid_cells: int = 0
 
 
 class DowntimeMachineRow(BaseModel):
@@ -36,12 +37,14 @@ class DowntimeMachineRow(BaseModel):
     incidents: int
     total_minutes: float
     mttr_minutes: float
+    invalid_cells: int = 0
 
 
 class DowntimeTrendPoint(BaseModel):
     date: str
     incidents: int
     total_minutes: float
+    invalid_cells: int = 0
 
 
 class DowntimeAnalyzeResponse(BaseModel):

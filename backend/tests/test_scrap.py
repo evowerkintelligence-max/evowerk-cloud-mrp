@@ -69,6 +69,45 @@ async def test_scrap_metrics(client):
     assert len(b["trend"]) == 2
 
 
+async def test_scrap_negative_units_floored_and_flagged(client):
+    token = await _register_and_login(client)
+    csv = (
+        b"total,scrap,reason,machine,day\n"
+        b"100,5,Crack,M1,2026-01-01\n"
+        b"50,-10,Warp,M2,2026-01-02\n"
+    )
+    dataset_id = await _upload(client, token, data=csv)
+
+    res = await client.post(
+        "/analytics/scrap",
+        json={
+            "dataset_id": dataset_id,
+            "total_units_col": "total",
+            "scrap_col": "scrap",
+            "reason_col": "reason",
+            "machine_col": "machine",
+        },
+        headers=_h(token),
+    )
+    assert res.status_code == 200, res.text
+    b = res.json()
+    # negative scrap cell is floored to 0, not subtracted from the total as-is.
+    assert b["total_units"] == 150.0
+    assert b["total_scrap"] == 5.0
+    assert b["invalid_cells"] == 1
+    assert b["rows_with_issues"] == 1
+
+    machines = {m["machine"]: m for m in b["by_machine"]}
+    assert machines["M1"]["invalid_cells"] == 0
+    assert machines["M2"]["scrap_units"] == 0.0
+    assert machines["M2"]["invalid_cells"] == 1
+
+    reasons = {r["reason"]: r for r in b["by_reason"]}
+    assert reasons["Warp"]["count"] == 0.0
+    assert reasons["Warp"]["invalid_cells"] == 1
+    assert reasons["Crack"]["invalid_cells"] == 0
+
+
 async def test_scrap_required_column_rejected(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

@@ -28,6 +28,7 @@ class ScrapReasonResult(BaseModel):
     count: float
     pct_of_total: float
     cumulative_pct: float
+    invalid_cells: int = 0
 
 
 class ScrapMachineResult(BaseModel):
@@ -35,6 +36,7 @@ class ScrapMachineResult(BaseModel):
     total_units: float
     scrap_units: float
     scrap_rate_pct: float
+    invalid_cells: int = 0
 
 
 class ScrapTrendPoint(BaseModel):
@@ -42,6 +44,7 @@ class ScrapTrendPoint(BaseModel):
     total_units: float
     scrap_units: float
     scrap_rate_pct: float
+    invalid_cells: int = 0
 
 
 class ScrapComputeResponse(BaseModel):
@@ -51,6 +54,8 @@ class ScrapComputeResponse(BaseModel):
     fpq_pct: float
     defect_rate_per_1000: float
     row_count: int
+    invalid_cells: int = 0
+    rows_with_issues: int = 0
     by_reason: List[ScrapReasonResult] = []
     by_machine: List[ScrapMachineResult] = []
     trend: List[ScrapTrendPoint] = []

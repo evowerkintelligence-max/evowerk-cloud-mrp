@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.analytics.oee_calc import num_invalid as _inv
-from app.analytics.oee_calc import num_val as _val
+from app.analytics.oee_calc import inv_expr as _inv
 from app.analytics.oee_calc import qi
+from app.analytics.oee_calc import val_expr as _val
 from app.models.dataset import Dataset
 from app.services import datasets as ds_service
 

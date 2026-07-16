@@ -89,6 +89,47 @@ async def test_downtime_hours_unit(client):
     assert res.json()["total_minutes"] == 6000.0
 
 
+async def test_downtime_negative_duration_floored_and_flagged(client):
+    token = await _register_and_login(client)
+    csv = (
+        b"duration,category,machine,ts\n"
+        b"30,Breakdown,M1,2026-01-01 08:00\n"
+        b"-20,Breakdown,M2,2026-01-02 09:00\n"
+    )
+    dataset_id = await _upload(client, token, data=csv)
+
+    res = await client.post(
+        "/analytics/downtime",
+        json={
+            "dataset_id": dataset_id,
+            "duration_col": "duration",
+            "category_col": "category",
+            "machine_col": "machine",
+        },
+        headers=_h(token),
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # negative duration is floored to 0, so it's not a real (> 0) incident.
+    assert body["total_incidents"] == 1
+    assert body["total_minutes"] == 30.0
+    assert body["invalid_cells"] == 1
+    assert body["rows_with_issues"] == 1
+
+    # M2's only row is the negative one: 0 incidents, but it must still surface
+    # as an invalid cell instead of silently vanishing from the breakdown.
+    machines = {m["machine"]: m for m in body["by_machine"]}
+    assert machines["M1"] == {
+        "machine": "M1", "incidents": 1, "total_minutes": 30.0, "mttr_minutes": 30.0, "invalid_cells": 0,
+    }
+    assert machines["M2"]["incidents"] == 0
+    assert machines["M2"]["total_minutes"] == 0.0
+    assert machines["M2"]["invalid_cells"] == 1
+
+    cats = {c["category"]: c for c in body["by_category"]}
+    assert cats["Breakdown"]["invalid_cells"] == 1
+
+
 async def test_downtime_unknown_column_rejected(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

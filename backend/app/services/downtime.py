@@ -54,6 +54,7 @@ def analyze_downtime(dataset: Dataset, req: Any) -> dict:
             "total_minutes": round(minutes, 2),
             "pct_of_total": pct,
             "cumulative_pct": min(100.0, cumulative),
+            "invalid_cells": acc["invalid_cells"],
         })
 
     by_machine: list[dict] = []
@@ -65,10 +66,16 @@ def analyze_downtime(dataset: Dataset, req: Any) -> dict:
             "incidents": acc["incidents"],
             "total_minutes": round(minutes, 2),
             "mttr_minutes": mttr_m,
+            "invalid_cells": acc["invalid_cells"],
         })
 
     trend: list[dict] = [
-        {"date": d, "incidents": acc["incidents"], "total_minutes": round(acc["minutes_raw"] * unit_factor, 2)}
+        {
+            "date": d,
+            "incidents": acc["incidents"],
+            "total_minutes": round(acc["minutes_raw"] * unit_factor, 2),
+            "invalid_cells": acc["invalid_cells"],
+        }
         for d, acc in sorted(trend_rows, key=lambda kv: kv[0])
     ]
 

@@ -65,6 +65,29 @@ async def test_throughput_metrics(client):
     assert machines["M1"]["pct_of_total"] == 75.0
 
 
+async def test_throughput_negative_units_floored_and_flagged(client):
+    token = await _register_and_login(client)
+    csv = (
+        b"units,planned,machine,day\n"
+        b"100,120,M1,2026-01-01\n"
+        b"-50,80,M1,2026-01-02\n"
+    )
+    dataset_id = await _upload(client, token, data=csv)
+
+    res = await client.post(
+        "/analytics/throughput",
+        json={"dataset_id": dataset_id, "units_col": "units", "planned_units_col": "planned"},
+        headers=_h(token),
+    )
+    assert res.status_code == 200, res.text
+    b = res.json()
+    # negative units cell is floored to 0 in the sum, not passed through as-is.
+    assert b["total_units"] == 100.0
+    assert b["total_planned"] == 200.0
+    assert b["invalid_cells"] == 1
+    assert b["rows_with_issues"] == 1
+
+
 async def test_throughput_unknown_optional_column_rejected(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

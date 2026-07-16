@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Gauge } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
@@ -48,12 +49,16 @@ function emptyForm() {
     unit: "",
     direction: "neutral" as KpiDef["direction"],
     tags: "",
+    breakdownGroupCol: "",
+    breakdownAgg: "count" as "count" | "avg" | "sum",
+    breakdownValueCol: "",
   };
 }
 
 export function Kpis() {
   const qc = useQueryClient();
   const datasets = useDatasets();
+  const navigate = useNavigate();
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState(emptyForm());
   const [seedDatasetId, setSeedDatasetId] = useState("");
@@ -72,6 +77,11 @@ export function Kpis() {
 
   const datasetName = (id: string) => datasets.data?.find((d) => d.id === id)?.name ?? id;
 
+  const breakdownColumns = useMemo(
+    () => datasets.data?.find((d) => d.id === form.dataset_id)?.columns.map((c) => c.name) ?? [],
+    [datasets.data, form.dataset_id],
+  );
+
   const create = useMutation({
     mutationFn: async () => {
       const res = await apiFetch("/kpis", {
@@ -84,6 +94,9 @@ export function Kpis() {
           unit: form.unit || null,
           direction: form.direction,
           tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+          breakdown_group_col: form.breakdownGroupCol || null,
+          breakdown_agg: form.breakdownGroupCol ? form.breakdownAgg : null,
+          breakdown_value_col: form.breakdownAgg !== "count" ? form.breakdownValueCol || null : null,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create KPI");
@@ -141,6 +154,9 @@ export function Kpis() {
         description="Named SQL metrics over a dataset, with cached history and delta/static/baseline breach evaluation."
         actions={
           <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => navigate("/kpis/dashboards")}>
+              Dashboards
+            </Button>
             <Select
               value={seedDatasetId}
               onChange={(e) => setSeedDatasetId(e.target.value)}
@@ -297,6 +313,38 @@ export function Kpis() {
           </div>
           <Field label="Tags" hint="Comma-separated">
             <Input value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="manufacturing, quality" />
+          </Field>
+          <Field label="Breakdown (optional)" hint="Group this KPI by a column — per-machine averages, or a Pareto of a reason column.">
+            <div className="grid grid-cols-3 gap-2">
+              <Select
+                value={form.breakdownGroupCol}
+                onChange={(e) => setForm((f) => ({ ...f, breakdownGroupCol: e.target.value }))}
+              >
+                <option value="">No breakdown</option>
+                {breakdownColumns.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </Select>
+              <Select
+                value={form.breakdownAgg}
+                onChange={(e) => setForm((f) => ({ ...f, breakdownAgg: e.target.value as typeof form.breakdownAgg }))}
+                disabled={!form.breakdownGroupCol}
+              >
+                <option value="count">Count rows</option>
+                <option value="avg">Average of…</option>
+                <option value="sum">Sum of…</option>
+              </Select>
+              <Select
+                value={form.breakdownValueCol}
+                onChange={(e) => setForm((f) => ({ ...f, breakdownValueCol: e.target.value }))}
+                disabled={!form.breakdownGroupCol || form.breakdownAgg === "count"}
+              >
+                <option value="">Select column…</option>
+                {breakdownColumns.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </Select>
+            </div>
           </Field>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={() => setFormOpen(false)}>Cancel</Button>

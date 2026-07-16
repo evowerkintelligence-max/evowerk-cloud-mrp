@@ -122,6 +122,67 @@ async def test_kpi_sql_missing_table_placeholder_rejected(client):
     assert "table" in item["error"].lower()
 
 
+CSV_BREAKDOWN = b"machine_id,scrap_units,total_units,reason\nM1,5,100,jam\nM1,3,100,jam\nM2,8,100,misfeed\nM2,2,100,jam\n"
+
+
+async def test_kpi_breakdown_count_pareto(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=CSV_BREAKDOWN, filename="scrap2.csv")
+
+    create = await client.post(
+        "/kpis",
+        headers=headers,
+        json={
+            "name": "Scrap Rate (%)",
+            "dataset_id": dataset_id,
+            "sql": "SELECT (SUM(TRY_CAST(scrap_units AS DOUBLE)) * 100.0) / NULLIF(SUM(TRY_CAST(total_units AS DOUBLE)), 0) FROM {table}",
+            "breakdown_group_col": "reason",
+            "breakdown_agg": "count",
+        },
+    )
+    assert create.status_code == 201, create.text
+    kpi_id = create.json()["id"]
+
+    computed = await client.post(
+        "/kpis/compute", headers=headers, json={"dataset_id": dataset_id, "kpi_ids": [kpi_id]}
+    )
+    item = computed.json()[0]
+    assert item["breakdown"] is not None
+    labels = {b["label"]: b["value"] for b in item["breakdown"]}
+    assert labels["jam"] == 3
+    assert labels["misfeed"] == 1
+
+
+async def test_kpi_breakdown_avg_per_group(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=CSV_BREAKDOWN, filename="scrap3.csv")
+
+    create = await client.post(
+        "/kpis",
+        headers=headers,
+        json={
+            "name": "Scrap Units",
+            "dataset_id": dataset_id,
+            "sql": "SELECT AVG(TRY_CAST(scrap_units AS DOUBLE)) FROM {table}",
+            "breakdown_group_col": "machine_id",
+            "breakdown_agg": "avg",
+            "breakdown_value_col": "scrap_units",
+        },
+    )
+    assert create.status_code == 201, create.text
+    kpi_id = create.json()["id"]
+
+    computed = await client.post(
+        "/kpis/compute", headers=headers, json={"dataset_id": dataset_id, "kpi_ids": [kpi_id]}
+    )
+    item = computed.json()[0]
+    labels = {b["label"]: b["value"] for b in item["breakdown"]}
+    assert labels["M1"] == pytest.approx(4.0)
+    assert labels["M2"] == pytest.approx(5.0)
+
+
 async def test_seed_manufacturing_skips_existing(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

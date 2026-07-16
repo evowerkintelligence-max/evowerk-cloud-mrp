@@ -42,6 +42,7 @@ class KpiComputeItem:
     cache_hit: bool
     error: str | None = None
     eval: dict | None = None
+    breakdown: list[tuple[str, float]] | None = None
 
 
 @dataclass
@@ -70,6 +71,49 @@ def _replace_table_placeholder(sql: str) -> str:
     if "{table}" not in sql:
         raise ValueError("KPI sql must include a '{table}' placeholder")
     return sql.replace("{table}", "dataset")
+
+
+_BREAKDOWN_AGG_SQL = {"avg": "AVG", "sum": "SUM"}
+
+
+def _breakdown_sql(group_col: str, agg: str, value_col: str | None) -> str:
+    group_ref = ds_service.qi(group_col)
+    if agg == "count":
+        return f"SELECT {group_ref}, COUNT(*) FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"
+    value_ref = ds_service.qi(value_col)
+    return (
+        f"SELECT {group_ref}, {_BREAKDOWN_AGG_SQL[agg]}(TRY_CAST({value_ref} AS DOUBLE)) "
+        f"FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"
+    )
+
+
+async def _compute_breakdown(dataset: Dataset, kpi: Kpi) -> list[tuple[str, float]] | None:
+    """Runs alongside the main KPI value when a breakdown is configured -
+    per-machine averages or a breach-cause Pareto, depending on what column
+    the author picked. Fails soft: a bad breakdown query degrades to no
+    breakdown rather than failing the whole KPI compute."""
+    if not kpi.breakdown_group_col:
+        return None
+    try:
+        ds_service.validate_columns(
+            dataset,
+            [kpi.breakdown_group_col, kpi.breakdown_value_col] if kpi.breakdown_value_col else [kpi.breakdown_group_col],
+        )
+        sql = _replace_table_placeholder(
+            _breakdown_sql(kpi.breakdown_group_col, kpi.breakdown_agg or "count", kpi.breakdown_value_col)
+        )
+        result = await run_sql(dataset, sql, row_limit=10)
+    except (HTTPException, ValueError):
+        return None
+    out: list[tuple[str, float]] = []
+    for row in result["rows"]:
+        vals = list(row.values())
+        if len(vals) < 2:
+            continue
+        v = _safe_float(vals[1])
+        if v is not None:
+            out.append((str(vals[0]), v))
+    return out or None
 
 
 def _delta(prev: float | None, curr: float | None) -> tuple[float | None, float | None]:
@@ -245,6 +289,7 @@ async def _compute_one(
         eval_res = (
             _evaluate_status(kpi.eval_policy, cached.value, prev, hist_vals) if include_eval else None
         )
+        breakdown = await _compute_breakdown(dataset, kpi)
         return KpiComputeItem(
             kpi_id=kpi.id,
             value=cached.value,
@@ -253,6 +298,7 @@ async def _compute_one(
             cache_hit=True,
             error=None,
             eval=eval_res,
+            breakdown=breakdown,
         )
 
     if not kpi.enabled:
@@ -287,9 +333,11 @@ async def _compute_one(
     prev = history[1].value if len(history) > 1 else None
     hist_vals = [h.value for h in reversed(history) if h.value is not None]
     eval_res = _evaluate_status(kpi.eval_policy, value, prev, hist_vals) if include_eval else None
+    breakdown = await _compute_breakdown(dataset, kpi)
 
     return KpiComputeItem(
-        kpi_id=kpi.id, value=value, meta=meta, computed_at=kv.computed_at, cache_hit=False, error=None, eval=eval_res
+        kpi_id=kpi.id, value=value, meta=meta, computed_at=kv.computed_at, cache_hit=False, error=None,
+        eval=eval_res, breakdown=breakdown,
     )
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Uuid  # noqa: F401
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -40,6 +40,14 @@ class Kpi(Base):
     # app/services/kpis.py's _evaluate_status for the shape each key is read as.
     eval_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # Optional grouped drill-down query, run alongside the main value. Serves
+    # two uses depending on what column is picked: GROUP BY machine + avg for
+    # per-machine breakdown, or GROUP BY reason + count for a breach Pareto.
+    # Column names are validated against the dataset's schema at write time
+    # (see api/routes/kpis.py _validate_breakdown) - never raw SQL.
+    breakdown_group_col: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    breakdown_agg: Mapped[str | None] = mapped_column(String(10), nullable=True)  # count | avg | sum
+    breakdown_value_col: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

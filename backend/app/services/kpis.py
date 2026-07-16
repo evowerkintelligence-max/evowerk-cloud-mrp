@@ -77,12 +77,16 @@ _BREAKDOWN_AGG_SQL = {"avg": "AVG", "sum": "SUM"}
 
 
 def _breakdown_sql(group_col: str, agg: str, value_col: str | None) -> str:
+    # nosec B608 - group_col/value_col reach here only after the caller
+    # (_compute_breakdown) has run them through ds_service.validate_columns,
+    # the same allow-list every other structured SQL builder in this codebase
+    # uses before qi()-quoting; there is no unvalidated identifier here.
     group_ref = ds_service.qi(group_col)
     if agg == "count":
-        return f"SELECT {group_ref}, COUNT(*) FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"
+        return f"SELECT {group_ref}, COUNT(*) FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"  # nosec B608
     value_ref = ds_service.qi(value_col)
     return (
-        f"SELECT {group_ref}, {_BREAKDOWN_AGG_SQL[agg]}(TRY_CAST({value_ref} AS DOUBLE)) "
+        f"SELECT {group_ref}, {_BREAKDOWN_AGG_SQL[agg]}(TRY_CAST({value_ref} AS DOUBLE)) "  # nosec B608
         f"FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"
     )
 

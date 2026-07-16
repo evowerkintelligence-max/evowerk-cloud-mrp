@@ -22,6 +22,7 @@ from app.api.routes import (
     inventory,
     inventory_analytics,
     items,
+    kpi_dashboards,
     kpis,
     locations,
     lots,
@@ -112,6 +113,7 @@ app.include_router(bi.router)
 app.include_router(workflows.router)
 app.include_router(automl.router)
 app.include_router(kpis.router)
+app.include_router(kpi_dashboards.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
 app.include_router(rca_cases.router)

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from app.services import predictive as legacy
-from app.services.automl_templates import ColumnRole, PreprocessResult
+from app.services.automl_templates import AutoMLTemplate, ColumnRole, PreprocessResult, register_template
 
 _W, _H, _MIN_ROWS = 7, 3, 40
 
@@ -298,3 +298,14 @@ def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], co
         "metric_name": engine_result["meta"]["metric_name"] if engine_result else None,
         "metric_value": engine_result["meta"]["metric_value"] if engine_result else None,
     }
+
+
+register_template(AutoMLTemplate(
+    id="predictive_maintenance",
+    label="Predictive Maintenance",
+    roles=ROLES,
+    preprocess=preprocess,
+    postprocess=postprocess,
+    is_timeseries=True,
+    min_positive_examples=_MIN_ROWS,
+))

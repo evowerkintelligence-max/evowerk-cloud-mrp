@@ -71,3 +71,6 @@ def get_template(template_id: str) -> AutoMLTemplate:
 
 def list_templates() -> list[AutoMLTemplate]:
     return list(_REGISTRY.values())
+
+
+from app.services.automl_templates import predictive_maintenance  # noqa: E402,F401 - registers the template

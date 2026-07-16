@@ -21,23 +21,8 @@ from app.middleware.audit import log_event
 from app.models.automl_run import AutoMLRun
 from app.services import automl_engine, automl_storage, automl_templates, datasets as datasets_service
 from app.services.automl_runner import execute_automl_run
-from app.services.automl_templates import predictive_maintenance as _pm_impl
 
 router = APIRouter(prefix="/automl", tags=["automl"])
-
-# ponytail: Tasks 2-6 built predictive_maintenance's ROLES/preprocess/postprocess
-# but never called register_template() for it in production code (only ad-hoc
-# test templates were registered in tests). Registering here, at import time of
-# the routes module that both list_templates() and create_template_run() need,
-# is the smallest fix. Move to a dedicated startup hook if a second template
-# needs the same treatment.
-automl_templates.register_template(automl_templates.AutoMLTemplate(
-    id="predictive_maintenance",
-    label="Predictive Maintenance",
-    roles=_pm_impl.ROLES,
-    preprocess=_pm_impl.preprocess,
-    postprocess=_pm_impl.postprocess,
-))
 
 
 class TrainRequest(BaseModel):

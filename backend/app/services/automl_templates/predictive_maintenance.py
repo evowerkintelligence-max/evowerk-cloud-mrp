@@ -31,7 +31,7 @@ def build_training_frame(daily: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, l
     for machine, mdf in daily.groupby("machine"):
         mdf = mdf.sort_values("date").reset_index(drop=True)
         n = len(mdf)
-        if n < _W:
+        if n < _W + _H + 1:
             continue
 
         oee = mdf["oee"].to_numpy(dtype=float)

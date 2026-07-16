@@ -63,7 +63,11 @@ def test_build_training_frame_skips_machines_with_too_little_history():
     short = daily[daily["date"] < pd.Timestamp("2026-01-08")]  # only 7 days: n < W+H+1=11
     training_df, last_by_machine = pm.build_training_frame(short)
     assert len(training_df) == 0  # no full W+H window fits, so zero training rows
-    assert "M1" in last_by_machine  # n=7 >= W=7, so a "last window" snapshot still exists
+    # n=7 < W+H+1=11, so the machine is skipped entirely: no training rows AND
+    # no last-window snapshot. This matches predictive.py's original
+    # _ml_analyze, which guards both with a single `if n < W + H + 1: continue`
+    # so a machine never gets ML-scored on partial history alone.
+    assert "M1" not in last_by_machine
 
 
 def test_has_ml_signal_requires_min_rows_and_balanced_positive_rate():

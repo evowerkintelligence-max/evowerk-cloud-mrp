@@ -179,7 +179,7 @@ export function KpiDashboards() {
     <div className="space-y-6">
       <PageHeader
         title="KPI Dashboards"
-        description="Live, auto-refreshing views of your KPIs — tiered for operators (fast refresh, fullscreen) or supervisors (slower refresh, full detail)."
+        description="Refreshing views of your KPIs that pick up newly-computed values — tiered for operators (fast refresh, fullscreen) or supervisors (slower refresh, full detail)."
         actions={
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => navigate("/kpis")}>Definitions</Button>

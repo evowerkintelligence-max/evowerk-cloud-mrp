@@ -105,6 +105,46 @@ async def test_dashboard_crud(client):
     assert (await client.get("/kpi-dashboards", headers=headers)).json() == []
 
 
+async def test_dashboard_create_dedupes_kpi_ids(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=CSV_A, filename="d.csv")
+    kpi_id = (
+        await client.post(
+            "/kpis",
+            headers=headers,
+            json={"name": "K", "dataset_id": dataset_id, "sql": "SELECT 1.0 FROM {table}"},
+        )
+    ).json()["id"]
+
+    created = await client.post(
+        "/kpi-dashboards",
+        headers=headers,
+        json={"name": "Dupes", "tier": "operator", "kpi_ids": [kpi_id, kpi_id, kpi_id]},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["kpi_ids"] == [kpi_id]
+
+
+async def test_dashboard_refresh_seconds_must_be_positive(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post(
+        "/kpi-dashboards",
+        headers=headers,
+        json={"name": "Bad refresh", "tier": "operator", "kpi_ids": [], "refresh_seconds": 0},
+    )
+    assert res.status_code == 422
+
+    res = await client.post(
+        "/kpi-dashboards",
+        headers=headers,
+        json={"name": "Bad refresh", "tier": "operator", "kpi_ids": [], "refresh_seconds": -5},
+    )
+    assert res.status_code == 422
+
+
 async def test_rbac_blocks_non_owner_from_dashboard_mutations(client, test_engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 

@@ -7,6 +7,7 @@ import pytest
 from app.db import session as db_session
 from app.models.dataset import Dataset
 from app.models.kpi import Kpi
+from app.services import kpis as kpi_service
 from app.services.kpis import _compute_breakdown
 
 pytestmark = pytest.mark.asyncio
@@ -161,6 +162,59 @@ async def test_kpi_breakdown_count_pareto(client):
     assert labels["misfeed"] == 1
 
 
+async def test_kpi_breakdown_not_recomputed_on_cache_hit(client, monkeypatch):
+    """Finding 1: the breakdown must be cached in KpiValue.meta alongside the
+    main value, not re-derived by re-running _compute_breakdown (which
+    re-materializes the whole dataset) on every cache-hit poll."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=CSV_BREAKDOWN, filename="scrap6.csv")
+
+    create = await client.post(
+        "/kpis",
+        headers=headers,
+        json={
+            "name": "Scrap Rate (%)",
+            "dataset_id": dataset_id,
+            "sql": "SELECT (SUM(TRY_CAST(scrap_units AS DOUBLE)) * 100.0) / NULLIF(SUM(TRY_CAST(total_units AS DOUBLE)), 0) FROM {table}",
+            "breakdown_group_col": "reason",
+            "breakdown_agg": "count",
+        },
+    )
+    assert create.status_code == 201, create.text
+    kpi_id = create.json()["id"]
+
+    calls = {"n": 0}
+    original = kpi_service._compute_breakdown
+
+    async def _spy(dataset, kpi):
+        calls["n"] += 1
+        return await original(dataset, kpi)
+
+    monkeypatch.setattr(kpi_service, "_compute_breakdown", _spy)
+
+    first = await client.post(
+        "/kpis/compute", headers=headers, json={"dataset_id": dataset_id, "kpi_ids": [kpi_id]}
+    )
+    first_item = first.json()[0]
+    assert first_item["cache_hit"] is False
+    assert calls["n"] == 1
+    labels = {b["label"]: b["value"] for b in first_item["breakdown"]}
+    assert labels["jam"] == 3
+
+    # Cache-hit poll must read the breakdown back from meta, not call
+    # _compute_breakdown again.
+    second = await client.post(
+        "/kpis/compute", headers=headers, json={"dataset_id": dataset_id, "kpi_ids": [kpi_id]}
+    )
+    second_item = second.json()[0]
+    assert second_item["cache_hit"] is True
+    assert calls["n"] == 1
+    labels2 = {b["label"]: b["value"] for b in second_item["breakdown"]}
+    assert labels2["jam"] == 3
+    assert labels2["misfeed"] == 1
+
+
 async def test_kpi_breakdown_avg_per_group(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -290,6 +344,44 @@ async def test_rbac_blocks_non_owner_from_kpi_mutations(client, test_engine):
 
     res = await client.post("/kpis/seed/manufacturing", headers=member_headers, json={"dataset_id": dataset_id})
     assert res.status_code == 403
+
+
+async def test_delete_kpi_removes_it_from_dashboards(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    create = await client.post(
+        "/kpis",
+        headers=headers,
+        json={
+            "name": "Scrap Rate (%)",
+            "dataset_id": dataset_id,
+            "sql": "SELECT (SUM(TRY_CAST(scrap_units AS DOUBLE)) * 100.0) / NULLIF(SUM(TRY_CAST(total_units AS DOUBLE)), 0) FROM {table}",
+        },
+    )
+    kpi_id = create.json()["id"]
+
+    other = await client.post(
+        "/kpis",
+        headers=headers,
+        json={"name": "Other", "dataset_id": dataset_id, "sql": "SELECT 1.0 FROM {table}"},
+    )
+    other_id = other.json()["id"]
+
+    dashboard = await client.post(
+        "/kpi-dashboards",
+        headers=headers,
+        json={"name": "Floor", "tier": "operator", "kpi_ids": [kpi_id, other_id]},
+    )
+    dashboard_id = dashboard.json()["id"]
+
+    deleted = await client.delete(f"/kpis/{kpi_id}", headers=headers)
+    assert deleted.status_code == 204
+
+    listed = await client.get("/kpi-dashboards", headers=headers)
+    dash = next(d for d in listed.json() if d["id"] == dashboard_id)
+    assert dash["kpi_ids"] == [other_id]
 
 
 async def test_seed_manufacturing_skips_existing(client):

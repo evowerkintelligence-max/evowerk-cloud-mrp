@@ -292,7 +292,14 @@ async def _compute_one(
         eval_res = (
             _evaluate_status(kpi.eval_policy, cached.value, prev, hist_vals) if include_eval else None
         )
-        breakdown = await _compute_breakdown(dataset, kpi)
+        # "breakdown" is only present in meta for values computed after this
+        # caching was added — older rows fall back to a live recompute so
+        # they don't break, but every value computed from here on caches it.
+        if "breakdown" in cached.meta:
+            raw = cached.meta.get("breakdown")
+            breakdown = [(b["label"], b["value"]) for b in raw] if raw else None
+        else:
+            breakdown = await _compute_breakdown(dataset, kpi)
         return KpiComputeItem(
             kpi_id=kpi.id,
             value=cached.value,
@@ -325,6 +332,14 @@ async def _compute_one(
     except ValueError as exc:
         error = str(exc)
 
+    breakdown: list[tuple[str, float]] | None = None
+    if error is None:
+        breakdown = await _compute_breakdown(dataset, kpi)
+        # Cache the breakdown alongside the value so cache-hit polls (as
+        # frequent as every 15s for operator dashboards) don't re-open a
+        # DuckDB connection and re-materialize the dataset just for this.
+        meta["breakdown"] = [{"label": label, "value": v} for label, v in breakdown] if breakdown else None
+
     kv = KpiValue(org_id=org_id, kpi_id=kpi.id, dataset_id=dataset.id, value=value, error=error, meta=meta)
     db.add(kv)
     await db.flush()
@@ -336,7 +351,6 @@ async def _compute_one(
     prev = history[1].value if len(history) > 1 else None
     hist_vals = [h.value for h in reversed(history) if h.value is not None]
     eval_res = _evaluate_status(kpi.eval_policy, value, prev, hist_vals) if include_eval else None
-    breakdown = await _compute_breakdown(dataset, kpi)
 
     return KpiComputeItem(
         kpi_id=kpi.id, value=value, meta=meta, computed_at=kv.computed_at, cache_hit=False, error=None,

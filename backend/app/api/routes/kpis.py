@@ -16,7 +16,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.dataset import Dataset
-from app.models.kpi import Kpi, KpiValue
+from app.models.kpi import Kpi, KpiDashboard, KpiValue
 from app.services import datasets as ds_service
 from app.services import kpis as kpi_service
 
@@ -301,6 +301,18 @@ async def delete_kpi(
 ):
     kpi = await get_or_404(db, Kpi, current.org_id, kpi_id, "KPI not found")
     await db.delete(kpi)
+
+    # kpi_ids is a JSON list column (no portable containment query across
+    # SQLite/Postgres) — dashboard/KPI counts are small here, so a full scan
+    # and filter in Python is fine.
+    kpi_id_str = str(kpi_id)
+    dashboards = (
+        await db.execute(select(KpiDashboard).where(KpiDashboard.org_id == current.org_id))
+    ).scalars().all()
+    for dashboard in dashboards:
+        if kpi_id_str in dashboard.kpi_ids:
+            dashboard.kpi_ids = [k for k in dashboard.kpi_ids if k != kpi_id_str]
+
     await log_event(db, action="kpi.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(kpi_id))
     await db.commit()
 

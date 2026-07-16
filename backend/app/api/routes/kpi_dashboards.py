@@ -26,14 +26,14 @@ class KpiDashboardWriteRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     tier: str = "supervisor"  # operator | supervisor
     kpi_ids: list[uuid.UUID] = Field(default_factory=list)
-    refresh_seconds: int | None = None
+    refresh_seconds: int | None = Field(default=None, ge=1)
 
 
 class KpiDashboardPatchRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     tier: str | None = None
     kpi_ids: list[uuid.UUID] | None = None
-    refresh_seconds: int | None = None
+    refresh_seconds: int | None = Field(default=None, ge=1)
 
 
 class KpiDashboardResponse(BaseModel):
@@ -77,7 +77,7 @@ async def create_dashboard(
         org_id=current.org_id,
         name=req.name,
         tier=req.tier,
-        kpi_ids=[str(k) for k in req.kpi_ids],
+        kpi_ids=[str(k) for k in dict.fromkeys(req.kpi_ids)],
         refresh_seconds=req.refresh_seconds or _DEFAULT_REFRESH[req.tier],
         created_by=current.id,
     )
@@ -100,7 +100,7 @@ async def update_dashboard(
     if "tier" in updates:
         _validate_tier(updates["tier"])
     if "kpi_ids" in updates:
-        updates["kpi_ids"] = [str(k) for k in updates["kpi_ids"]]
+        updates["kpi_ids"] = [str(k) for k in dict.fromkeys(patch.kpi_ids)]
     for field_name, value in updates.items():
         setattr(dashboard, field_name, value)
     await log_event(db, action="kpi_dashboard.updated", org_id=current.org_id, actor_user_id=current.id, target=str(dashboard.id))

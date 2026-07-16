@@ -734,7 +734,7 @@ def test_postprocess_with_trained_model_produces_predictive_result():
         "column_map": {
             "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
             "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
-            "failure_col": "failure",
+            "failure_col": "failure", "downtime_category_col": "downtime_category",
         },
         "hourly_value": 1000.0,
     }
@@ -1157,13 +1157,15 @@ async def test_create_predictive_maintenance_run_end_to_end(client):
     token = await _register_and_login(client)
     csv_rows = []
     for day in range(1, 31):
-        csv_rows.append(f"2026-01-{day:02d},M1,480,470,920,900,")
-        fail = "1" if day in (11, 18, 25) else ""
+        csv_rows.append(f"2026-01-{day:02d},M1,480,470,920,900,,")
+        is_fail_day = day in (11, 18, 25)
+        fail = "1" if is_fail_day else ""
+        category = "Mechanical Failure" if is_fail_day else ""
         operating = 150 if day >= 11 else 470
         total = 200 if day >= 11 else 920
         good = 150 if day >= 11 else 900
-        csv_rows.append(f"2026-01-{day:02d},M2,480,{operating},{total},{good},{fail}")
-    csv_bytes = ("date,machine,planned,operating,total,good,failure\n" + "\n".join(csv_rows) + "\n").encode()
+        csv_rows.append(f"2026-01-{day:02d},M2,480,{operating},{total},{good},{fail},{category}")
+    csv_bytes = ("date,machine,planned,operating,total,good,failure,downtime_category\n" + "\n".join(csv_rows) + "\n").encode()
 
     up = await client.post("/datasets", headers=_h(token), files={"file": ("pm.csv", csv_bytes, "text/csv")})
     assert up.status_code == 201
@@ -1174,7 +1176,7 @@ async def test_create_predictive_maintenance_run_end_to_end(client):
         "column_map": {
             "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
             "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
-            "failure_col": "failure",
+            "failure_col": "failure", "downtime_category_col": "downtime_category",
         },
         "config": {"hourly_value": 1000.0},
     }

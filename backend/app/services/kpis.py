@@ -422,3 +422,47 @@ async def compare_kpis(
             )
         )
     return out
+
+
+async def compute_kpis_multi_dataset(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    kpi_ids: list[uuid.UUID],
+    *,
+    force: bool = False,
+    include_eval: bool = False,
+    lookback: int = 14,
+) -> list[KpiComputeItem]:
+    """Like compute_kpis, but each KPI runs against its OWN dataset_id rather
+    than one shared dataset_id - needed for a dashboard whose KPIs span
+    multiple datasets. Groups by dataset_id and calls compute_kpis once per
+    group, so the single-dataset code path is unchanged."""
+    rows = (
+        await db.execute(select(Kpi.id, Kpi.dataset_id).where(Kpi.org_id == org_id, Kpi.id.in_(kpi_ids)))
+    ).all()
+    dataset_by_kpi = {r.id: r.dataset_id for r in rows}
+
+    by_dataset: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for kpi_id in kpi_ids:
+        dataset_id = dataset_by_kpi.get(kpi_id)
+        if dataset_id is None:
+            continue
+        by_dataset.setdefault(dataset_id, []).append(kpi_id)
+
+    items_by_id: dict[uuid.UUID, KpiComputeItem] = {}
+    for dataset_id, ids in by_dataset.items():
+        for item in await compute_kpis(db, org_id, dataset_id, ids, force=force, include_eval=include_eval, lookback=lookback):
+            items_by_id[item.kpi_id] = item
+
+    out: list[KpiComputeItem] = []
+    for kpi_id in kpi_ids:
+        if kpi_id in items_by_id:
+            out.append(items_by_id[kpi_id])
+        else:
+            out.append(
+                KpiComputeItem(
+                    kpi_id=kpi_id, value=None, meta={}, computed_at=datetime.now(timezone.utc),
+                    cache_hit=False, error="KPI not found",
+                )
+            )
+    return out

@@ -189,3 +189,80 @@ def test_preprocess_rejects_missing_columns():
     }}
     with pytest.raises(ValueError):
         pm.preprocess(df, config)
+
+
+PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+
+
+async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
+    reg = await client.post("/auth/register", json={"org_name": org_name, "email": email, "password": PASSWORD})
+    assert reg.status_code == 201
+    login = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+    return login.json()["access_token"]
+
+
+def _h(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_list_templates_includes_predictive_maintenance(client):
+    token = await _register_and_login(client)
+    res = await client.get("/automl/templates", headers=_h(token))
+    assert res.status_code == 200
+    ids = {t["id"] for t in res.json()}
+    assert "predictive_maintenance" in ids
+
+
+@pytest.mark.asyncio
+async def test_create_predictive_maintenance_run_end_to_end(client):
+    token = await _register_and_login(client)
+    csv_rows = []
+    for day in range(1, 31):
+        csv_rows.append(f"2026-01-{day:02d},M1,480,470,920,900,,")
+        is_fail_day = day in (11, 18, 25)
+        fail = "1" if is_fail_day else ""
+        category = "Mechanical Failure" if is_fail_day else ""
+        operating = 150 if day >= 11 else 470
+        total = 200 if day >= 11 else 920
+        good = 150 if day >= 11 else 900
+        csv_rows.append(f"2026-01-{day:02d},M2,480,{operating},{total},{good},{fail},{category}")
+    csv_bytes = ("date,machine,planned,operating,total,good,failure,downtime_category\n" + "\n".join(csv_rows) + "\n").encode()
+
+    up = await client.post("/datasets", headers=_h(token), files={"file": ("pm.csv", csv_bytes, "text/csv")})
+    assert up.status_code == 201
+    dataset_id = up.json()["id"]
+
+    body = {
+        "name": "PM run", "dataset_id": dataset_id,
+        "column_map": {
+            "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+            "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+            "failure_col": "failure", "downtime_category_col": "downtime_category",
+        },
+        "config": {"hourly_value": 1000.0},
+    }
+    created = await client.post("/automl/templates/predictive_maintenance/runs", headers=_h(token), json=body)
+    assert created.status_code == 202, created.text
+    run_id = created.json()["id"]
+
+    detail = await client.get(f"/automl/runs/{run_id}", headers=_h(token))
+    assert detail.status_code == 200
+    run = detail.json()
+    assert run["status"] == "success", run.get("error")
+    assert run["meta"]["predictive_result"]["machines"]
+    machines = {m["machine"]: m for m in run["meta"]["predictive_result"]["machines"]}
+    assert "M1" in machines and "M2" in machines
+
+
+@pytest.mark.asyncio
+async def test_create_run_for_unknown_template_404s(client):
+    token = await _register_and_login(client)
+    up = await client.post("/datasets", headers=_h(token), files={"file": ("t.csv", b"a,b\n1,2\n", "text/csv")})
+    dataset_id = up.json()["id"]
+    res = await client.post(
+        "/automl/templates/does_not_exist/runs", headers=_h(token),
+        json={"name": "x", "dataset_id": dataset_id, "column_map": {}},
+    )
+    assert res.status_code == 404

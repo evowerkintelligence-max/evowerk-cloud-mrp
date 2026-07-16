@@ -19,10 +19,25 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.automl_run import AutoMLRun
-from app.services import automl_engine, automl_storage, datasets as datasets_service
+from app.services import automl_engine, automl_storage, automl_templates, datasets as datasets_service
 from app.services.automl_runner import execute_automl_run
+from app.services.automl_templates import predictive_maintenance as _pm_impl
 
 router = APIRouter(prefix="/automl", tags=["automl"])
+
+# ponytail: Tasks 2-6 built predictive_maintenance's ROLES/preprocess/postprocess
+# but never called register_template() for it in production code (only ad-hoc
+# test templates were registered in tests). Registering here, at import time of
+# the routes module that both list_templates() and create_template_run() need,
+# is the smallest fix. Move to a dedicated startup hook if a second template
+# needs the same treatment.
+automl_templates.register_template(automl_templates.AutoMLTemplate(
+    id="predictive_maintenance",
+    label="Predictive Maintenance",
+    roles=_pm_impl.ROLES,
+    preprocess=_pm_impl.preprocess,
+    postprocess=_pm_impl.postprocess,
+))
 
 
 class TrainRequest(BaseModel):
@@ -39,6 +54,25 @@ class TrainRequest(BaseModel):
     forecast_strategy: str = "direct"
     time_budget_seconds: int | None = None
     search_method: str = "random"
+
+
+class TemplateRoleResponse(BaseModel):
+    key: str
+    label: str
+    required: bool
+
+
+class TemplateSummary(BaseModel):
+    id: str
+    label: str
+    roles: list[TemplateRoleResponse]
+
+
+class TemplateRunRequest(BaseModel):
+    name: str
+    dataset_id: uuid.UUID
+    column_map: dict[str, str]
+    config: dict[str, Any] = {}
 
 
 class RunSummary(BaseModel):
@@ -129,6 +163,54 @@ async def get_algorithms(task: str, current: CurrentUser = Depends(get_current_u
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown task '{task}'") from None
     return automl_engine.algorithm_roster(automl_task)
+
+
+@router.get("/templates", response_model=list[TemplateSummary])
+async def list_templates(current: CurrentUser = Depends(get_current_user)):
+    return [
+        TemplateSummary(
+            id=t.id, label=t.label,
+            roles=[TemplateRoleResponse(key=r.key, label=r.label, required=r.required) for r in t.roles],
+        )
+        for t in automl_templates.list_templates()
+    ]
+
+
+@router.post("/templates/{template_id}/runs", response_model=RunDetail, status_code=status.HTTP_202_ACCEPTED)
+async def create_template_run(
+    template_id: str,
+    req: TemplateRunRequest,
+    background_tasks: BackgroundTasks,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        template = automl_templates.get_template(template_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown AutoML template '{template_id}'") from None
+
+    dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
+
+    run = AutoMLRun(
+        org_id=current.org_id,
+        dataset_id=dataset.id,
+        created_by=current.id,
+        name=req.name,
+        task="classification",  # placeholder until the run finishes - automl_runner._execute()'s
+                                 # template branch (Task 6) overwrites this with pre.task once
+                                 # preprocess() runs; queued/running polls will read this default.
+        target_column="",       # same - overwritten with pre.target_col once preprocess() runs
+        template_id=template.id,
+        config={"column_map": req.column_map, **req.config},
+        status="queued",
+    )
+    db.add(run)
+    await log_event(db, action="automl.template_train", org_id=current.org_id, actor_user_id=current.id, metadata={"name": req.name, "template_id": template.id})
+    await db.commit()
+    await db.refresh(run)
+
+    background_tasks.add_task(execute_automl_run, str(run.id), str(current.org_id))
+    return _detail(run)
 
 
 @router.get("/runs", response_model=list[RunSummary])

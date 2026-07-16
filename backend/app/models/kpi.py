@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Uuid  # noqa: F401
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -90,4 +90,31 @@ class KpiValue(Base):
     meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
+class KpiDashboard(Base):
+    """A named, ordered, tiered collection of KPIs for the dashboard view
+    (frontend/src/pages/KpiDashboards.tsx). kpi_ids is an ordered JSON list -
+    same pattern as Kpi.tags - no join table needed at this scale.
+    """
+
+    __tablename__ = "kpi_dashboards"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    tier: Mapped[str] = mapped_column(String(20), nullable=False, default="supervisor")  # operator | supervisor
+    kpi_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    refresh_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )

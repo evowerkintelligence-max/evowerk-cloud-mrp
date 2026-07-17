@@ -255,8 +255,10 @@ export function AppShell() {
             ))}
           </div>
 
-          <main className="mx-auto w-full max-w-6xl flex-1 animate-fade-in px-6 py-8">
-            <Outlet />
+          <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+            <div key={location.pathname} className="animate-fade-in">
+              <Outlet />
+            </div>
           </main>
         </div>
       </div>

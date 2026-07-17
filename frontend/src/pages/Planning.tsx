@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { SendToReportButton } from "./analytics/shared";
 
 interface ItemResponse {
   id: string;
@@ -287,6 +288,13 @@ export function Planning() {
               />
             </Field>
           </div>
+
+          {plan.data && plan.data.lines.length > 0 && (
+            <SendToReportButton
+              spec={{ type: "kind_report", report_kind: "mrp-plan", report_params: { horizon_start: horizonStart, horizon_end: horizonEnd } }}
+              label={`MRP plan — ${horizonStart} to ${horizonEnd}`}
+            />
+          )}
 
           {plan.isError && <Alert variant="destructive">{(plan.error as Error).message}</Alert>}
           {plan.data && plan.data.lines.length === 0 && (

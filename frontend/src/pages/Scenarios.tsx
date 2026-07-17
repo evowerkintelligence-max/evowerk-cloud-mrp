@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { useDatasets, useQueryBuilder, QueryBuilderFields } from "@/pages/analytics/shared";
+import { SendToReportButton, useDatasets, useQueryBuilder, QueryBuilderFields } from "@/pages/analytics/shared";
 
 interface Scenario {
   id: string;
@@ -136,6 +136,10 @@ function ScenarioList() {
                     <Button size="sm" variant="secondary" loading={run.isPending} onClick={() => run.mutate(s.id)}>
                       Run
                     </Button>
+                    <SendToReportButton
+                      spec={{ type: "table", dataset_id: s.dataset_id, query: s.base_query }}
+                      label={s.name}
+                    />
                     <Button size="sm" variant="ghost" onClick={() => del.mutate(s.id)}>
                       Delete
                     </Button>

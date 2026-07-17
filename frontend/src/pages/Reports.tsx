@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { today, plusDays } from "@/lib/date";
-import { useDatasets } from "./analytics/shared";
+import { useDatasets, SendToReportButton } from "./analytics/shared";
 
 interface ItemResponse {
   id: string;
@@ -249,6 +249,26 @@ export function Reports() {
           Download XLSX
         </button>
       </section>
+
+      {ready && (
+        <section>
+          <h2>Send to Report Builder</h2>
+          <SendToReportButton
+            spec={{
+              type: "kind_report",
+              report_kind: kind,
+              report_params: {
+                horizon_start: kind === "mrp-plan" ? horizonStart : undefined,
+                horizon_end: kind === "mrp-plan" ? horizonEnd : undefined,
+                dimension: kind === "rca" ? dimension : undefined,
+                lead_times: kind === "scenario" ? leadTimeParam : undefined,
+                dataset_id: kind === "dataset" ? datasetId : undefined,
+              },
+            }}
+            label={`${active.label} — ${today()}`}
+          />
+        </section>
+      )}
 
       <section>
         <h2>Preview</h2>

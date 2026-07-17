@@ -16,7 +16,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { C, ColumnChecklist, EChart, QueryBuilderFields, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { C, ColumnChecklist, EChart, QueryBuilderFields, SendToReportButton, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
 import { controlChart } from "./Spc";
 import { StatCard } from "@/components/StatCard";
 
@@ -1048,8 +1048,9 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
 
       {query.isSuccess && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <CardTitle>Results ({query.data.rows.length} rows)</CardTitle>
+            <SendToReportButton spec={{ type: "table", dataset_id: d.id, query: qb.toRequestBody() }} label={d.name} />
           </CardHeader>
           <CardContent>
             <TableWrap className="max-h-[32rem] overflow-y-auto">

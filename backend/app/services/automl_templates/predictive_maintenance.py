@@ -13,7 +13,7 @@ import pandas as pd
 from app.services import predictive as legacy
 from app.services.automl_templates import AutoMLTemplate, ColumnRole, PreprocessResult, register_template
 
-_W, _H, _MIN_ROWS = 7, 3, 40
+_W, _H, _MIN_ROWS, _MIN_ANOMALY_ROWS = 7, 3, 40, 15
 
 
 def _days_since(fail_arr: np.ndarray, up_to: int) -> float:
@@ -124,7 +124,7 @@ def preprocess(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
     context = {
         "grouped": grouped, "daily_ml": daily_ml, "days_per_period": days_per_period,
         "last_x": last_x, "column_map": cols, "hourly_value": config.get("hourly_value", 1000.0),
-        "n_training_rows": len(training_df), "df": df_ready,
+        "n_training_rows": len(training_df), "df": df_ready, "training_df": training_df,
         "failure_col": cols.get("failure_col"), "downtime_category_col": cols.get("downtime_category_col"),
     }
 

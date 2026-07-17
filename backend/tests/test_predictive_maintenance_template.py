@@ -266,3 +266,33 @@ async def test_create_run_for_unknown_template_404s(client):
         json={"name": "x", "dataset_id": dataset_id, "column_map": {}},
     )
     assert res.status_code == 404
+
+
+def test_context_carries_training_df_regardless_of_ml_signal():
+    df = _fixture_df()
+    config = {
+        "column_map": {
+            "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+            "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+            "failure_col": "failure", "downtime_category_col": "downtime_category",
+        },
+    }
+    result = pm.preprocess(df, config)
+    assert "training_df" in result.context
+    assert len(result.context["training_df"]) == len(result.df)
+
+    short_rows = [f"2026-01-{day:02d},M1,480,470,920,900," for day in range(1, 9)]
+    from io import StringIO
+    short_df = pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure\n" + "\n".join(short_rows) + "\n"))
+    short_config = {"column_map": {
+        "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+        "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+    }}
+    short_result = pm.preprocess(short_df, short_config)
+    assert short_result.skip_ml is True
+    assert "training_df" in short_result.context
+    assert len(short_result.context["training_df"]) == 0
+
+
+def test_min_anomaly_rows_constant_is_below_classifier_floor():
+    assert pm._MIN_ANOMALY_ROWS < pm._MIN_ROWS

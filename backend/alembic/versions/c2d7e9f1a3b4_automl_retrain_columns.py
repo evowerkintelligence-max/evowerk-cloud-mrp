@@ -1,7 +1,7 @@
 """automl run retrain columns
 
 Revision ID: c2d7e9f1a3b4
-Revises: f1a5c8d3e942
+Revises: b6d3f8a17c92
 Create Date: 2026-07-18
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "c2d7e9f1a3b4"  # pragma: allowlist secret
-down_revision = "f1a5c8d3e942"  # pragma: allowlist secret
+down_revision = "b6d3f8a17c92"  # pragma: allowlist secret
 branch_labels = None
 depends_on = None
 

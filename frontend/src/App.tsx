@@ -34,6 +34,8 @@ import { WorkflowBuilder } from "./pages/workflows/WorkflowBuilder";
 import { ReportBuilder } from "./pages/ReportBuilder";
 import { AutoML } from "./pages/AutoML";
 import { AutoMLRun } from "./pages/automl/AutoMLRun";
+import { TemplatesHome } from "./pages/automl/TemplatesHome";
+import { ResultsView as AutoMLTemplateResultsView } from "./pages/automl/templates/ResultsView";
 import { Kpis } from "./pages/Kpis";
 import { Integrations } from "./pages/Integrations";
 import { Realtime } from "./pages/Realtime";
@@ -101,8 +103,11 @@ export function App() {
         <Route path="/workflows/:id" element={<WorkflowBuilder />} />
         <Route path="/runs" element={<RunHistory />} />
         <Route path="/report-builder" element={<ReportBuilder />} />
-        <Route path="/automl" element={<AutoML />} />
-        <Route path="/automl/:id" element={<AutoMLRun />} />
+        <Route path="/automl" element={<TemplatesHome />} />
+        <Route path="/automl/runs/:id" element={<AutoMLTemplateResultsView />} />
+        <Route path="/automl/advanced" element={<AutoML />} />
+        <Route path="/automl/advanced/new" element={<AutoMLRun />} />
+        <Route path="/automl/advanced/:id" element={<AutoMLRun />} />
         <Route path="/kpis" element={<Kpis />} />
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/realtime" element={<Realtime />} />

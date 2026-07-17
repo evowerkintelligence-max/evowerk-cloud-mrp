@@ -38,6 +38,7 @@ from app.api.routes import (
     rca_cases,
     realtime,
     reports,
+    routings,
     scrap,
     shifts,
     simulation,
@@ -111,6 +112,7 @@ app.include_router(quality.router)
 app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
 app.include_router(reports.router)
+app.include_router(routings.router)
 app.include_router(bi.router)
 app.include_router(workflows.router)
 app.include_router(automl.router)

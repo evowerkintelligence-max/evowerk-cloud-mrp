@@ -62,3 +62,4 @@ asyncua>=1.1.0      # OPC-UA
 # producer and metrics cache consumer - see
 # docs/superpowers/specs/2026-07-16-realtime-redpanda-flink-design.md.
 aiokafka>=0.11.0
+kafka-python==2.3.2  # sync client used by the infra smoke test (streaming/test_infra_smoke.py)

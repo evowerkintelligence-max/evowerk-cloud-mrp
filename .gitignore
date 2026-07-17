@@ -19,3 +19,4 @@ infra/terraform/**/tfplan.out
 graphify-out/
 
 .worktrees/
+.superpowers/

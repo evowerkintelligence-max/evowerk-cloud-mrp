@@ -6,8 +6,21 @@ shared simple-regression template helper.
 """
 from __future__ import annotations
 
-from app.services.automl_templates import AutoMLTemplate, ColumnRole, register_template
+from app.services.automl_templates import AutoMLTemplate, ColumnRole, RecommendationRule, register_template
 from app.services.automl_templates._shared import make_simple_regression_postprocess, make_simple_regression_preprocess
+
+# Matched against the top SHAP/importance driver's raw column name or
+# friendly label (substring, case-insensitive) plus its direction by
+# automl_explain_nl.py. Generic manufacturing process-parameter vocabulary,
+# since this template's feature set is whatever columns the user's dataset
+# happens to have - not a fixed schema like predictive maintenance's.
+RECOMMENDATION_RULES = [
+    RecommendationRule("temp", "high", "Check process temperature control - running hot correlates with more scrap. Review heater/cooling setpoints and calibration."),
+    RecommendationRule("speed", "high", "Machine speed correlates with more scrap - verify the run rate against the process's qualified speed range."),
+    RecommendationRule("pressure", "low", "Low process pressure correlates with more scrap - check for leaks or pump/regulator wear."),
+    RecommendationRule("humidity", "high", "High humidity correlates with more scrap - check environmental controls near the affected process."),
+    RecommendationRule("machine", "high", "Scrap is concentrated on specific machines - compare setup/calibration on the flagged machine against the fleet baseline."),
+]
 
 ROLES = [
     ColumnRole("total_units_col", "Total units"),
@@ -37,5 +50,6 @@ register_template(AutoMLTemplate(
     roles=ROLES,
     preprocess=preprocess,
     postprocess=postprocess,
+    recommendation_rules=RECOMMENDATION_RULES,
     is_timeseries=False,
 ))

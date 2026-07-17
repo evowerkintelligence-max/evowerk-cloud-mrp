@@ -9,8 +9,18 @@ and rare-event handling, out of scope here. See the plan's scope note.
 """
 from __future__ import annotations
 
-from app.services.automl_templates import AutoMLTemplate, ColumnRole, register_template
+from app.services.automl_templates import AutoMLTemplate, ColumnRole, RecommendationRule, register_template
 from app.services.automl_templates._shared import make_simple_regression_postprocess, make_simple_regression_preprocess
+
+# All three candidate features (machine/reason/shift) are categorical, so
+# automl_explain_nl.py's driver direction always comes back "high" for them
+# (there's no numeric "low" reading for a category) - rules here are written
+# against that "high" direction.
+RECOMMENDATION_RULES = [
+    RecommendationRule("reason", "high", "Downtime reason code is the strongest driver of incident length - review the top reason category's countermeasure/SOP and confirm it's being followed."),
+    RecommendationRule("machine", "high", "Downtime duration varies most by machine - investigate whether the flagged machine needs maintenance or operator retraining."),
+    RecommendationRule("shift", "high", "Downtime duration varies by shift - check staffing levels, handover procedures, or shift-specific process differences."),
+]
 
 ROLES = [
     ColumnRole("machine_col", "Machine column"),
@@ -37,5 +47,6 @@ register_template(AutoMLTemplate(
     roles=ROLES,
     preprocess=preprocess,
     postprocess=postprocess,
+    recommendation_rules=RECOMMENDATION_RULES,
     is_timeseries=False,
 ))

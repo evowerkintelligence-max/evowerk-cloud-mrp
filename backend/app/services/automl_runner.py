@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import session as db_session
 from app.models.automl_run import AutoMLRun
 from app.models.dataset import Dataset
-from app.services import automl_engine, automl_storage, automl_templates
+from app.services import automl_engine, automl_explain_nl, automl_storage, automl_templates
 from app.services.datasets import dataframe_for
 
 
@@ -62,6 +62,7 @@ async def _execute(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> No
             pre = await asyncio.to_thread(template.preprocess, df, config)
 
             if pre.skip_ml:
+                engine_result = None
                 template_out = await asyncio.to_thread(template.postprocess, None, config, pre.context)
             else:
                 engine_result = await asyncio.to_thread(
@@ -71,6 +72,14 @@ async def _execute(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> No
                     thoroughness=config.get("thoroughness", "balanced"),
                 )
                 template_out = await asyncio.to_thread(template.postprocess, engine_result, config, pre.context)
+
+            # Plain-English explanation + recommendation, built on the same
+            # engine_result the template just used - never fails the run,
+            # degrades to explanation_sentence=None/recommendation=None.
+            role_labels = config.get("column_labels") or config.get("friendly_labels") or {}
+            explain_out = automl_explain_nl.explain(engine_result, template, role_labels)
+            template_out["explanation_sentence"] = explain_out.get("explanation_sentence")
+            template_out["recommendation"] = explain_out.get("recommendation")
 
             if pre.task:
                 run.task = pre.task

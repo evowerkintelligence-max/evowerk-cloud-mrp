@@ -13,9 +13,23 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 
 from app.services import predictive as legacy
-from app.services.automl_templates import AutoMLTemplate, ColumnRole, PreprocessResult, register_template
+from app.services.automl_templates import AutoMLTemplate, ColumnRole, PreprocessResult, RecommendationRule, register_template
 
 _W, _H, _MIN_ROWS, _MIN_ANOMALY_ROWS = 7, 3, 40, 15
+
+# Matched by automl_explain_nl.py against the top SHAP/importance driver
+# among build_training_frame's rolling-7-day features. Direction mirrors
+# _BADNESS_DIRECTION below (oee/oee_slope/days_since_fail: bad when low;
+# scrap_rate/dt_rate/fail_count: bad when high) so a rule only fires on the
+# direction that actually signals elevated failure risk.
+RECOMMENDATION_RULES = [
+    RecommendationRule("oee_slope", "falling", "OEE is trending down over the last week - inspect for early signs of mechanical wear before it becomes a failure."),
+    RecommendationRule("oee", "low", "OEE is running low ahead of predicted failure - review availability/performance/quality losses on this machine."),
+    RecommendationRule("scrap_rate", "high", "Scrap rate is elevated ahead of predicted failure - check tooling wear and in-process quality checks."),
+    RecommendationRule("dt_rate", "high", "Downtime rate is climbing - review recent unplanned stops for a developing mechanical issue."),
+    RecommendationRule("fail_count", "high", "Recent failure count is elevated - this machine may need root-cause investigation, not just another PM cycle."),
+    RecommendationRule("days_since_fail", "low", "This machine failed recently - increase monitoring frequency while the underlying cause is investigated."),
+]
 
 
 def _days_since(fail_arr: np.ndarray, up_to: int) -> float:
@@ -363,6 +377,7 @@ register_template(AutoMLTemplate(
     roles=ROLES,
     preprocess=preprocess,
     postprocess=postprocess,
+    recommendation_rules=RECOMMENDATION_RULES,
     is_timeseries=True,
     min_positive_examples=_MIN_ROWS,
 ))

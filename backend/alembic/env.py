@@ -30,6 +30,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     telemetry,
     tenant,
     user,
+    work_center,
 )
 
 config = context.config

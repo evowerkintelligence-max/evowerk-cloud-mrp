@@ -47,6 +47,7 @@ from app.models import (  # noqa: F401 - register models
     telemetry,
     tenant,
     user,
+    work_center,
     workflow,
 )
 

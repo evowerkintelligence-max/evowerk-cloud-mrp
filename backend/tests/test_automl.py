@@ -197,6 +197,8 @@ def test_true_string_class_labels_are_not_coerced():
         feature_columns=["x1"], thoroughness="fast", algorithms=["RandomForestClassifier"],
     )
     assert result["meta"]["model_name"] == "RandomForestClassifier"
+    preds = set(result["pipeline"].predict(result["explain_X"]))
+    assert preds <= {"yes", "no"}
 
 
 def _forecast_csv() -> bytes:

@@ -48,6 +48,7 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
+from app.services import automl_realtime as automl_realtime_service
 from app.services import realtime as realtime_service
 
 settings = get_settings()
@@ -58,7 +59,11 @@ async def lifespan(app: FastAPI):
     # Re-adopt any realtime stream that was running before this process
     # started (redeploy/restart/crash) - see app.services.realtime.
     await realtime_service.resume_all_streams()
+    # Same re-adoption for live AutoML scoring/drift bindings - see
+    # app.services.automl_realtime.
+    await automl_realtime_service.resume_all_bindings()
     yield
+    automl_realtime_service.stop_all_binding_schedulers()
     realtime_service.stop_all_runners()
 
 

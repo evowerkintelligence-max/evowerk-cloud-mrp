@@ -110,6 +110,12 @@ class StreamRunner:
 
         self._buffer: deque = deque(maxlen=max_rows)
         self._lock = Lock()
+        # Externally-computed metrics (currently: app.services.automl_realtime's
+        # live risk score) merged into snapshot()'s own derived OEE/scrap metrics.
+        # A plain dict behind the same lock as the buffer - this is the "small
+        # extension point" the manufacturing-AutoML spec calls for, kept minimal
+        # on purpose: no pub/sub, no per-key TTL, just "last value wins".
+        self._external_metrics: dict[str, Any] = {}
         self._history_path = history_path(stream_id)
         self._stop = Event()
         self._thread = Thread(target=self._run, daemon=True, name=f"stream-{stream_id[:8]}")
@@ -150,6 +156,25 @@ class StreamRunner:
         self._stop.set()
         self._thread.join(timeout=5)
 
+    def set_external_metric(self, name: str, value: Any) -> None:
+        """Inject a named value into the metrics dict every snapshot() call
+        returns from now on, alongside this runner's own derived OEE/scrap
+        metrics - e.g. app.services.automl_realtime publishing a live risk
+        score so the existing stream_metric alert path (eval_stream_metric)
+        can alert on it without knowing anything about AutoML."""
+        with self._lock:
+            self._external_metrics[name] = value
+
+    def recent_rows(self, n: int = 500) -> list[dict[str, Any]]:
+        """Last `n` raw rows from the in-memory buffer (not the derived
+        metrics), for callers that need actual feature values - e.g.
+        app.services.automl_realtime building the row(s) a trained pipeline
+        expects. Unlike read_history(), which only persists this runner's
+        derived metrics per tick, this reflects the real ingested columns."""
+        with self._lock:
+            rows = list(self._buffer)
+        return rows[-max(1, int(n)) :]
+
     def _append_history(self) -> None:
         # History persistence is a nice-to-have for replay/restart-survival, not
         # the collector's core job — a disk hiccup here must never take down the
@@ -164,6 +189,7 @@ class StreamRunner:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             rows = list(self._buffer)
+            external_metrics = dict(self._external_metrics)
 
         now = datetime.now(timezone.utc)
         age_s = (now - self.started_at).total_seconds()
@@ -215,6 +241,8 @@ class StreamRunner:
             metrics["quality_pct"] = round(quality, 1)
             metrics["performance_pct"] = round(perf, 1)
             metrics["oee_pct"] = round(oee, 1)
+
+        metrics.update(external_metrics)
 
         dur_s = int(age_s)
         h, rem = divmod(dur_s, 3600)

@@ -9,7 +9,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { SqlCodeEditor, type SqlColumn, type SqlColumnDtype } from "@/components/SqlCodeEditor";
-import { useDatasets } from "@/pages/analytics/shared";
+import { SendToReportButton, useDatasets } from "@/pages/analytics/shared";
 
 interface QueryResult {
   columns: string[];
@@ -137,8 +137,12 @@ export function SqlEditor() {
 
       {query.isSuccess && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <CardTitle>Results ({query.data.rows.length} rows)</CardTitle>
+            <SendToReportButton
+              spec={{ type: "sql", dataset_id: effectiveDatasetId, sql_text: sql }}
+              label={activeDataset?.name ?? "SQL query"}
+            />
           </CardHeader>
           <CardContent>
             <TableWrap className="max-h-[32rem] overflow-y-auto">

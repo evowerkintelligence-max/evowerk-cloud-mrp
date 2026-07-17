@@ -143,6 +143,15 @@ class TickProducer:
             self.error = f"Redpanda connection failed: {exc}"
             return
 
+        # stop() may have already run (and given up on us at its 5s join
+        # timeout) while the KafkaProducer constructor above was still
+        # blocked bootstrapping. If so, self._producer would otherwise leak
+        # (background I/O threads + open socket, never closed) since the
+        # while loop below would never run to reach its own cleanup.
+        if self._stop.is_set():
+            self._producer.close(timeout=5)
+            return
+
         while not self._stop.is_set():
             try:
                 rows: list[dict] = conn.fetch_all()

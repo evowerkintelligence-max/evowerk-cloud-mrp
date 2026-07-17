@@ -166,13 +166,20 @@ async def list_nodes(db: AsyncSession, org_id: uuid.UUID, case_id: uuid.UUID) ->
 async def create_node(
     db: AsyncSession, org_id: uuid.UUID, case_id: uuid.UUID, actor_label: str | None, **fields
 ) -> RcaNode:
-    await get_case_or_404(db, org_id, case_id)
+    case = await get_case_or_404(db, org_id, case_id)
     if fields.get("parent_id"):
         await get_node_or_404(db, org_id, case_id, fields["parent_id"])
     node = RcaNode(org_id=org_id, case_id=case_id, **fields)
     db.add(node)
     await db.flush()
     await log_event(db, org_id, case_id, "node_added", f"Cause added: {node.text}", actor_label)
+    # A case sits in "open" until an investigator actually starts building the
+    # cause tree - the first real cause (not the auto-seeded root problem node)
+    # is what "investigating" means, so advance it automatically rather than
+    # relying on a manual status click every case is stuck without.
+    if node.node_type != "problem" and case.status == "open":
+        case.status = "investigating"
+        await log_event(db, org_id, case_id, "status_changed", "Status changed to investigating", actor_label)
     await db.commit()
     await db.refresh(node)
     return node
@@ -215,13 +222,18 @@ async def list_actions(db: AsyncSession, org_id: uuid.UUID, case_id: uuid.UUID) 
 async def create_action(
     db: AsyncSession, org_id: uuid.UUID, case_id: uuid.UUID, created_by: uuid.UUID, actor_label: str | None, **fields
 ) -> RcaAction:
-    await get_case_or_404(db, org_id, case_id)
+    case = await get_case_or_404(db, org_id, case_id)
     if fields.get("node_id"):
         await get_node_or_404(db, org_id, case_id, fields["node_id"])
     action = RcaAction(org_id=org_id, case_id=case_id, created_by=created_by, **fields)
     db.add(action)
     await db.flush()
     await log_event(db, org_id, case_id, "action_added", f"Action added: {action.description}", actor_label)
+    # Same auto-progression as create_node: a CAPA action means the case has
+    # moved from "investigating" to actually acting on it.
+    if case.status in ("open", "investigating"):
+        case.status = "actions_open"
+        await log_event(db, org_id, case_id, "status_changed", "Status changed to actions_open", actor_label)
     await db.commit()
     await db.refresh(action)
     return action

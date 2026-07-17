@@ -302,7 +302,7 @@ export type EngineField = {
   hints?: RegExp[]; // auto-map dataset columns by naming convention (from desktop)
 };
 
-function autoMapColumns(fields: EngineField[], cols: string[]): Record<string, string> {
+export function autoMapColumns(fields: EngineField[], cols: string[]): Record<string, string> {
   const next: Record<string, string> = {};
   for (const f of fields) {
     if (f.kind && f.kind !== "col") continue;

@@ -714,7 +714,10 @@ def _add_target_lag_features(df: pd.DataFrame, time_col: str, target_col: str) -
     """Assumes df is already sorted by time_col. Returns (df_with_features, new_column_names)."""
     out = df.copy()
     new_cols: list[str] = []
-    s = out[target_col]
+    # CSV/TSV-sourced datasets always load columns as strings (see
+    # app.services.datasets.dataframe_for) - coerce before any lag/rolling/
+    # trend arithmetic below, which raises TypeError on object-dtype values.
+    s = pd.to_numeric(out[target_col], errors="coerce")
 
     for lag in _LAGS:
         col = f"_lag_{lag}_"

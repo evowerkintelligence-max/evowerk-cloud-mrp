@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { useDatasets } from "@/pages/analytics/shared";
+import { SendToReportButton, useDatasets } from "@/pages/analytics/shared";
 import { cn } from "@/lib/utils";
 
 interface RcaCase {
@@ -603,9 +603,14 @@ function CaseDetail({ caseId, onBack }: { caseId: string; onBack: () => void }) 
         title={caseQuery.data?.title ?? "Case"}
         description={caseQuery.data?.problem_statement}
         actions={
-          <Button variant="secondary" onClick={onBack}>
-            Back to cases
-          </Button>
+          <div className="flex gap-2">
+            {caseQuery.data && (
+              <SendToReportButton spec={{ type: "rca_case", case_id: caseId }} label={caseQuery.data.title} />
+            )}
+            <Button variant="secondary" onClick={onBack}>
+              Back to cases
+            </Button>
+          </div>
         }
       />
 

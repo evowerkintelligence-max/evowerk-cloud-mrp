@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import type * as echarts from "echarts";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
@@ -183,6 +183,7 @@ export function AutoMLRun() {
   const [timeColumn, setTimeColumn] = useState("");
   const [horizon, setHorizon] = useState(7);
   const [forecastStrategy, setForecastStrategy] = useState<"direct" | "recursive">("direct");
+  const [autoRetrain, setAutoRetrain] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -226,6 +227,7 @@ export function AutoMLRun() {
         forecast_strategy: forecastStrategy,
         time_budget_seconds: timeBudgetSeconds ? Number(timeBudgetSeconds) : null,
         search_method: searchMethod,
+        auto_retrain: autoRetrain,
       },
       {
         onSuccess: (r) => navigate(`/automl/${r.id}`, { replace: true }),
@@ -371,6 +373,12 @@ export function AutoMLRun() {
                   </label>
                 </div>
               )}
+              <div className="flex items-end">
+                <label className="flex items-center gap-2 text-sm" title="When this dataset's data changes and drift is detected, automatically retrain and promote if the new model isn't worse.">
+                  <input type="checkbox" checked={autoRetrain} onChange={(e) => setAutoRetrain(e.target.checked)} />
+                  Auto-retrain on drift
+                </label>
+              </div>
               <div className="sm:col-span-2 space-y-2">
                 <p className="text-xs text-muted-foreground">Leave all unchecked to let the thoroughness tier pick a sensible roster.</p>
                 <ColumnChecklist
@@ -391,6 +399,16 @@ export function AutoMLRun() {
       )}
 
       {!isNew && isFailed && <Alert variant="destructive">{runData?.error ?? "Training failed."}</Alert>}
+
+      {!isNew && runData?.retrained_from_run_id && (
+        <p className="text-xs text-muted-foreground">
+          Auto-retrained from{" "}
+          <Link to={`/automl/${runData.retrained_from_run_id}`} className="underline underline-offset-2">
+            an earlier run
+          </Link>
+          .
+        </p>
+      )}
 
       {!isNew && isDone && runData && (
         <>

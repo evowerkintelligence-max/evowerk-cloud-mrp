@@ -299,6 +299,7 @@ function ShiftForecastCard({ shift, requestBody }: { shift: string; requestBody:
         forecast_strategy: "recursive",
         time_budget_seconds: null,
         search_method: "random",
+        auto_retrain: false,
       },
       { onSuccess: (r) => setRunId(r.id) },
     );

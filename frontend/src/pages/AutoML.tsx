@@ -158,6 +158,11 @@ export function AutoML() {
                     <Link to={`/automl/${r.id}`} className="hover:underline">
                       {r.name}
                     </Link>
+                    {r.auto_retrain && (
+                      <Badge variant="info" className="ml-2">
+                        auto-retrain
+                      </Badge>
+                    )}
                   </TD>
                   <TD className="text-muted-foreground">{r.task}</TD>
                   <TD>

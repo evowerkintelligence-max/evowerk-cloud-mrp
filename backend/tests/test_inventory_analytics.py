@@ -154,7 +154,7 @@ async def test_no_lead_time_reports_nulls_not_zero(client, test_engine):
     assert line["safety_stock"] is None
     assert line["reorder_point"] is None
     assert line["days_of_supply"] is None  # no consumption history -> no demand rate
-    assert line["status"] == "healthy"
+    assert line["status"] == "dead_stock"  # stock on hand, zero movement
 
 
 async def test_history_based_demand_stats_and_reorder_point(client, test_engine):

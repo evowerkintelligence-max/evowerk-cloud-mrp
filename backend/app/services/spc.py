@@ -87,5 +87,6 @@ def analyze_spc(dataset: Dataset, req: Any) -> dict:
         d2 = spc_calc.control_constants(resp["subgroup_size"] if resp["subgroup_size"] >= 2 else 2)[3]
         sigma_within = (resp["range_centerline"] / d2) if d2 else 0.0
         resp["capability"] = spc_calc.capability(mean, sigma_within, sigma_overall, req.usl, req.lsl)
+        resp["capability"]["normality"] = spc_calc.normality_check(all_values)
 
     return resp

@@ -16,17 +16,20 @@ from app.api.routes import (
     data_chat,
     datasets,
     downtime,
+    downtime_tracking,
     forecasts,
     integrations,
     inventory,
     inventory_analytics,
     items,
+    kpi_dashboards,
     kpis,
     locations,
     lots,
     mfg_forecast,
     oee,
     orgs,
+    pace_tracking,
     plant_summary,
     predictive,
     process_mining,
@@ -93,8 +96,10 @@ app.include_router(forecasts.router)
 app.include_router(forecasts.mrp_router)
 app.include_router(datasets.router)
 app.include_router(oee.router)
+app.include_router(pace_tracking.router)
 app.include_router(plant_summary.router)
 app.include_router(downtime.router)
+app.include_router(downtime_tracking.router)
 app.include_router(throughput.router)
 app.include_router(scrap.router)
 app.include_router(shifts.router)
@@ -108,6 +113,7 @@ app.include_router(bi.router)
 app.include_router(workflows.router)
 app.include_router(automl.router)
 app.include_router(kpis.router)
+app.include_router(kpi_dashboards.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
 app.include_router(rca_cases.router)

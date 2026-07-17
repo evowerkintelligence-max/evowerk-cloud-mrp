@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.analytics.oee_calc import num_val, qi
+from app.analytics.oee_calc import date_bucket_expr, num_val, qi
 from app.models.dataset import Dataset
 from app.services import datasets as ds_service
 
@@ -42,7 +42,7 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
 
         period_groups: dict[str, dict[str, float]] = {}
         if req.date_col and req.date_col in headers:
-            dk = f"SUBSTRING(NULLIF(TRIM(CAST({qi(req.date_col)} AS VARCHAR)), ''), 1, 10)"
+            dk = date_bucket_expr(req.date_col)
             for k, t, s in con.execute(
                 f"SELECT {dk}, SUM({tval}), SUM({sval}) FROM {rel} WHERE {dk} IS NOT NULL GROUP BY 1"  # nosec B608
             ).fetchall():
@@ -53,6 +53,16 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
     scrap_rate = round(total_scrap / total_units * 100, 2) if total_units > 0 else 0.0
     fpq = round(100.0 - scrap_rate, 2)
     defect_per_1000 = round(total_scrap / total_units * 1000, 2) if total_units > 0 else 0.0
+
+    # Wrong column mappings produce plausible-looking garbage; flag the two
+    # cases that can only mean a mismapped column so the UI can warn.
+    warnings: list[str] = []
+    if total_scrap > total_units > 0:
+        warnings.append(
+            "Scrap units exceed total units — the scrap and total columns are likely swapped or mismapped."
+        )
+    if total_units < 0 or total_scrap < 0:
+        warnings.append("Negative unit totals found — check the column mapping.")
 
     by_reason: list[dict] = []
     if reason_groups:
@@ -106,4 +116,5 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
         "by_reason": by_reason,
         "by_machine": by_machine,
         "trend": trend,
+        "warnings": warnings,
     }

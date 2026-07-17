@@ -215,6 +215,9 @@ async def delete_inbox_item(
     if item.created_by != current.id and current.role != "owner":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the item's creator or an owner can delete it")
     await db.delete(item)
+    await log_event(
+        db, action="report_inbox.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(item_id)
+    )
     await db.commit()
 
 

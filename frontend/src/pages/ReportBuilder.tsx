@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { FileStack } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { useCharts, useDatasets, useInbox, type InboxItem } from "./analytics/shared";
+import { useCharts, useCurrentUser, useDatasets, useInbox, type InboxItem } from "./analytics/shared";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
@@ -113,6 +113,7 @@ export function ReportBuilder() {
   const [narrationStyle, setNarrationStyle] = useState<NarrationStyle>("narrative");
   const [narration, setNarration] = useState<ReportNarration | null>(null);
   const inbox = useInbox();
+  const me = useCurrentUser();
   const [showInboxPicker, setShowInboxPicker] = useState(false);
   const [checkedInboxIds, setCheckedInboxIds] = useState<Set<string>>(new Set());
 
@@ -181,6 +182,10 @@ export function ReportBuilder() {
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["report-inbox"] }),
   });
+
+  function canDeleteInboxItem(item: InboxItem) {
+    return item.created_by === me.data?.user_id || me.data?.role === "owner";
+  }
 
   function openAddSection() {
     setSectionDraft(blankSection());
@@ -526,6 +531,9 @@ export function ReportBuilder() {
 
       <Dialog open={showInboxPicker} onClose={() => setShowInboxPicker(false)} title="Add from inbox">
         <div className="space-y-3">
+          {deleteInboxItem.isError && (
+            <Alert variant="destructive">{(deleteInboxItem.error as Error).message}</Alert>
+          )}
           {(inbox.data ?? []).length === 0 && (
             <p className="text-sm text-muted-foreground">
               Nothing captured yet — use "Send to report" on any analytics page, BI chart, or RCA case.
@@ -554,7 +562,9 @@ export function ReportBuilder() {
                   <div className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</div>
                 </div>
               </label>
-              <Button variant="ghost" size="sm" onClick={() => deleteInboxItem.mutate(item.id)}>Delete</Button>
+              {canDeleteInboxItem(item) && (
+                <Button variant="ghost" size="sm" onClick={() => deleteInboxItem.mutate(item.id)}>Delete</Button>
+              )}
             </div>
           ))}
           <div className="flex justify-end gap-2 pt-2">

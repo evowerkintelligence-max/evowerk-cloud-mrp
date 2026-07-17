@@ -14,8 +14,11 @@ class Dataset(Base):
     analytics engines run over. The file itself lives on the storage backend
     (see app/services/storage.py); this row is the metadata + sniffed schema.
 
-    Datasets are read-only after upload — analytics compute is stateless over
-    them, so there is no mutable state here beyond deletion.
+    Datasets are read-only after upload for every ingestion path except one:
+    app.services.downtime_tracking's live board repeatedly rewrites its one
+    per-org Dataset via app.services.datasets.overwrite_dataset_file as new
+    incidents close, keeping the same id. Every other feature still treats
+    a Dataset as immutable-after-create.
     """
 
     __tablename__ = "datasets"

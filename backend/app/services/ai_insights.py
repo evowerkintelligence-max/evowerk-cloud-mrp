@@ -20,7 +20,7 @@ from app.services.scenario import ScenarioDelta, compare_lead_time_scenario
 # same structured facts those phases already compute (compute_inventory_analytics
 # / compute_demand_forecast / compute_rca / compare_lead_time_scenario). No new
 # numbers are invented here - this is a text layer over existing outputs.
-_STATUS_WORDS = ("stockout", "low", "excess", "slow_moving", "healthy", "no_data")
+_STATUS_WORDS = ("stockout", "low", "dead_stock", "excess", "slow_moving", "healthy", "no_data")
 _ABC_PATTERN = re.compile(r"\bclass\s*([abc])\b", re.IGNORECASE)
 _LEAD_TIME_NUMBER = re.compile(r"lead\s*time\D{0,15}(\d+)", re.IGNORECASE)
 

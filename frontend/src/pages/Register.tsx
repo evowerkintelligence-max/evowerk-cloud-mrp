@@ -5,6 +5,7 @@ import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { errorMessage } from "@/lib/utils";
 
 export function Register() {
   const [orgName, setOrgName] = useState("");
@@ -26,7 +27,7 @@ export function Register() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.detail ?? "Registration failed");
+        setError(errorMessage(body, "Registration failed"));
         return;
       }
       navigate("/login");

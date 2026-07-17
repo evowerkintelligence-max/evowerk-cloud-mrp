@@ -42,6 +42,7 @@ class KpiComputeItem:
     cache_hit: bool
     error: str | None = None
     eval: dict | None = None
+    breakdown: list[tuple[str, float]] | None = None
 
 
 @dataclass
@@ -70,6 +71,56 @@ def _replace_table_placeholder(sql: str) -> str:
     if "{table}" not in sql:
         raise ValueError("KPI sql must include a '{table}' placeholder")
     return sql.replace("{table}", "dataset")
+
+
+_BREAKDOWN_AGG_SQL = {"avg": "AVG", "sum": "SUM"}
+
+
+def _breakdown_sql(group_col: str, agg: str, value_col: str | None) -> str:
+    # nosec B608 - group_col/value_col reach here only after the caller
+    # (_compute_breakdown) has run them through ds_service.validate_columns,
+    # the same allow-list every other structured SQL builder in this codebase
+    # uses before qi()-quoting; there is no unvalidated identifier here.
+    group_ref = ds_service.qi(group_col)
+    if agg == "count":
+        return f"SELECT {group_ref}, COUNT(*) FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"  # nosec B608
+    value_ref = ds_service.qi(value_col)
+    return (
+        f"SELECT {group_ref}, {_BREAKDOWN_AGG_SQL[agg]}(TRY_CAST({value_ref} AS DOUBLE)) "  # nosec B608
+        f"FROM {{table}} GROUP BY {group_ref} ORDER BY 2 DESC"
+    )
+
+
+async def _compute_breakdown(dataset: Dataset, kpi: Kpi) -> list[tuple[str, float]] | None:
+    """Runs alongside the main KPI value when a breakdown is configured -
+    per-machine averages or a breach-cause Pareto, depending on what column
+    the author picked. Fails soft: a bad breakdown query degrades to no
+    breakdown rather than failing the whole KPI compute."""
+    if not kpi.breakdown_group_col:
+        return None
+    agg = kpi.breakdown_agg or "count"
+    if agg not in ("count", "avg", "sum"):
+        return None
+    try:
+        ds_service.validate_columns(
+            dataset,
+            [kpi.breakdown_group_col, kpi.breakdown_value_col] if kpi.breakdown_value_col else [kpi.breakdown_group_col],
+        )
+        sql = _replace_table_placeholder(
+            _breakdown_sql(kpi.breakdown_group_col, agg, kpi.breakdown_value_col)
+        )
+        result = await run_sql(dataset, sql, row_limit=10)
+    except (HTTPException, ValueError):
+        return None
+    out: list[tuple[str, float]] = []
+    for row in result["rows"]:
+        vals = list(row.values())
+        if len(vals) < 2:
+            continue
+        v = _safe_float(vals[1])
+        if v is not None:
+            out.append((str(vals[0]), v))
+    return out or None
 
 
 def _delta(prev: float | None, curr: float | None) -> tuple[float | None, float | None]:
@@ -245,6 +296,14 @@ async def _compute_one(
         eval_res = (
             _evaluate_status(kpi.eval_policy, cached.value, prev, hist_vals) if include_eval else None
         )
+        # "breakdown" is only present in meta for values computed after this
+        # caching was added — older rows fall back to a live recompute so
+        # they don't break, but every value computed from here on caches it.
+        if "breakdown" in cached.meta:
+            raw = cached.meta.get("breakdown")
+            breakdown = [(b["label"], b["value"]) for b in raw] if raw else None
+        else:
+            breakdown = await _compute_breakdown(dataset, kpi)
         return KpiComputeItem(
             kpi_id=kpi.id,
             value=cached.value,
@@ -253,6 +312,7 @@ async def _compute_one(
             cache_hit=True,
             error=None,
             eval=eval_res,
+            breakdown=breakdown,
         )
 
     if not kpi.enabled:
@@ -276,6 +336,14 @@ async def _compute_one(
     except ValueError as exc:
         error = str(exc)
 
+    breakdown: list[tuple[str, float]] | None = None
+    if error is None:
+        breakdown = await _compute_breakdown(dataset, kpi)
+        # Cache the breakdown alongside the value so cache-hit polls (as
+        # frequent as every 15s for operator dashboards) don't re-open a
+        # DuckDB connection and re-materialize the dataset just for this.
+        meta["breakdown"] = [{"label": label, "value": v} for label, v in breakdown] if breakdown else None
+
     kv = KpiValue(org_id=org_id, kpi_id=kpi.id, dataset_id=dataset.id, value=value, error=error, meta=meta)
     db.add(kv)
     await db.flush()
@@ -289,7 +357,8 @@ async def _compute_one(
     eval_res = _evaluate_status(kpi.eval_policy, value, prev, hist_vals) if include_eval else None
 
     return KpiComputeItem(
-        kpi_id=kpi.id, value=value, meta=meta, computed_at=kv.computed_at, cache_hit=False, error=None, eval=eval_res
+        kpi_id=kpi.id, value=value, meta=meta, computed_at=kv.computed_at, cache_hit=False, error=None,
+        eval=eval_res, breakdown=breakdown,
     )
 
 
@@ -370,4 +439,48 @@ async def compare_kpis(
                 b_eval=b.eval if b else None,
             )
         )
+    return out
+
+
+async def compute_kpis_multi_dataset(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    kpi_ids: list[uuid.UUID],
+    *,
+    force: bool = False,
+    include_eval: bool = False,
+    lookback: int = 14,
+) -> list[KpiComputeItem]:
+    """Like compute_kpis, but each KPI runs against its OWN dataset_id rather
+    than one shared dataset_id - needed for a dashboard whose KPIs span
+    multiple datasets. Groups by dataset_id and calls compute_kpis once per
+    group, so the single-dataset code path is unchanged."""
+    rows = (
+        await db.execute(select(Kpi.id, Kpi.dataset_id).where(Kpi.org_id == org_id, Kpi.id.in_(kpi_ids)))
+    ).all()
+    dataset_by_kpi = {r.id: r.dataset_id for r in rows}
+
+    by_dataset: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for kpi_id in kpi_ids:
+        dataset_id = dataset_by_kpi.get(kpi_id)
+        if dataset_id is None:
+            continue
+        by_dataset.setdefault(dataset_id, []).append(kpi_id)
+
+    items_by_id: dict[uuid.UUID, KpiComputeItem] = {}
+    for dataset_id, ids in by_dataset.items():
+        for item in await compute_kpis(db, org_id, dataset_id, ids, force=force, include_eval=include_eval, lookback=lookback):
+            items_by_id[item.kpi_id] = item
+
+    out: list[KpiComputeItem] = []
+    for kpi_id in kpi_ids:
+        if kpi_id in items_by_id:
+            out.append(items_by_id[kpi_id])
+        else:
+            out.append(
+                KpiComputeItem(
+                    kpi_id=kpi_id, value=None, meta={}, computed_at=datetime.now(timezone.utc),
+                    cache_hit=False, error="KPI not found",
+                )
+            )
     return out

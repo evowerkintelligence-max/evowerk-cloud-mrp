@@ -16,7 +16,9 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { C, ColumnChecklist, QueryBuilderFields, SendToReportButton, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { C, ColumnChecklist, EChart, QueryBuilderFields, SendToReportButton, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { controlChart } from "./Spc";
+import { StatCard } from "@/components/StatCard";
 
 interface DatasetDetail extends Dataset {
   preview: Record<string, unknown>[];
@@ -71,6 +73,25 @@ interface QualityCorrelation {
   strength: string;
 }
 
+interface QualityTrendPoint {
+  date: string;
+  defect_rate: number;
+  in_control?: boolean;
+  violations?: number[];
+  ucl?: number;
+  lcl?: number;
+}
+
+interface QualityTrendControl {
+  chart_type: "individuals" | "p";
+  centerline: number;
+  ucl: number;
+  lcl: number;
+  out_of_control_count: number;
+  low_sample_warning: boolean;
+  min_baseline: number;
+}
+
 interface QualityAnalyzeResponse {
   summary: {
     total_records: number;
@@ -79,9 +100,16 @@ interface QualityAnalyzeResponse {
     metric_suffix: string;
     defect_metric: number;
     worst_batch: string;
+    dpmo: number | null;
+    sigma_level: number | null;
+    cost_per_defect: number | null;
+    total_cost_of_quality: number | null;
   };
   batch_stats: QualityBatchStat[];
   correlations: QualityCorrelation[];
+  trend: QualityTrendPoint[];
+  trend_control: QualityTrendControl | null;
+  warnings: string[];
 }
 
 interface ProcessActivity {
@@ -618,11 +646,17 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
   const names = d.columns.map((c) => c.name);
   const [defectColumn, setDefectColumn] = useState("");
   const [batchColumn, setBatchColumn] = useState("");
+  const [timestampColumn, setTimestampColumn] = useState("");
+  const [opportunitiesPerUnit, setOpportunitiesPerUnit] = useState("1");
+  const [costPerDefect, setCostPerDefect] = useState("");
 
   const quality = useMutation({
     mutationFn: async () => {
-      const body: Record<string, string> = { defect_column: defectColumn };
+      const body: Record<string, string | number> = { defect_column: defectColumn };
       if (batchColumn) body.batch_column = batchColumn;
+      if (timestampColumn) body.timestamp_column = timestampColumn;
+      if (opportunitiesPerUnit) body.opportunities_per_unit = Number(opportunitiesPerUnit);
+      if (costPerDefect) body.cost_per_defect = Number(costPerDefect);
       const res = await apiFetch(`/datasets/${d.id}/quality/analyze`, { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Quality analysis failed");
       return res.json() as Promise<QualityAnalyzeResponse>;
@@ -657,6 +691,35 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
                 ))}
               </Select>
             </Field>
+            <Field label="Timestamp column (optional, enables trend chart)">
+              <Select value={timestampColumn} onChange={(e) => setTimestampColumn(e.target.value)}>
+                <option value="">(none)</option>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Defect opportunities per unit (for DPMO)">
+              <Input
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={opportunitiesPerUnit}
+                onChange={(e) => setOpportunitiesPerUnit(e.target.value)}
+              />
+            </Field>
+            <Field label="Cost per defect, $ (optional, for Cost of Quality)">
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="(none)"
+                value={costPerDefect}
+                onChange={(e) => setCostPerDefect(e.target.value)}
+              />
+            </Field>
           </div>
           <Button disabled={!defectColumn} loading={quality.isPending} onClick={() => quality.mutate()}>
             Analyze quality
@@ -667,6 +730,9 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
 
       {quality.data && (
         <>
+          {quality.data.warnings.length > 0 && (
+            <Alert variant="destructive">{quality.data.warnings.join(" ")}</Alert>
+          )}
           <Card>
             <CardContent className="pt-6 text-sm">
               <strong>
@@ -677,6 +743,30 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
               records. Worst batch: {quality.data.summary.worst_batch}
             </CardContent>
           </Card>
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard label="DPMO" value={quality.data.summary.dpmo != null ? fmt(quality.data.summary.dpmo) : "—"} tone="primary" />
+            <StatCard
+              label="Sigma level"
+              value={quality.data.summary.sigma_level != null ? quality.data.summary.sigma_level : "—"}
+              hint="incl. 1.5σ shift"
+              tone="accent"
+            />
+            <StatCard
+              label="Cost per defect"
+              value={quality.data.summary.cost_per_defect != null ? `$${quality.data.summary.cost_per_defect}` : "—"}
+              tone="warning"
+            />
+            <StatCard
+              label="Cost of quality"
+              value={
+                quality.data.summary.total_cost_of_quality != null
+                  ? `$${fmt(quality.data.summary.total_cost_of_quality)}`
+                  : "—"
+              }
+              tone="success"
+            />
+          </div>
 
           {quality.data.correlations.length > 0 && (
             <Card>
@@ -706,6 +796,53 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
                     </TBody>
                   </Table>
                 </TableWrap>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Correlation flags candidates to investigate — it does not prove a feature causes defects.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {quality.data.trend.length >= 2 && quality.data.trend_control && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Defect rate trend (SPC)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {quality.data.trend_control.low_sample_warning && (
+                  <Alert variant="warning">
+                    Only {quality.data.trend.length} period(s) — control limits need at least{" "}
+                    {quality.data.trend_control.min_baseline} to be statistically reliable. Treat as provisional.
+                  </Alert>
+                )}
+                {quality.data.trend_control.out_of_control_count > 0 && (
+                  <Alert variant="destructive">
+                    {quality.data.trend_control.out_of_control_count} period(s) outside control limits —
+                    special-cause variation, not just normal noise. Hover a red point for which rule it broke.
+                  </Alert>
+                )}
+                <EChart
+                  height={280}
+                  option={controlChart(
+                    quality.data.trend.map((t) => ({
+                      label: t.date,
+                      value: t.defect_rate,
+                      in_control: t.in_control ?? true,
+                      violations: t.violations,
+                    })),
+                    (p) => p.value,
+                    quality.data.trend_control.centerline,
+                    quality.data.trend_control.ucl,
+                    quality.data.trend_control.lcl,
+                    "Defect rate",
+                  )}
+                />
+                {quality.data.trend_control.chart_type === "p" && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Proportion (p) chart — each period's in/out-of-control status accounts for that period's own
+                    sample size; the UCL/LCL lines shown are an average across periods for display.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
@@ -945,6 +1082,13 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
   );
 }
 
+// Strips DuckDB's internal error-class jargon ("Binder Error:", "Parser Error:", ...)
+// from the message the backend passes through as-is (see sql_query.py) so the
+// user sees the useful part (what's wrong with their query) without the label.
+function friendlySqlError(detail: string): string {
+  return detail.replace(/^Query failed: (Binder|Parser|Catalog|Conversion|Syntax) Error:\s*/i, "Query failed: ");
+}
+
 function SqlPanel({ d }: { d: DatasetDetail }) {
   const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 100`);
 
@@ -971,7 +1115,7 @@ function SqlPanel({ d }: { d: DatasetDetail }) {
         method: "POST",
         body: JSON.stringify({ sql, limit: 500 }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
+      if (!res.ok) throw new Error(friendlySqlError((await res.json()).detail ?? "Query failed"));
       return res.json() as Promise<QueryResult>;
     },
   });

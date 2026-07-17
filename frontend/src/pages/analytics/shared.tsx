@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import * as echarts from "echarts";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
@@ -10,6 +12,37 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+
+// ponytail: naive (no "Z"/offset) ISO string under SQLite (aiosqlite drops
+// tzinfo on DateTime(timezone=True) columns even though the value is UTC;
+// Postgres in prod keeps the offset) - new Date(...) would otherwise parse a
+// naive string as local time and throw the elapsed clock off by the
+// browser's UTC offset. Force UTC when no offset is present.
+export function asUtcMs(iso: string): number {
+  return new Date(/Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();
+}
+
+export function useElapsed(startedAt: string | undefined): string {
+  const [elapsed, setElapsed] = useState("00:00:00");
+  useEffect(() => {
+    if (!startedAt) return;
+    const started = asUtcMs(startedAt);
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      const h = String(Math.floor(s / 3600)).padStart(2, "0");
+      const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+      const sec = String(s % 60).padStart(2, "0");
+      setElapsed(`${h}:${m}:${sec}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  return elapsed;
+}
+
+const TV_REFRESH_MS = 30_000;
 
 // ─── Chart palette / defaults (copied from the desktop app) ──────────────────
 
@@ -34,6 +67,15 @@ export const TOOLTIP = {
 export const AXIS_LABEL = { color: "#64748b", fontSize: 10 };
 export const SPLIT_LINE = { lineStyle: { color: "rgba(100,116,139,0.15)" } };
 export const AXIS_LINE = { lineStyle: { color: "rgba(100,116,139,0.25)" } };
+
+// Live-style pace status: on-pace / behind / ahead against whichever target
+// is in play (a mapped plan column, or an auto-baseline average).
+export function paceStatus(pct: number): { label: string; color: string } {
+  if (pct >= 100) return { label: "Ahead of pace", color: C.green };
+  if (pct >= 85) return { label: "On pace", color: C.blue };
+  if (pct >= 60) return { label: "Behind pace", color: C.amber };
+  return { label: "Well behind pace", color: C.red };
+}
 
 export function oeeColor(pct: number): string {
   if (pct >= 85) return C.green;
@@ -260,6 +302,16 @@ export type EngineField = {
   hints?: RegExp[]; // auto-map dataset columns by naming convention (from desktop)
 };
 
+function autoMapColumns(fields: EngineField[], cols: string[]): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const f of fields) {
+    if (f.kind && f.kind !== "col") continue;
+    const match = f.hints?.map((h) => cols.find((c) => h.test(c))).find(Boolean);
+    if (match) next[f.key] = match;
+  }
+  return next;
+}
+
 export function useDatasets() {
   return useQuery<Dataset[]>({
     queryKey: ["datasets"],
@@ -268,6 +320,18 @@ export function useDatasets() {
       if (!res.ok) throw new Error("Failed to load datasets");
       return res.json();
     },
+  });
+}
+
+function useDatasetPreview(datasetId: string) {
+  return useQuery<{ preview: Record<string, unknown>[] }>({
+    queryKey: ["dataset-preview", datasetId],
+    queryFn: async () => {
+      const res = await apiFetch(`/datasets/${datasetId}`);
+      if (!res.ok) throw new Error("Failed to load dataset preview");
+      return res.json();
+    },
+    enabled: Boolean(datasetId),
   });
 }
 
@@ -308,6 +372,23 @@ export function useInbox() {
     queryFn: async () => {
       const res = await apiFetch("/reports/inbox");
       if (!res.ok) throw new Error("Failed to load report inbox");
+      return res.json();
+    },
+  });
+}
+
+export interface CurrentUser {
+  user_id: string;
+  role: string;
+}
+
+// Shares the ["org-me"] cache with AppShell's org query - same endpoint, no extra fetch.
+export function useCurrentUser() {
+  return useQuery<CurrentUser>({
+    queryKey: ["org-me"],
+    queryFn: async () => {
+      const res = await apiFetch("/orgs/me");
+      if (!res.ok) throw new Error("Failed to load current user");
       return res.json();
     },
   });
@@ -377,8 +458,35 @@ export function EngineScreen<T>({
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   const datasets = useDatasets();
+  const preview = useDatasetPreview(datasetId);
+  const [searchParams] = useSearchParams();
+
+  // The ?dataset_id= dataset (e.g. from Pace Tracking's "View in Throughput")
+  // may not be in the ["datasets"] list yet on this page's first render - React
+  // Query can still be serving an older cached snapshot from before that
+  // dataset existed, with the real list arriving a moment later. Retrying on
+  // every datasets.data change (instead of a one-shot effect gated on
+  // datasetId) means auto-mapping actually applies once the dataset shows up,
+  // rather than silently giving up because the first attempt saw an empty
+  // column list.
+  const autoMappedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const fromUrl = searchParams.get("dataset_id");
+    if (!fromUrl) return;
+    if (!datasetId) setDatasetId(fromUrl);
+    if (autoMappedFor.current === fromUrl) return;
+    const ds = datasets.data?.find((d) => d.id === fromUrl);
+    if (!ds) return;
+    autoMappedFor.current = fromUrl;
+    setForm(autoMapColumns(fields, ds.columns.map((c) => c.name)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, datasets.data]);
+
   const columns = useMemo(
     () => datasets.data?.find((d) => d.id === datasetId)?.columns.map((c) => c.name) ?? [],
     [datasets.data, datasetId],
@@ -389,13 +497,7 @@ export function EngineScreen<T>({
     setResult(null);
     // Auto-suggest column mappings by naming convention, like the desktop app.
     const cols = datasets.data?.find((d) => d.id === id)?.columns.map((c) => c.name) ?? [];
-    const next: Record<string, string> = {};
-    for (const f of fields) {
-      if (f.kind && f.kind !== "col") continue;
-      const match = f.hints?.map((h) => cols.find((c) => h.test(c))).find(Boolean);
-      if (match) next[f.key] = match;
-    }
-    setForm(next);
+    setForm(autoMapColumns(fields, cols));
   }
 
   const upload = useMutation({
@@ -447,6 +549,39 @@ export function EngineScreen<T>({
   });
 
   const ready = Boolean(datasetId) && fields.every((f) => !f.required || form[f.key]);
+
+  // Column-mapped fields (kind "col", the default) point at real dataset
+  // columns - num/select fields are user-typed values, not something a data
+  // preview can sanity-check.
+  const mappedCols = useMemo(
+    () =>
+      fields
+        .filter((f) => (!f.kind || f.kind === "col") && form[f.key])
+        .map((f) => ({ field: f.label, col: form[f.key] })),
+    [fields, form],
+  );
+
+  // TV mode: fullscreen the results container via the native Fullscreen API,
+  // optionally polling the last-run compute body so a wall-mounted screen stays live.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => {
+      if (lastComputeBody.current) compute.mutate();
+    }, TV_REFRESH_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefresh]);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else resultsRef.current?.requestFullscreen();
+  }
 
   return (
     <div className="space-y-8">
@@ -529,14 +664,60 @@ export function EngineScreen<T>({
         </Card>
       )}
 
+      {mappedCols.length > 0 && preview.data && preview.data.preview.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Data preview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-sm text-muted-foreground">
+              First {Math.min(5, preview.data.preview.length)} rows for the columns you mapped — check these look right before running.
+            </p>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    {mappedCols.map((m) => (
+                      <TH key={m.field}>
+                        {m.field}
+                        <span className="ml-1 font-normal text-muted-foreground">({m.col})</span>
+                      </TH>
+                    ))}
+                  </TR>
+                </THead>
+                <TBody>
+                  {preview.data.preview.slice(0, 5).map((row, i) => (
+                    <TR key={i}>
+                      {mappedCols.map((m) => (
+                        <TD key={m.field}>{String(row[m.col] ?? "")}</TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
+      )}
+
       {result !== null && (
-        <>
+        <div ref={resultsRef} className={isFullscreen ? "bg-background p-8 overflow-y-auto" : ""}>
+          <div className="mb-4 flex items-center justify-end gap-4">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+              Auto-refresh (30s)
+            </label>
+            <Button variant="ghost" size="sm" onClick={toggleFullscreen}>
+              {isFullscreen ? <Minimize2 /> : <Maximize2 />}
+              {isFullscreen ? "Exit TV mode" : "TV mode"}
+            </Button>
+          </div>
           {children(result)}
           <SendToReportButton
             spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
             label={`${title} — ${new Date().toLocaleString()}`}
           />
-        </>
+        </div>
       )}
     </div>
   );

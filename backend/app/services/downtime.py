@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.analytics.downtime_calc import dt_grouped, dt_overall
-from app.analytics.oee_calc import qi
+from app.analytics.oee_calc import date_bucket_expr, qi
 from app.models.dataset import Dataset
 from app.services import datasets as ds_service
 
@@ -33,7 +33,7 @@ def analyze_downtime(dataset: Dataset, req: Any) -> dict:
             mach_rows = dt_grouped(con, rel, req.duration_col, mach_key)
         trend_rows = []
         if req.timestamp_col and req.timestamp_col in headers:
-            ts_key = f"SUBSTRING(NULLIF(TRIM(CAST({qi(req.timestamp_col)} AS VARCHAR)), ''), 1, 10)"
+            ts_key = date_bucket_expr(req.timestamp_col)
             trend_rows = dt_grouped(con, rel, req.duration_col, ts_key)
     finally:
         con.close()

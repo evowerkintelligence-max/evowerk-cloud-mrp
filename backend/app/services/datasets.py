@@ -149,6 +149,20 @@ async def create_dataset(
     return dataset
 
 
+async def overwrite_dataset_file(db: AsyncSession, dataset: Dataset, *, data: bytes) -> Dataset:
+    """Rewrite an existing, already-created dataset's file in place and
+    re-sniff its schema/row count. Used by live-capture features (the
+    downtime-tracking board) whose Dataset keeps growing instead of being
+    created once - see storage.replace_dataset_file for the atomicity note."""
+    storage.replace_dataset_file(dataset.org_id, dataset.id, dataset.storage_ext, data)
+    columns, row_count = _sniff(storage.dataset_path(dataset.org_id, dataset.id, dataset.storage_ext))
+    dataset.columns = columns
+    dataset.row_count = row_count
+    dataset.size_bytes = len(data)
+    await db.flush()
+    return dataset
+
+
 async def list_datasets(db: AsyncSession, org_id: uuid.UUID) -> list[Dataset]:
     result = await db.execute(
         select(Dataset).where(Dataset.org_id == org_id).order_by(Dataset.created_at.desc())

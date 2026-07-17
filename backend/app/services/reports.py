@@ -264,6 +264,7 @@ async def build_inventory_analytics_report(db: AsyncSession, org_id: uuid.UUID) 
             ("Low", _int(counts.get("low", 0))),
             ("Excess", _int(counts.get("excess", 0))),
             ("Slow moving", _int(counts.get("slow_moving", 0))),
+            ("Dead stock", _int(counts.get("dead_stock", 0))),
             ("Healthy", _int(counts.get("healthy", 0))),
         ],
         sections=[
@@ -1059,7 +1060,7 @@ tbody tr:last-child td { border-bottom: 0; }
   font-weight: 600; background: var(--neutral-bg); color: var(--neutral); white-space: nowrap;
 }
 .badge.b-healthy, .badge.b-improved, .badge.b-yes { background: var(--ok-bg); color: var(--ok); }
-.badge.b-low, .badge.b-excess, .badge.b-slow-moving { background: var(--warn-bg); color: var(--warn); }
+.badge.b-low, .badge.b-excess, .badge.b-slow-moving, .badge.b-dead-stock { background: var(--warn-bg); color: var(--warn); }
 .badge.b-stockout, .badge.b-regressed { background: var(--bad-bg); color: var(--bad); }
 footer { border-top: 1px solid var(--line); padding-top: 18px; color: var(--muted); font-size: 12px; }
 footer ol { margin: 0 0 14px; padding-left: 18px; }

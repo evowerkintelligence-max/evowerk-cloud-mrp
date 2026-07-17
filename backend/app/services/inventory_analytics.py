@@ -77,7 +77,7 @@ class InventoryAnalyticsLine:
     days_of_supply: float | None
     abc_class: str | None
     xyz_class: str | None
-    status: str  # stockout | low | excess | slow_moving | healthy | no_data
+    status: str  # stockout | low | dead_stock | excess | slow_moving | healthy | no_data
 
 
 def _demand_stats(daily: dict[date, Decimal], lookback_days: int, as_of: date) -> tuple[float, float, str]:
@@ -157,6 +157,11 @@ def _status(
         return "no_data"
     if on_hand <= 0:
         return "stockout"
+    if avg_daily_demand <= 0:
+        # Stock on hand but zero movement in the lookback window - without
+        # this branch days_of_supply is None and the item falls through to
+        # "healthy", the opposite of what sitting inventory is.
+        return "dead_stock"
     if reorder_point is not None:
         if on_hand <= reorder_point:
             return "low"

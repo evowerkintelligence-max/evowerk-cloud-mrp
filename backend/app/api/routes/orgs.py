@@ -19,6 +19,7 @@ class OrgResponse(BaseModel):
     id: str
     name: str
     role: str
+    user_id: str
     adjust_approval_threshold: Decimal
 
 
@@ -37,6 +38,7 @@ async def get_my_org(
         id=str(org.id),
         name=org.name,
         role=current.role,
+        user_id=str(current.id),
         adjust_approval_threshold=org.adjust_approval_threshold,
     )
 
@@ -65,5 +67,6 @@ async def update_my_org(
         id=str(org.id),
         name=org.name,
         role=current.role,
+        user_id=str(current.id),
         adjust_approval_threshold=org.adjust_approval_threshold,
     )

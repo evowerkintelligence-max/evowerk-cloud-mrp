@@ -53,6 +53,10 @@ interface OeeResult {
   invalid_cells: number;
   blank_cells: number;
   rows_with_issues: number;
+  availability_clamped: boolean;
+  quality_clamped: boolean;
+  date_gap_days: number;
+  duplicate_rows: number;
   trend: TrendPoint[] | null;
   machines: Machine[] | null;
   revenue_impact: RevenueImpact | null;
@@ -72,7 +76,20 @@ const FIELDS = [
   { key: "date_col", label: "Date (optional)", hints: [/date/i, /time/i, /period/i, /shift_date/i] },
   { key: "target_rate", label: "Target rate (units/min)", kind: "num" as const },
   { key: "unit_price", label: "Unit price ($, for revenue impact)", kind: "num" as const },
+  { key: "unplanned_downtime_col", label: "Unplanned downtime (optional, min)", hints: [/unplanned/i, /breakdown/i, /downtime/i] },
+  { key: "planned_downtime_col", label: "Setup/changeover time (optional, min)", hints: [/setup/i, /changeover/i, /planned_downtime/i] },
+  { key: "minor_stops_col", label: "Minor stops (optional, min)", hints: [/minor_stop/i, /idling/i, /micro_stop/i] },
+  { key: "startup_rejects_col", label: "Startup rejects (optional, units)", hints: [/startup_reject/i, /warmup/i, /warm_up/i] },
 ];
+
+const METRIC_HELP: Record<string, string> = {
+  OEE: "Availability × Performance × Quality — the single number summarizing all three losses.",
+  Availability: "Operating time ÷ Planned time — how much of your scheduled time the machine actually ran.",
+  Performance: "Actual output ÷ ideal output at the target rate — how fast it ran while running.",
+  Quality: "Good units ÷ Total units — how much of what it made was good.",
+  TEEP: "OEE × Utilization — OEE if you also count all calendar time, not just planned time.",
+  Utilization: "Planned time ÷ all calendar time in the dataset's date range (24/7 across every machine).",
+};
 
 const LEVELS: [number, string, "success" | "info" | "warning" | "danger"][] = [
   [85, "World Class", "success"],
@@ -91,7 +108,7 @@ function Gauge({ r }: { r: OeeResult }) {
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>OEE</CardTitle>
+        <CardTitle className="cursor-help" title={METRIC_HELP.OEE}>OEE</CardTitle>
         <Badge variant={variant}>{level}</Badge>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -145,7 +162,9 @@ function Gauge({ r }: { r: OeeResult }) {
           {subs.map((m) => (
             <div key={m.label}>
               <div className="mb-1 flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">{m.label}</span>
+                <span className="cursor-help text-muted-foreground" title={METRIC_HELP[m.label]}>
+                  {m.label}
+                </span>
                 <span className="font-semibold" style={{ color: m.color }}>
                   {m.value}%
                 </span>
@@ -452,6 +471,14 @@ export function Oee() {
     >
       {(r) => (
         <div className="space-y-6">
+          {(r.availability_clamped || r.quality_clamped) && (
+            <Alert variant="destructive">
+              {r.availability_clamped &&
+                "Operating time exceeds Planned time — check that Planned/Operating time columns aren't swapped. Availability is capped at 100% and may be wrong. "}
+              {r.quality_clamped &&
+                "Good units exceed Total units — check that Good/Total unit columns aren't swapped. Quality is capped at 100% and may be wrong."}
+            </Alert>
+          )}
           {r.performance_estimated && (
             <Alert variant="warning">No target rate set — Performance assumed 100%; OEE shown is an upper bound.</Alert>
           )}
@@ -460,6 +487,16 @@ export function Oee() {
               {r.invalid_cells > 0 &&
                 `${r.invalid_cells} non-numeric/negative value(s) in ${r.rows_with_issues} row(s) were treated as 0 — OEE may be understated. `}
               {r.blank_cells > 0 && `${r.blank_cells} blank cell(s) were also treated as 0.`}
+            </Alert>
+          )}
+          {r.duplicate_rows > 0 && (
+            <Alert variant="warning">
+              {`Looks like ${r.duplicate_rows} row(s) were uploaded twice (identical date+machine+values) — they're counted twice in every total below.`}
+            </Alert>
+          )}
+          {r.date_gap_days > 0 && (
+            <Alert variant="warning">
+              {`${r.date_gap_days} calendar day(s) in this date range have no rows at all — trend and TEEP treat those as "no production", not "no data".`}
             </Alert>
           )}
 
@@ -472,10 +509,11 @@ export function Oee() {
                 </span>
               }
               tone="primary"
+              title={METRIC_HELP.OEE}
             />
-            <StatCard label="Availability" value={pct(r.availability)} tone="accent" />
-            <StatCard label="Performance" value={pct(r.performance)} tone="success" />
-            <StatCard label="Quality" value={pct(r.quality)} tone="warning" />
+            <StatCard label="Availability" value={pct(r.availability)} tone="accent" title={METRIC_HELP.Availability} />
+            <StatCard label="Performance" value={pct(r.performance)} tone="success" title={METRIC_HELP.Performance} />
+            <StatCard label="Quality" value={pct(r.quality)} tone="warning" title={METRIC_HELP.Quality} />
           </div>
 
           {r.revenue_impact && <Revenue ri={r.revenue_impact} />}
@@ -504,7 +542,9 @@ export function Oee() {
                     ] as [string, string][]
                   ).map(([label, val]) => (
                     <div key={label} className="flex items-center justify-between border-b border-border/50 pb-2">
-                      <dt className="text-muted-foreground">{label}</dt>
+                      <dt className={cn("text-muted-foreground", METRIC_HELP[label] && "cursor-help")} title={METRIC_HELP[label]}>
+                        {label}
+                      </dt>
                       <dd className="font-semibold">{val}</dd>
                     </div>
                   ))}

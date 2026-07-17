@@ -10,10 +10,12 @@ themselves (app.models.alert.AlertRule) are stored.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +25,9 @@ from app.models.dataset import Dataset
 from app.services import datasets as ds_service
 
 _MAX_OFFENDERS_SHOWN = 5
+_WEBHOOK_TIMEOUT = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Rule CRUD ──────────────────────────────────────────────────────────────
@@ -185,6 +190,35 @@ def _eval_quality(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrig
     )
 
 
+def _eval_scrap(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
+    cfg = rule.config
+    scrap_col = cfg.get("scrap_col", "")
+    total_col = cfg.get("total_units_col", "")
+    group_col = cfg.get("group_col") or ""
+    threshold_pct = float(cfg.get("scrap_threshold_pct", 5.0))
+
+    col_warn = _missing_columns(dataset, {"scrap_units": scrap_col, "total_units": total_col, "group": group_col})
+    if col_warn:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold_pct, col_warn)
+
+    where_sql = _time_filter_sql(cfg)
+    if group_col:
+        by_g = _sum2_by_group(con, rel, scrap_col, total_col, group_col, where_sql)
+        rates = {g: (s / t) * 100 if t > 0 else 0.0 for g, s, t in by_g}
+        offenders = sorted(g for g, rate in rates.items() if rate > threshold_pct)
+        value = max(rates.values(), default=0.0)
+    else:
+        total_scrap, total_all = _sum2_total(con, rel, scrap_col, total_col, where_sql)
+        value = (total_scrap / total_all) * 100 if total_all > 0 else 0.0
+        offenders = [] if value <= threshold_pct else ["All"]
+
+    message = f"Scrap rate {value:.1f}% (threshold: {threshold_pct:.1f}%)" + _offenders_suffix(offenders)
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, bool(offenders), round(value, 2), threshold_pct,
+        message, offenders,
+    )
+
+
 def _eval_inventory(rule: AlertRule, dataset: Dataset, con, rel: str) -> AlertTrigger:
     cfg = rule.config
     qty_col = cfg.get("quantity_col", "")
@@ -299,9 +333,37 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     )
 
 
+# ─── Andon / relay output ───────────────────────────────────────────────────
+
+async def _fire_webhook(rule: AlertRule, trigger: AlertTrigger) -> None:
+    """POST the live trigger state to an output URL the rule optionally
+    configures (config['webhook_url']) - e.g. a relay/light-tower controller.
+    Fires the CURRENT triggered state on every scan rather than only on the
+    off->on transition: this module never persists prior scan results (see
+    module docstring), so there's no "last state" to diff against, and a
+    physical andon just needs to mirror whatever the latest scan says - off
+    when the next scan clears, on while it doesn't.
+    ponytail: no retry/backoff/queue - a relay that misses one poll picks up
+    the next scan; add delivery guarantees only if that's proven insufficient."""
+    url = (rule.config or {}).get("webhook_url")
+    if not url or not str(url).startswith(("http://", "https://")):
+        return
+    payload = {
+        "rule_id": trigger.rule_id, "rule_name": trigger.rule_name, "type": trigger.type,
+        "severity": trigger.severity, "triggered": trigger.triggered, "value": trigger.value,
+        "threshold": trigger.threshold, "message": trigger.message, "evaluated_at": trigger.evaluated_at,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT) as client:
+            await client.post(url, json=payload)
+    except httpx.HTTPError as exc:
+        logger.warning("Alert webhook failed for rule %s (%s): %s", rule.id, url, exc)
+
+
 _DATASET_EVALUATORS = {
     "machine_downtime": _eval_machine_downtime,
     "quality": _eval_quality,
+    "scrap": _eval_scrap,
     "inventory": _eval_inventory,
     "production_target": _eval_production_target,
 }
@@ -354,6 +416,7 @@ async def evaluate_rule_safe(
 
 async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
     rules = [r for r in await list_rules(db, org_id) if r.enabled]
+    rule_by_id = {str(r.id): r for r in rules}
 
     # Group dataset-backed rules by dataset so N rules sharing one dataset
     # read its file from disk once instead of N times.
@@ -382,6 +445,14 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
                 results.append(AlertTrigger(
                     str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, f"Error: {exc}",
                 ))
+
+    # scan_all only - not scan_one, which backs the rule editor's interactive
+    # "Test" button and would otherwise spam an external relay on every keystroke.
+    for trigger in results:
+        rule = rule_by_id.get(trigger.rule_id)
+        if rule is not None:
+            await _fire_webhook(rule, trigger)
+
     return results
 
 

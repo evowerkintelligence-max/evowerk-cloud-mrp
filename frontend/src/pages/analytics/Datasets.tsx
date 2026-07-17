@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database, Package } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
@@ -22,6 +22,17 @@ export function Datasets() {
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const org = useQuery<{ role: string }>({
+    queryKey: ["org-me"],
+    queryFn: async () => {
+      const res = await apiFetch("/orgs/me");
+      if (!res.ok) throw new Error("Failed to load organization");
+      return res.json();
+    },
+  });
+  const isOwner = org.data?.role === "owner";
 
   const upload = useMutation({
     mutationFn: async () => {
@@ -74,12 +85,28 @@ export function Datasets() {
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
           <Field label="File">
-            <Input
-              type="file"
-              accept=".csv,.tsv,.xlsx,.xls,.json,.parquet"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-foreground"
-            />
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const dropped = e.dataTransfer.files?.[0];
+                if (dropped) setFile(dropped);
+              }}
+              className={`rounded border border-dashed transition-colors ${dragOver ? "border-primary bg-secondary/50" : "border-transparent"}`}
+            >
+              <Input
+                type="file"
+                accept=".csv,.tsv,.xlsx,.xls,.json,.parquet"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-foreground"
+              />
+            </div>
+            {file && <p className="mt-1 text-xs text-muted-foreground">{file.name}</p>}
           </Field>
           <Field label="Name (optional)">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Defaults to filename" />
@@ -138,17 +165,19 @@ export function Datasets() {
                           <Button variant="secondary" size="sm" onClick={() => navigate(`/datasets/${d.id}`)}>
                             Open
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-rose-400 hover:text-rose-300"
-                            loading={del.isPending && del.variables === d.id}
-                            onClick={() => {
-                              if (confirm(`Delete dataset "${d.name}"? This cannot be undone.`)) del.mutate(d.id);
-                            }}
-                          >
-                            Delete
-                          </Button>
+                          {isOwner && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-rose-400 hover:text-rose-300"
+                              loading={del.isPending && del.variables === d.id}
+                              onClick={() => {
+                                if (confirm(`Delete dataset "${d.name}"? This cannot be undone.`)) del.mutate(d.id);
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          )}
                         </div>
                       </TD>
                     </TR>

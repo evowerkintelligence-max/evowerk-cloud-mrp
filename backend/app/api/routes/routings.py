@@ -150,6 +150,18 @@ async def activate_routing(
     if not step_count:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A routing needs at least one step before activation")
 
+    # Lock every Routing row for this item for the rest of this transaction so two
+    # concurrent activations can't both pass the status check before either
+    # commits - e.g., two draft routings A and B for the same item could otherwise
+    # both pass the draft check and both archive/activate, creating two active
+    # routings. A second activate() for this item now blocks here until the first
+    # one commits or rolls back.
+    await db.execute(
+        select(Routing.id)
+        .where(Routing.org_id == current.org_id, Routing.item_id == routing.item_id)
+        .with_for_update()
+    )
+
     await db.execute(
         Routing.__table__.update()
         .where(Routing.org_id == current.org_id, Routing.item_id == routing.item_id, Routing.status == "active")

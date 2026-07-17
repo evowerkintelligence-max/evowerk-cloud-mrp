@@ -127,3 +127,63 @@ async def test_eval_automl_risk_reports_run_not_found():
     trigger = await alerts._eval_automl_risk(_FakeDB(), uuid.uuid4(), rule, dataset)
     assert trigger.triggered is False
     assert "not found" in trigger.message.lower()
+
+
+PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+
+
+@pytest.mark.asyncio
+async def test_create_automl_risk_rule_and_scan_end_to_end(client):
+    reg = await client.post("/auth/register", json={"org_name": "Acme", "email": "owner@example.com", "password": PASSWORD})
+    assert reg.status_code == 201
+    login = await client.post("/auth/login", json={"email": "owner@example.com", "password": PASSWORD})
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Reuse the Scrap Prediction template (already shipped) to get a real,
+    # trained run to alert on - avoids duplicating a full training fixture
+    # here just to get a model_path.
+    rows = []
+    for i in range(40):
+        speed = 40 + (i % 8) * 5
+        units, scrap = 100, max(0, round((speed - 40) * 0.2))
+        rows.append(f"M{i % 2 + 1},{units},{scrap},{speed}")
+    csv_bytes = ("machine,units,scrap,speed\n" + "\n".join(rows) + "\n").encode()
+
+    up = await client.post("/datasets", headers=headers, files={"file": ("scrap.csv", csv_bytes, "text/csv")})
+    assert up.status_code == 201
+    dataset_id = up.json()["id"]
+
+    created_run = await client.post(
+        "/automl/templates/scrap_prediction/runs", headers=headers,
+        json={
+            "name": "Scrap risk model", "dataset_id": dataset_id,
+            "column_map": {"total_units_col": "units", "scrap_col": "scrap", "machine_col": "machine"},
+            "config": {},
+        },
+    )
+    assert created_run.status_code == 202, created_run.text
+    run_id = created_run.json()["id"]
+    run_detail = await client.get(f"/automl/runs/{run_id}", headers=headers)
+    assert run_detail.json()["status"] == "success"
+
+    rule = await client.post(
+        "/alerts/rules", headers=headers,
+        json={
+            "name": "High scrap risk", "type": "automl_risk", "severity": "warning",
+            "dataset_id": dataset_id,
+            "config": {"run_id": run_id, "threshold": -1e9, "offender_col": "machine"},
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    rule_id = rule.json()["id"]
+
+    scan = await client.post(f"/alerts/scan/{rule_id}", headers=headers)
+    assert scan.status_code == 200, scan.text
+    result = scan.json()
+    assert result["type"] == "automl_risk"
+    # threshold set absurdly low so every predicted value trips it -
+    # proves the whole pipeline (route -> evaluate_rule -> _eval_automl_risk
+    # -> joblib.load -> pipe.predict) actually ran end-to-end.
+    assert result["triggered"] is True
+    assert "machine" not in result  # sanity: response is AlertTriggerResponse shape, not raw dict

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -9,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from app.services import realtime as realtime_service
+from app.services import realtime_cache
 
 PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
 
@@ -42,6 +44,23 @@ def _stop_all_runners_after_each_test():
     realtime_service.stop_all_runners()
 
 
+@pytest.fixture(autouse=True)
+async def _cache_consumer():
+    """The ASGITransport test client never runs app.main's lifespan (see
+    conftest.client), so realtime_cache's background consumer - which
+    _snapshot_dict reads from - never starts on its own in this process.
+    Only start it when a broker is actually reachable (REDPANDA_BROKERS set,
+    same gate every other live-infra test in this plan uses); otherwise
+    leave it unstarted so these tests keep exercising the "not seen yet"
+    fallback path exactly as before, without needing live infra."""
+    if os.environ.get("REDPANDA_BROKERS"):
+        await realtime_cache.start_cache_consumer()
+        yield
+        await realtime_cache.stop_cache_consumer()
+    else:
+        yield
+
+
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
     reg = await client.post("/auth/register", json={"org_name": org_name, "email": email, "password": PASSWORD})
     assert reg.status_code == 201
@@ -65,6 +84,14 @@ async def _create_rest_integration(client, headers, base_url):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("REDPANDA_BROKERS"),
+    reason="needs a live Redpanda + Flink cluster to actually produce a windowed "
+    "metrics snapshot (e.g. `docker compose up redpanda flink-jobmanager "
+    "flink-taskmanager` and submit realtime_metrics_job.py) - without one, "
+    "realtime_cache never populates and this can only ever see the "
+    "not-yet-seen fallback, same as every other live-infra test in this plan",
+)
 async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -84,12 +111,14 @@ async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
     assert create.status_code == 200, create.text
     stream_id = create.json()["stream_id"]
 
-    # Give the background collector a couple of ticks.
-    for _ in range(20):
+    # Give the background collector a couple of ticks. Poll budget is wider
+    # than the Flink job's fixed 5s tumbling window (~12s total) so metrics
+    # have time to arrive even against live infra.
+    for _ in range(40):
         snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
         if snap["rows_collected"] > 0:
             break
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.3)
 
     assert snap["status"] == "running"
     assert snap["rows_collected"] > 0
@@ -101,6 +130,11 @@ async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("REDPANDA_BROKERS"),
+    reason="needs a live Redpanda + Flink cluster - see "
+    "test_stream_collects_and_computes_metrics for why",
+)
 async def test_stop_then_start_resumes_collection(client, fake_rest_server):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -119,8 +153,70 @@ async def test_stop_then_start_resumes_collection(client, fake_rest_server):
     assert realtime_service.get_runner(stream_id) is None
 
     start = await client.post(f"/realtime/streams/{stream_id}/start", headers=headers)
-    assert start.json()["status"] == "running"
     assert realtime_service.get_runner(stream_id) is not None
+
+    # The /start response's own status field reflects whatever realtime_cache
+    # has cached at that instant, which is empty immediately after a restart -
+    # a real snapshot needs a Flink window (fixed 5s) to close first. Poll the
+    # same way test_stream_collects_and_computes_metrics does rather than
+    # asserting on the immediate response.
+    snap = start.json()
+    for _ in range(40):
+        if snap["status"] == "running":
+            break
+        snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
+        await asyncio.sleep(0.3)
+    assert snap["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_stopped_stream_with_stale_cache_reports_stopped_and_real_name(client, fake_rest_server, monkeypatch):
+    """Regression test for the final-review bug in _snapshot_dict: once
+    realtime_cache has ever cached a real snapshot for a stream_id,
+    get_snapshot() keeps returning it forever (nothing overwrites/evicts a
+    stopped stream's last snapshot) - and that cached snapshot's "name" is
+    the raw stream_id (the Flink job's MetricSnapshot.name = key), not
+    stream.name. No live broker is needed to prove _snapshot_dict handles
+    both: a fake cached snapshot is injected directly into a CacheConsumer
+    instance rather than running one against Redpanda."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
+    integration_id = await _create_rest_integration(client, headers, base_url)
+
+    create = await client.post(
+        "/realtime/streams",
+        headers=headers,
+        json={"integration_id": integration_id, "name": "Line 9", "interval_seconds": 1, "column_map": {}},
+    )
+    stream_id = create.json()["stream_id"]
+
+    fake_consumer = realtime_cache.CacheConsumer(group_id="test", brokers="unused")
+    fake_consumer._snapshots[stream_id] = {
+        "ts": 1.0, "stream_id": stream_id, "name": stream_id,
+        "status": "running", "error": None,
+        "rows_in_window": 3, "rows_collected": 3,
+        "duration": "00:00:05", "duration_s": 5.0, "last_tick_s": 1.0,
+        "metrics": {"throughput": 1.0},
+    }
+    monkeypatch.setattr(realtime_cache, "_instance", fake_consumer)
+
+    # While running, the cached data is used but "name" is overlaid with the
+    # real stream name instead of the raw stream_id.
+    running_snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
+    assert running_snap["status"] == "running"
+    assert running_snap["name"] == "Line 9"
+
+    # Stop the stream. The cache still holds the stale "running" snapshot
+    # (nothing ever overwrites it), but the reported status must reflect the
+    # stop, not the stale cache.
+    stop = await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
+    assert stop.json()["status"] == "stopped"
+    assert stop.json()["name"] == "Line 9"
+
+    snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
+    assert snap["status"] == "stopped"
+    assert snap["name"] == "Line 9"
 
 
 @pytest.mark.asyncio

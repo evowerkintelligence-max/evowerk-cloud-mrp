@@ -8,3 +8,5 @@ __pycache__/
 tests/
 .env
 *.db
+streaming/lib/
+.venv-flink310/

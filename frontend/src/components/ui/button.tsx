@@ -9,14 +9,14 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-primary font-semibold text-primary-foreground shadow-[inset_0_1px_0_0_hsl(0_0%_100%/0.25),0_1px_2px_0_hsl(224_42%_2%/0.5)] hover:bg-primary/90 hover:shadow-glow-sm active:bg-primary/85",
+          "bg-primary font-semibold text-primary-foreground shadow-[inset_0_1px_0_0_hsl(0_0%_100%/0.25),0_1px_2px_0_hsl(224_42%_2%/0.5)] hover:-translate-y-px hover:bg-primary/90 hover:shadow-glow-sm focus-visible:shadow-glow-sm active:translate-y-0 active:bg-primary/85",
         secondary:
-          "border border-input bg-secondary text-secondary-foreground shadow-card hover:bg-secondary/70",
+          "border border-input bg-secondary text-secondary-foreground shadow-card hover:-translate-y-px hover:bg-secondary/70",
         outline:
-          "border border-input bg-transparent text-foreground hover:border-muted-foreground/40 hover:bg-secondary/50",
+          "border border-input bg-transparent text-foreground hover:-translate-y-px hover:border-muted-foreground/40 hover:bg-secondary/50",
         ghost: "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
         destructive:
-          "bg-destructive font-semibold text-destructive-foreground shadow-[inset_0_1px_0_0_hsl(0_0%_100%/0.15)] hover:bg-destructive/90 active:bg-destructive/85",
+          "bg-destructive font-semibold text-destructive-foreground shadow-[inset_0_1px_0_0_hsl(0_0%_100%/0.15)] hover:-translate-y-px hover:bg-destructive/90 active:translate-y-0 active:bg-destructive/85",
       },
       size: {
         sm: "h-8 px-3 text-xs",

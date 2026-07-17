@@ -25,6 +25,7 @@ from app.api.routes import (
     kpis,
     locations,
     lots,
+    machines,
     mfg_forecast,
     oee,
     orgs,
@@ -87,6 +88,7 @@ app.include_router(suppliers.router)
 app.include_router(purchase_orders.router)
 app.include_router(lots.router)
 app.include_router(locations.router)
+app.include_router(machines.router)
 # Must be registered before inventory.router: /inventory/analytics is a
 # static path that would otherwise be shadowed by inventory.router's
 # /inventory/{item_id} (Starlette matches path shape before UUID validation).

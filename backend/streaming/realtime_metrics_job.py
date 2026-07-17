@@ -11,10 +11,13 @@ Run: flink run --python realtime_metrics_job.py --jarfile /opt/flink/lib/flink-s
 """
 from __future__ import annotations
 
+import glob
 import os
+import sys
 from datetime import datetime, timezone
 
 from pyflink.common import Time, Types, WatermarkStrategy
+from pyflink.common.serialization import SimpleStringSchema
 from pyflink.datastream import ProcessWindowFunction, RuntimeContext, StreamExecutionEnvironment
 from pyflink.datastream.connectors.kafka import (
     KafkaOffsetsInitializer,
@@ -29,6 +32,14 @@ from streaming.metrics import compute_window_metrics
 from streaming.schemas import METRICS_TOPIC, TICKS_TOPIC, MetricSnapshot, Tick
 
 WINDOW_SECONDS = 5
+
+# flink.Dockerfile ADDs the Kafka connector jar to /opt/flink/lib, already on
+# the classpath for the dockerized cluster. A local StreamExecutionEnvironment
+# (test_pipeline_e2e.py, run outside that image) has no such classpath, so
+# fall back to a jar checked out alongside this file if one exists there.
+_LOCAL_KAFKA_CONNECTOR_JARS = glob.glob(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "*.jar")
+)
 
 
 class MetricsWindowFunction(ProcessWindowFunction):
@@ -87,11 +98,35 @@ class MetricsWindowFunction(ProcessWindowFunction):
             last_tick_s=last_tick_s,
             metrics=metrics,
         )
-        yield snap.to_json()
+        # SimpleStringSchema (source + sink below) moves Java Strings across
+        # the Python/JVM bridge, not bytes - decode here to match, encode is
+        # undone symmetrically by CacheConsumer/Tick.from_json on the other end.
+        yield snap.to_json().decode("utf-8")
 
 
 def build_job(brokers: str) -> StreamExecutionEnvironment:
+    # PyFlink defaults local (non-cluster) runs to Beam's "loopback" Python
+    # worker mode: a short-lived bootstrap subprocess hands off to a worker
+    # thread inside this same process and exits by design. On this Windows
+    # dev box that hand-off races Beam's own subprocess-aliveness check often
+    # enough to intermittently fail job startup with a spurious "Process died
+    # with exit code 0" (reproduced standalone, with no Flink/app code
+    # involved - a PyFlink/Beam-on-Windows loopback-mode issue, not a bug in
+    # this job). Forcing "process" mode - a real, persistent per-operator
+    # Python worker subprocess, same as what a real (non-local) Flink cluster
+    # always uses - sidesteps that race entirely. Must be set before
+    # StreamExecutionEnvironment is constructed below (read once in its
+    # __init__ via _open()).
+    os.environ.setdefault("_python_worker_execution_mode", "process")
     env = StreamExecutionEnvironment.get_execution_environment()
+    if _LOCAL_KAFKA_CONNECTOR_JARS:
+        env.add_jars(*(f"file:///{p.replace(os.sep, '/')}" for p in _LOCAL_KAFKA_CONNECTOR_JARS))
+    # Flink's Python UDF workers (used by ProcessWindowFunction below) shell
+    # out to a "python" it finds itself unless told otherwise - bare `python`
+    # on PATH may not be the interpreter this job is actually running under
+    # (e.g. a dedicated venv). Pin it to sys.executable so the worker process
+    # has the same pyflink/app imports as this process.
+    env.set_python_executable(sys.executable)
 
     source = (
         KafkaSource.builder()
@@ -99,7 +134,12 @@ def build_job(brokers: str) -> StreamExecutionEnvironment:
         .set_topics(TICKS_TOPIC)
         .set_group_id("realtime-metrics-job")
         .set_starting_offsets(KafkaOffsetsInitializer.latest())
-        .set_value_only_deserializer(Types.PICKLED_BYTE_ARRAY())
+        # Types.PICKLED_BYTE_ARRAY() is a TypeInformation (how PyFlink pickles
+        # values across the Python/JVM bridge) - not a DeserializationSchema
+        # (how the JVM reads raw Kafka record bytes). SimpleStringSchema reads
+        # each Kafka value as a UTF-8 string, matching Tick.to_json()'s bytes
+        # (JSON is valid UTF-8) and what Tick.from_json/json.loads accept.
+        .set_value_only_deserializer(SimpleStringSchema())
         .build()
     )
     sink = (
@@ -108,7 +148,7 @@ def build_job(brokers: str) -> StreamExecutionEnvironment:
         .set_record_serializer(
             KafkaRecordSerializationSchema.builder()
             .set_topic(METRICS_TOPIC)
-            .set_value_serialization_schema(lambda v: v)
+            .set_value_serialization_schema(SimpleStringSchema())
             .build()
         )
         .build()
@@ -119,7 +159,7 @@ def build_job(brokers: str) -> StreamExecutionEnvironment:
         ticks
         .key_by(lambda raw: Tick.from_json(raw).stream_id)
         .window(TumblingProcessingTimeWindows.of(Time.seconds(WINDOW_SECONDS)))
-        .process(MetricsWindowFunction())
+        .process(MetricsWindowFunction(), output_type=Types.STRING())
         .sink_to(sink)
     )
     return env

@@ -236,6 +236,7 @@ def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], co
     machine_col, date_col = cols["machine_col"], cols["date_col"]
 
     pipeline = engine_result["pipeline"] if engine_result else None
+    anomaly_model = _fit_anomaly_model(context.get("training_df"))
     model_meta_dict: dict[str, Any] | None = None
     if engine_result:
         best_scores = engine_result["meta"]["scores"]
@@ -296,6 +297,11 @@ def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], co
             fail_prob = min(float(pipeline.predict_proba(x_df)[0][1]), 0.99)
             ml_powered = True
             drivers: list[dict] = []
+        elif anomaly_model is not None and machine_key in context["last_x"]:
+            model, mean, std = anomaly_model
+            fail_prob, driver_contribs = _anomaly_score(model, mean, std, context["last_x"][machine_key])
+            ml_powered = True
+            drivers = driver_contribs
         else:
             fail_prob, driver_contribs = legacy._stat_analyze(
                 oee_s, avail_s, perf_s, qual_s, last_fail_ago,

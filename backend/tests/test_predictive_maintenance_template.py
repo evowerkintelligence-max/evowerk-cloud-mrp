@@ -353,3 +353,40 @@ def test_anomaly_score_flags_low_oee_and_high_scrap_as_top_drivers():
     assert "scrap_rate_7d" in feature_names
     for d in drivers:
         assert 0.0 <= d["importance"] <= 1.0
+
+
+def _anomaly_fixture_df() -> pd.DataFrame:
+    # M1: healthy (OEE ~0.96) for 25 days, then a 5-day degradation (OEE
+    # ~0.16) with no failure/downtime_category column mapped at all - so
+    # daily_ml["is_failure"] stays 0 throughout and is_failure_next is 0 for
+    # every training row (0% positive rate fails has_ml_signal's 5-90% band,
+    # forcing skip_ml=True), while still producing >= _MIN_ANOMALY_ROWS
+    # rolling windows (n=30, W=7, H=3 -> range(7, 27) = 20 rows).
+    from io import StringIO
+    rows = []
+    for day in range(1, 26):
+        rows.append(f"2026-01-{day:02d},M1,480,470,920,900,")
+    for day in range(26, 31):
+        rows.append(f"2026-01-{day:02d},M1,480,150,200,150,")
+    return pd.read_csv(StringIO("date,machine,planned,operating,total,good,failure\n" + "\n".join(rows) + "\n"))
+
+
+def test_postprocess_uses_anomaly_detection_when_enough_history_but_no_labeled_failures():
+    df = _anomaly_fixture_df()
+    config = {"column_map": {
+        "date_col": "date", "machine_col": "machine", "planned_time_col": "planned",
+        "operating_time_col": "operating", "total_units_col": "total", "good_units_col": "good",
+    }, "hourly_value": 1000.0}
+
+    pre = pm.preprocess(df, config)
+    assert pre.skip_ml is True
+    assert len(pre.context["training_df"]) >= pm._MIN_ANOMALY_ROWS
+
+    out = pm.postprocess(None, config, pre.context)
+    machine = out["predictive_result"]["machines"][0]
+    assert machine["ml_powered"] is True
+    assert 0.0 <= machine["failure_probability"] <= 1.0
+    assert machine["failure_probability"] > 0.5  # last 7-day window is the most degraded in the series
+    assert any(d["feature"] == "oee_7d" for d in machine["ml_drivers"])
+    assert out["pipeline"] is None  # still no trained classifier
+    assert out["predictive_result"]["model_meta"] is None

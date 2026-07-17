@@ -274,7 +274,16 @@ export function EChart({
   }, []);
 
   useEffect(() => {
-    chart.current?.setOption({ backgroundColor: "transparent", ...option }, true);
+    chart.current?.setOption(
+      {
+        backgroundColor: "transparent",
+        animation: true,
+        animationDuration: 700,
+        animationEasing: "cubicOut",
+        ...option,
+      },
+      true,
+    );
   }, [option]);
 
   return <div ref={ref} className={className} style={{ height }} />;

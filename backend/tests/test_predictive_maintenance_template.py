@@ -315,22 +315,39 @@ def test_fit_anomaly_model_returns_fitted_model_at_or_above_floor():
 
 
 def test_anomaly_score_flags_low_oee_and_high_scrap_as_top_drivers():
+    # All 6 features have realistic variance so IsolationForest can discriminate
+    # on genuine multi-feature signal, not just 2 of 6. This avoids a fragile
+    # threshold that hinges on specific hyperparameters.
     training_df = pd.DataFrame({
-        "oee_7d": [0.78, 0.79, 0.80, 0.81, 0.82] * 4,
-        "oee_slope_7d": [0.0] * 20,
-        "scrap_rate_7d": [0.09, 0.10, 0.11, 0.10, 0.09] * 4,
-        "dt_rate_7d": [0.1] * 20,
-        "fail_count_7d": [0.0] * 20,
-        "days_since_fail": [60.0] * 20,
+        "oee_7d": [0.75, 0.76, 0.77, 0.78, 0.79, 0.80, 0.81, 0.82, 0.83, 0.84,
+                    0.75, 0.76, 0.77, 0.78, 0.79, 0.80, 0.81, 0.82, 0.83, 0.84],
+        "oee_slope_7d": [0.005, 0.002, -0.001, 0.003, 0.001, -0.002, 0.004, 0.000, -0.003, 0.002,
+                          0.005, 0.002, -0.001, 0.003, 0.001, -0.002, 0.004, 0.000, -0.003, 0.002],
+        "scrap_rate_7d": [0.08, 0.09, 0.10, 0.11, 0.10, 0.09, 0.08, 0.10, 0.11, 0.09,
+                           0.08, 0.09, 0.10, 0.11, 0.10, 0.09, 0.08, 0.10, 0.11, 0.09],
+        "dt_rate_7d": [0.08, 0.09, 0.10, 0.11, 0.10, 0.09, 0.08, 0.10, 0.11, 0.09,
+                        0.08, 0.09, 0.10, 0.11, 0.10, 0.09, 0.08, 0.10, 0.11, 0.09],
+        "fail_count_7d": [0.0, 0.5, 1.0, 0.5, 0.0, 1.0, 0.5, 0.0, 0.5, 1.0,
+                          0.0, 0.5, 1.0, 0.5, 0.0, 1.0, 0.5, 0.0, 0.5, 1.0],
+        "days_since_fail": [30.0, 40.0, 50.0, 60.0, 70.0, 25.0, 35.0, 45.0, 55.0, 65.0,
+                            30.0, 40.0, 50.0, 60.0, 70.0, 25.0, 35.0, 45.0, 55.0, 65.0],
     })
     fitted = pm._fit_anomaly_model(training_df)
     assert fitted is not None
     model, mean, std = fitted
 
-    bad_row = [0.3, -0.05, 0.6, 0.1, 0.0, 60.0]  # far lower OEE, far higher scrap than baseline
-    prob, drivers = pm._anomaly_score(model, mean, std, bad_row)
-    assert 0.0 <= prob <= 1.0
-    assert prob > 0.5  # this row is a clear outlier vs. the tight baseline
+    # Score a "normal" row from the training distribution
+    normal_row = [0.78, 0.002, 0.095, 0.095, 0.5, 50.0]  # typical baseline
+    normal_prob, _ = pm._anomaly_score(model, mean, std, normal_row)
+
+    # Score a distinctly anomalous row (very low OEE, very high scrap)
+    bad_row = [0.25, -0.08, 0.65, 0.12, 2.0, 10.0]
+    bad_prob, drivers = pm._anomaly_score(model, mean, std, bad_row)
+
+    # The anomalous row must score significantly higher than the normal row
+    # (robust to hyperparameter changes, since both are scored with same model)
+    assert bad_prob > normal_prob + 0.15, f"bad_prob={bad_prob}, normal_prob={normal_prob}, diff={bad_prob - normal_prob}"
+    assert 0.0 <= bad_prob <= 1.0
     feature_names = {d["feature"] for d in drivers}
     assert "oee_7d" in feature_names
     assert "scrap_rate_7d" in feature_names

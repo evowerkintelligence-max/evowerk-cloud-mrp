@@ -768,3 +768,118 @@ Start the backend and frontend dev servers, log in, go to Shifts:
 git add frontend/src/pages/analytics/shared.tsx frontend/src/pages/analytics/Shifts.tsx
 git commit -m "feat: add AutoML-backed forecast card to the Shifts page"
 ```
+
+---
+
+### Task 4: Fix forecasting TypeError on string-typed target columns
+
+**Added post-hoc:** Task 3's manual verification found that every "Train forecast" run fails on a real (CSV-sourced) dataset with `unsupported operand type(s) for -: 'str' and 'str'`. Root cause: `backend/app/services/datasets.py`'s `dataframe_for()` reads CSV/TSV columns as strings by design (`ALL_VARCHAR=1` in `relation_for()`), but `_add_target_lag_features()` in `backend/app/services/automl_engine.py` does arithmetic (`s.shift(1) - s.shift(7)`, `.rolling().mean()`) directly on the still-string target column before any numeric coercion happens. The eventual `y = pd.to_numeric(...)` coercion in `train_automl_baseline` (`automl_engine.py:849`) happens too late — after the lag features already tried to do arithmetic on strings. This bug is pre-existing and unrelated to Tasks 1-3's own code (confirmed: no forecasting run has ever been trained end-to-end through the real `/automl/runs` route in this codebase's test suite — `backend/tests/test_automl.py` only exercises classification through the real CSV-upload path; its one forecasting-adjacent test, `test_explain_row_rejects_forecasting`, builds an in-memory DataFrame directly, bypassing the CSV string-dtype path entirely).
+
+One of `_add_target_lag_features`'s three call sites (`automl_engine.py:1256`, inside `forecast_trajectory`) already coerces the target column to numeric before calling it — that's why trajectory-rendering on an already-trained model isn't affected, only training and `predict_with_model` are. The fix belongs inside `_add_target_lag_features` itself so all three call sites (training, predict, trajectory) get it uniformly, rather than patching each call site separately.
+
+**Files:**
+- Modify: `backend/app/services/automl_engine.py`
+- Test: `backend/tests/test_automl.py` (append)
+
+**Interfaces:**
+- Consumes: existing `app.services.automl_engine._add_target_lag_features(df, time_col, target_col) -> tuple[pd.DataFrame, list[str]]` (unchanged signature).
+- Produces: no new public interface — same function, now numeric-safe regardless of the input target column's dtype.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `backend/tests/test_automl.py`:
+
+```python
+def _forecast_csv() -> bytes:
+    """40 consecutive days of a simple upward-trending value - enough history
+    for the forecasting engine's 14-day lag/rolling warmup plus a real
+    train/test split."""
+    import datetime
+
+    start = datetime.date(2026, 1, 1)
+    rows = ["date,value"]
+    for i in range(40):
+        d = start + datetime.timedelta(days=i)
+        rows.append(f"{d.isoformat()},{100 + i}")
+    return ("\n".join(rows) + "\n").encode()
+
+
+@pytest.mark.asyncio
+async def test_forecasting_run_succeeds_on_csv_sourced_string_columns(client):
+    """Regression test for the string-vs-numeric TypeError: CSV-sourced datasets
+    load every column as a string (see app.services.datasets.dataframe_for), so
+    a forecasting run's target column arrives as dtype=object. Training must
+    coerce it before doing lag/rolling arithmetic, not just before the final
+    train/test split."""
+    token = await _register_and_login(client, email="forecast@example.com", org_name="ForecastOrg")
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=_forecast_csv(), filename="forecast.csv")
+
+    body = {
+        "name": "Forecast value",
+        "dataset_id": dataset_id,
+        "task": "forecasting",
+        "target_column": "value",
+        "feature_columns": [],
+        "thoroughness": "fast",
+        "time_column": "date",
+        "horizon": 1,
+        "forecast_strategy": "direct",
+    }
+    created = await client.post("/automl/runs", headers=headers, json=body)
+    assert created.status_code == 202
+    run_id = created.json()["id"]
+
+    detail = await client.get(f"/automl/runs/{run_id}", headers=headers)
+    assert detail.status_code == 200
+    run = detail.json()
+    assert run["status"] == "success", run.get("error")
+    assert run["best_model_name"]
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd backend && python -m pytest tests/test_automl.py::test_forecasting_run_succeeds_on_csv_sourced_string_columns -v`
+Expected: FAIL. The run reaches `status == "failed"` with `error` containing `unsupported operand type(s) for -: 'str' and 'str'`, so the assertion `run["status"] == "success"` fails (pytest will print the actual error via the `run.get("error")` assertion message).
+
+- [ ] **Step 3: Fix `_add_target_lag_features`**
+
+In `backend/app/services/automl_engine.py`, find:
+
+```python
+def _add_target_lag_features(df: pd.DataFrame, time_col: str, target_col: str) -> tuple[pd.DataFrame, list[str]]:
+    """Assumes df is already sorted by time_col. Returns (df_with_features, new_column_names)."""
+    out = df.copy()
+    new_cols: list[str] = []
+    s = out[target_col]
+```
+
+Replace with:
+
+```python
+def _add_target_lag_features(df: pd.DataFrame, time_col: str, target_col: str) -> tuple[pd.DataFrame, list[str]]:
+    """Assumes df is already sorted by time_col. Returns (df_with_features, new_column_names)."""
+    out = df.copy()
+    new_cols: list[str] = []
+    # CSV/TSV-sourced datasets always load columns as strings (see
+    # app.services.datasets.dataframe_for) - coerce before any lag/rolling/
+    # trend arithmetic below, which raises TypeError on object-dtype values.
+    s = pd.to_numeric(out[target_col], errors="coerce")
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd backend && python -m pytest tests/test_automl.py::test_forecasting_run_succeeds_on_csv_sourced_string_columns -v`
+Expected: PASS.
+
+- [ ] **Step 5: Run the full automl + shift-forecast test files to check for regressions**
+
+Run: `cd backend && python -m pytest tests/test_automl.py tests/test_shift_forecast.py -v`
+Expected: all PASS, pristine output.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/services/automl_engine.py backend/tests/test_automl.py
+git commit -m "fix: coerce string target column before forecasting lag features"
+```

@@ -41,9 +41,11 @@ export function Warehouse() {
         description="On-hand stock by location, and the locations that hold it. Receiving a PO adds stock; consume, adjust, or transfer to move it. (Lot-tracked items track on-hand through their lots.)"
         actions={<PageTabs tabs={tabs} active={tab} onChange={setTab} />}
       />
-      {tab === "inventory" && <InventoryPanel />}
-      {tab === "locations" && <LocationsPanel />}
-      {tab === "approvals" && canSeeApprovals && <ApprovalsPanel />}
+      <div key={tab} className="animate-fade-in">
+        {tab === "inventory" && <InventoryPanel />}
+        {tab === "locations" && <LocationsPanel />}
+        {tab === "approvals" && canSeeApprovals && <ApprovalsPanel />}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 
@@ -15,6 +15,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Docker Desktop's Windows bind mount doesn't propagate inotify events,
+    // so chokidar never sees host-side edits without polling.
+    watch: {
+      usePolling: true,
+    },
     proxy: {
       // One regex over every backend router prefix (see app/main.py). The old
       // entry-per-route allowlist silently dropped any router added later:
@@ -39,5 +44,8 @@ export default defineConfig({
           },
         },
     },
+  },
+  test: {
+    environment: "node",
   },
 });

@@ -25,3 +25,4 @@ graphify-out/
 # StreamExecutionEnvironment (test_pipeline_e2e.py) outside flink.Dockerfile's
 # image, which ADDs the same jar itself - re-downloadable, not source.
 backend/streaming/lib/
+.superpowers/

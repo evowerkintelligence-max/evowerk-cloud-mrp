@@ -83,7 +83,7 @@ export function RunHistory() {
         actions={<PageTabs tabs={[...TABS]} active={tab} onChange={setTab} />}
       />
 
-      <Card>
+      <Card key={tab} className="animate-fade-in">
         <CardContent className="space-y-3 p-4">
           {filtered.length === 0 && (
             <p className="text-sm text-muted-foreground">

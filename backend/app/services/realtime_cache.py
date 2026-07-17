@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import socket
 import uuid
@@ -21,6 +22,8 @@ from aiokafka import AIOKafkaConsumer
 from app.core.config import get_settings
 from app.services.realtime import history_path
 from streaming.schemas import METRICS_TOPIC, MetricSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 class CacheConsumer:
@@ -38,6 +41,19 @@ class CacheConsumer:
         )
         await self._consumer.start()
         self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        # _run() only ends via stop()'s cancel (swallowed there) or an
+        # unhandled exception (e.g. the Kafka connection drops) - the latter
+        # leaves get_snapshot() silently returning stale data forever with
+        # no reconnect. No retry logic here (accepted v1 gap), but at least
+        # log it so an operator can see this replica's cache died.
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("realtime_cache consumer (group=%s) died: %r", self.group_id, exc)
 
     async def _run(self) -> None:
         assert self._consumer is not None

@@ -110,6 +110,12 @@ class TickProducer:
         self.integration_config = integration_config
         self.column_map = column_map
         self.interval_seconds = max(1, interval_seconds)
+        # Vestigial: the old StreamRunner used this to decide whether metrics
+        # accumulated over a growing in-memory buffer vs. a single poll.
+        # Metrics are now always computed over the Flink job's fixed 5s
+        # window (see streaming/realtime_metrics_job.py) - this flag has no
+        # effect on that. Kept only because it's still a column on
+        # RealtimeStream and a request field; not read anywhere downstream.
         self.accumulate = accumulate
         self.status = "running"
         self.error: str | None = None

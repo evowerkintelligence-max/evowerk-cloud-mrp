@@ -297,7 +297,13 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     """Targets a live realtime stream instead of a dataset - same
     threshold/offender shape as the dataset evaluators above, reading the
     realtime_cache snapshot (populated by the Flink windowed-aggregation
-    job) instead of querying a Dataset file."""
+    job) instead of querying a Dataset file.
+
+    Metric values here reflect only the last 5-second Flink window, not a
+    cumulative session total the way they did pre-Redpanda (see
+    streaming/metrics.py's module docstring) - thresholds on absolute-sum
+    metrics like throughput set before this pipeline shipped will need
+    re-tuning."""
     from app.services import realtime_cache
 
     cfg = rule.config

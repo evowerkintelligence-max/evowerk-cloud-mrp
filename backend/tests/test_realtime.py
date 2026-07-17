@@ -84,6 +84,14 @@ async def _create_rest_integration(client, headers, base_url):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("REDPANDA_BROKERS"),
+    reason="needs a live Redpanda + Flink cluster to actually produce a windowed "
+    "metrics snapshot (e.g. `docker compose up redpanda flink-jobmanager "
+    "flink-taskmanager` and submit realtime_metrics_job.py) - without one, "
+    "realtime_cache never populates and this can only ever see the "
+    "not-yet-seen fallback, same as every other live-infra test in this plan",
+)
 async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -122,6 +130,11 @@ async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("REDPANDA_BROKERS"),
+    reason="needs a live Redpanda + Flink cluster - see "
+    "test_stream_collects_and_computes_metrics for why",
+)
 async def test_stop_then_start_resumes_collection(client, fake_rest_server):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

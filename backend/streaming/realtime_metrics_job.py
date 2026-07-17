@@ -39,6 +39,9 @@ class MetricsWindowFunction(ProcessWindowFunction):
         self.started_at_state = runtime_context.get_state(
             ValueStateDescriptor("started_at", Types.STRING())
         )
+        self.last_tick_at_state = runtime_context.get_state(
+            ValueStateDescriptor("last_tick_at", Types.STRING())
+        )
 
     def process(self, key: str, context: "ProcessWindowFunction.Context", elements):
         ticks = [Tick.from_json(e) for e in elements]
@@ -61,6 +64,17 @@ class MetricsWindowFunction(ProcessWindowFunction):
 
         metrics = compute_window_metrics(rows, column_map)
 
+        last_tick_at = self.last_tick_at_state.value()
+        if ticks:
+            latest_tick_at = max(t.collected_at for t in ticks)
+            if last_tick_at is None or latest_tick_at > last_tick_at:
+                last_tick_at = latest_tick_at
+                self.last_tick_at_state.update(last_tick_at)
+
+        last_tick_s = None
+        if last_tick_at is not None:
+            last_tick_s = round((now - datetime.fromisoformat(last_tick_at)).total_seconds(), 1)
+
         snap = MetricSnapshot(
             ts=now.isoformat(),
             stream_id=key,
@@ -70,7 +84,7 @@ class MetricsWindowFunction(ProcessWindowFunction):
             rows_in_window=len(rows),
             rows_collected=total_collected,
             duration_s=duration_s,
-            last_tick_s=0.0 if ticks else None,
+            last_tick_s=last_tick_s,
             metrics=metrics,
         )
         yield snap.to_json()

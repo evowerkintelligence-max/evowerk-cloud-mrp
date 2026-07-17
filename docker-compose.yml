@@ -25,11 +25,65 @@ services:
       timeout: 5s
       retries: 10
 
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    # Must advertise its compose-network hostname, not the default 127.0.0.1 -
+    # otherwise backend/Flink resolve the bootstrap server but then get told
+    # the broker lives at localhost and every metadata lookup dead-ends.
+    # (Clients on the host machine need to override to localhost:9092.)
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --check=false
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Builds a python3+PyFlink-capable image from the base flink:1.19 image and
+  # bundles streaming/ into it, instead of relying on a bind-mounted, manually
+  # provisioned container - the base image has neither Python nor the Kafka
+  # connector jar the job needs.
+  flink-jobmanager:
+    build:
+      context: ./backend
+      dockerfile: streaming/flink.Dockerfile
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: "jobmanager.rpc.address: flink-jobmanager"
+    ports:
+      - "8081:8081"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  flink-taskmanager:
+    build:
+      context: ./backend
+      dockerfile: streaming/flink.Dockerfile
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    depends_on:
+      - flink-jobmanager
+
   backend:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/evowerk_cloud_mrp
       REDIS_URL: redis://redis:6379/0
+      REDPANDA_BROKERS: redpanda:9092
       JWT_SECRET_KEY: dev-only-secret-change-me
       # Dev-only placeholder - generate a real key before running this anywhere but
       # a laptop: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -41,6 +95,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redpanda:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"

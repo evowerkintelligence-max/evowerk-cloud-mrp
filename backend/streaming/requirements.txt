@@ -1,0 +1,5 @@
+# PyFlink for the realtime metrics job - deliberately NOT in backend/requirements.txt;
+# it pulls in enough (a JVM runtime, Flink's Python API surface) that it shouldn't
+# share a dependency set with the FastAPI app. See
+# docs/superpowers/specs/2026-07-16-realtime-redpanda-flink-design.md.
+apache-flink>=1.19.0

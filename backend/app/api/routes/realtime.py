@@ -45,28 +45,34 @@ class StreamCreate(BaseModel):
 
 
 def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
-    """Live snapshot if this process has a running collector for this stream,
-    else a definition-only snapshot (honest about "not running here" rather
-    than silently showing stale/blank metrics - see module docstring on the
-    in-memory/multi-replica caveat). Alarm state from any enabled stream_metric
-    alert rules targeting this stream rides along, same as the desktop app."""
-    runner = realtime_service.get_runner(stream.id)
-    if runner is not None:
-        snap = runner.snapshot()
-    else:
+    """Cache-backed snapshot if this stream isn't explicitly stopped, else a
+    definition-only "stopped" snapshot - explicit desired_status always wins
+    over a possibly-stale cached value from before the stop. Alarm state from
+    any enabled stream_metric alert rules targeting this stream rides along,
+    same as before."""
+    producer = realtime_service.get_runner(stream.id)
+
+    if producer is None and stream.desired_status == "stopped":
         snap = {
-            "ts": None,
-            "stream_id": str(stream.id),
-            "name": stream.name,
-            "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
-            "error": stream.last_error,
-            "rows_in_window": 0,
-            "rows_collected": 0,
-            "duration": None,
-            "duration_s": None,
-            "last_tick_s": None,
-            "metrics": {},
+            "ts": None, "stream_id": str(stream.id), "name": stream.name,
+            "status": "stopped", "error": stream.last_error,
+            "rows_in_window": 0, "rows_collected": 0,
+            "duration": None, "duration_s": None, "last_tick_s": None, "metrics": {},
         }
+    else:
+        snap = realtime_service.get_snapshot(stream.id)
+        if snap is None:
+            snap = {
+                "ts": None, "stream_id": str(stream.id), "name": stream.name,
+                # Cache miss with a live producer: report the producer's own
+                # status ("running"/"error"), matching the old StreamRunner
+                # contract - callers see "running" immediately after /start,
+                # not a transient invented state.
+                "status": producer.status if producer is not None else "not_running_in_this_process",
+                "error": producer.error if producer is not None else stream.last_error,
+                "rows_in_window": 0, "rows_collected": 0,
+                "duration": None, "duration_s": None, "last_tick_s": None, "metrics": {},
+            }
     snap["alerts"] = [vars(a) for a in alerts]
     return snap
 
@@ -82,6 +88,7 @@ def _start(stream: RealtimeStream, integration: Integration) -> None:
     realtime_service.start_runner(
         stream_id=stream.id,
         name=stream.name,
+        org_id=stream.org_id,
         integration_type=integration.type,
         integration_config=decrypt_config(integration.config),
         column_map=stream.column_map,

@@ -791,6 +791,10 @@ def train_automl_baseline(
         if not time_column or time_column not in df.columns:
             raise ValueError("Forecasting requires a valid time_column present in dataset")
         df = df.sort_values(by=time_column).reset_index(drop=True)
+        # CSV/TSV-sourced datasets load every column as a string (see
+        # app/services/datasets.py's relation_for), so the lag/rolling/trend
+        # arithmetic below needs a real numeric dtype before it can run.
+        df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
         df, lag_feature_cols = _add_target_lag_features(df, time_column, target_column)
         n_before_warmup = len(df)
         df = df.dropna(subset=lag_feature_cols).reset_index(drop=True)

@@ -73,6 +73,41 @@ async def test_classification_run_succeeds_end_to_end(client):
 
 
 @pytest.mark.asyncio
+async def test_forecasting_run_succeeds_on_csv_backed_dataset(client):
+    # CSV uploads load every column ALL_VARCHAR (see app/services/datasets.py's
+    # relation_for) - before the fix, _add_target_lag_features' `s.shift(1) -
+    # s.shift(7)` crashed with "unsupported operand type(s) for -: 'str' and
+    # 'str'" because the target column arrived as dtype=object, not numeric.
+    dates = pd.date_range("2024-01-01", periods=60, freq="D")
+    csv = b"date,value\n" + b"\n".join(
+        f"{d.date()},{100 + i}".encode() for i, d in enumerate(dates)
+    )
+    token = await _register_and_login(client, email="forecaster@example.com", org_name="Forecast Co")
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=csv, filename="daily.csv")
+
+    body = {
+        "name": "Forecast value",
+        "dataset_id": dataset_id,
+        "task": "forecasting",
+        "target_column": "value",
+        "feature_columns": ["value"],
+        "time_column": "date",
+        "thoroughness": "fast",
+        "algorithms": ["Ridge"],
+    }
+    created = await client.post("/automl/runs", headers=headers, json=body)
+    assert created.status_code == 202
+    run_id = created.json()["id"]
+
+    detail = await client.get(f"/automl/runs/{run_id}", headers=headers)
+    assert detail.status_code == 200
+    run = detail.json()
+    assert run["status"] == "success", run["error"]
+    assert run["best_model_name"]
+
+
+@pytest.mark.asyncio
 async def test_bad_target_column_marks_run_failed(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

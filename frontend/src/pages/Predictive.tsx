@@ -153,10 +153,25 @@ export function Predictive() {
 
   const analyze = useMutation({
     mutationFn: async () => {
-      const body: Record<string, unknown> = { ...cols, hourly_value: Number(hourlyValue) || 1000 };
-      const res = await apiFetch(`/datasets/${datasetId}/predictive/analyze`, { method: "POST", body: JSON.stringify(body) });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Analysis failed");
-      return res.json() as Promise<PredictiveResult>;
+      const body = {
+        name: `Predictive maintenance ${new Date().toISOString()}`,
+        dataset_id: datasetId,
+        column_map: cols,
+        config: { hourly_value: Number(hourlyValue) || 1000 },
+      };
+      const created = await apiFetch("/automl/templates/predictive_maintenance/runs", { method: "POST", body: JSON.stringify(body) });
+      if (!created.ok) throw new Error((await created.json()).detail ?? "Failed to start analysis");
+      const { id: runId } = await created.json();
+
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const poll = await apiFetch(`/automl/runs/${runId}`);
+        if (!poll.ok) throw new Error("Failed to check run status");
+        const run = await poll.json();
+        if (run.status === "success") return run.meta.predictive_result as PredictiveResult;
+        if (run.status === "failed") throw new Error(run.error ?? "Analysis failed");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      throw new Error("Analysis is taking longer than expected - check back on the Runs page shortly");
     },
   });
 

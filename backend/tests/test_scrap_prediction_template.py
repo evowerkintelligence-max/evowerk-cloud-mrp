@@ -165,3 +165,15 @@ async def test_create_scrap_prediction_run_end_to_end(client):
     run = detail.json()
     assert run["status"] == "success", run.get("error")
     assert run["meta"]["scrap_summary"]["target_column"] == "scrap_units"
+
+    # feature_columns/raw_feature_columns must be carried into meta for
+    # template runs (automl_runner.py), or check_data_drift has nothing to
+    # compare against and silently reports "no drift, ever" instead of
+    # actually checking anything - see drift_check test below.
+    assert run["meta"]["raw_feature_columns"], "template run meta is missing raw_feature_columns"
+
+    drift = await client.post(f"/automl/runs/{run_id}/drift-check", headers=headers, json={"dataset_id": dataset_id})
+    assert drift.status_code == 200, drift.text
+    body = drift.json()
+    assert body["features"], "drift-check found no comparable features - feature_columns didn't reach run.meta"
+    assert not body["skipped_features"]

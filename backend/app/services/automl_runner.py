@@ -92,6 +92,15 @@ async def _execute(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> No
             run.metric_value = template_out["metric_value"]
             meta = {k: v for k, v in template_out.items() if k not in ("pipeline", "explain_X", "explain_y", "leaderboard", "best_model_name", "metric_name", "metric_value")}
             meta["notes"] = pre.notes
+            # Carried from the engine's own meta (not template_out - no template's
+            # postprocess() copies these) so check_data_drift() has something to
+            # compare against for template runs, same as it already does for
+            # generic/Advanced runs. Only meaningful when a real pipeline trained;
+            # the skip_ml/anomaly path has no explain_X sample to drift-check anyway.
+            if engine_result is not None:
+                for key in ("feature_columns", "raw_feature_columns", "schema"):
+                    if key in engine_result["meta"]:
+                        meta[key] = engine_result["meta"][key]
 
             if template_out["pipeline"] is not None:
                 run_dir = automl_storage.run_dir(org_id, run_id)

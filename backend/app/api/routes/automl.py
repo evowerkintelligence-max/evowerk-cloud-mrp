@@ -9,7 +9,6 @@ import uuid
 from typing import Any
 
 import joblib
-import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -19,7 +18,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.automl_run import AutoMLRun
-from app.services import automl_engine, automl_storage, datasets as datasets_service
+from app.services import automl_engine, automl_runner, automl_storage, datasets as datasets_service
 from app.services.automl_runner import execute_automl_run
 
 router = APIRouter(prefix="/automl", tags=["automl"])
@@ -39,6 +38,7 @@ class TrainRequest(BaseModel):
     forecast_strategy: str = "direct"
     time_budget_seconds: int | None = None
     search_method: str = "random"
+    auto_retrain: bool = False
 
 
 class RunSummary(BaseModel):
@@ -55,6 +55,8 @@ class RunSummary(BaseModel):
     created_at: str
     started_at: str | None
     finished_at: str | None
+    auto_retrain: bool
+    retrained_from_run_id: str | None
 
 
 class RunDetail(RunSummary):
@@ -87,6 +89,8 @@ def _summary(r: AutoMLRun) -> RunSummary:
         created_at=r.created_at.isoformat(),
         started_at=r.started_at.isoformat() if r.started_at else None,
         finished_at=r.finished_at.isoformat() if r.finished_at else None,
+        auto_retrain=r.auto_retrain,
+        retrained_from_run_id=str(r.retrained_from_run_id) if r.retrained_from_run_id else None,
     )
 
 
@@ -109,17 +113,6 @@ def _load_pipeline(run: AutoMLRun):
     if not run.model_path:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Run has no trained model artifact")
     return joblib.load(run.model_path)
-
-
-def _load_explain_sample(org_id: uuid.UUID, run_id: uuid.UUID) -> tuple[pd.DataFrame | None, pd.Series | None]:
-    run_dir = automl_storage.run_dir(org_id, run_id)
-    x_path, y_path = run_dir / "explain_X.csv", run_dir / "explain_y.csv"
-    if not x_path.exists() or not y_path.exists():
-        return None, None
-    X = pd.read_csv(x_path)
-    ydf = pd.read_csv(y_path)
-    y = ydf["y"] if "y" in ydf.columns else ydf.iloc[:, 0]
-    return X, y
 
 
 @router.get("/algorithms")
@@ -152,10 +145,11 @@ async def create_run(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown task '{req.task}'") from None
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
 
-    run = AutoMLRun(
+    run = await automl_runner.create_run(
+        db,
         org_id=current.org_id,
-        dataset_id=dataset.id,
         created_by=current.id,
+        dataset_id=dataset.id,
         name=req.name,
         task=req.task,
         target_column=req.target_column,
@@ -170,9 +164,8 @@ async def create_run(
             "time_budget_seconds": req.time_budget_seconds,
             "search_method": req.search_method,
         },
-        status="queued",
+        auto_retrain=req.auto_retrain,
     )
-    db.add(run)
     await log_event(db, action="automl.train", org_id=current.org_id, actor_user_id=current.id, metadata={"name": req.name, "task": req.task})
     await db.commit()
     await db.refresh(run)
@@ -220,7 +213,7 @@ async def forecast_trajectory(
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, run.dataset_id)
     pipe = _load_pipeline(run)
     df = datasets_service.dataframe_for(dataset)
-    Xs, ys = _load_explain_sample(current.org_id, run_id)
+    Xs, ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.forecast_trajectory(pipe, run.meta or {}, df, Xs, ys, steps=steps)
     except ValueError as exc:
@@ -232,7 +225,7 @@ async def explain(run_id: uuid.UUID, current: CurrentUser = Depends(get_current_
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
-    Xs, ys = _load_explain_sample(current.org_id, run_id)
+    Xs, ys = automl_storage.load_explain_sample(current.org_id, run_id)
     return automl_engine.explain_model(pipe, run.meta or {}, Xs, ys)
 
 
@@ -243,7 +236,7 @@ async def explain_row(
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
-    Xs, ys = _load_explain_sample(current.org_id, run_id)
+    Xs, ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.explain_row(pipe, run.meta or {}, Xs, ys, req.row)
     except (ValueError, RuntimeError) as exc:
@@ -257,7 +250,7 @@ async def partial_dependence(
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
-    Xs, _ys = _load_explain_sample(current.org_id, run_id)
+    Xs, _ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.partial_dependence_data(pipe, run.meta or {}, Xs, feature)
     except ValueError as exc:
@@ -272,7 +265,7 @@ async def drift_check(
     _require_success(run)
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
     df = datasets_service.dataframe_for(dataset)
-    Xs, _ys = _load_explain_sample(current.org_id, run_id)
+    Xs, _ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.check_data_drift(run.meta or {}, Xs, df)
     except ValueError as exc:

@@ -199,3 +199,23 @@ def test_true_string_class_labels_are_not_coerced():
     assert result["meta"]["model_name"] == "RandomForestClassifier"
     preds = set(result["pipeline"].predict(result["explain_X"]))
     assert preds <= {"yes", "no"}
+
+
+@pytest.mark.asyncio
+async def test_create_run_accepts_auto_retrain_flag(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    body = {
+        "name": "Predict y", "dataset_id": dataset_id, "task": "classification",
+        "target_column": "y", "feature_columns": ["x1", "x2"], "thoroughness": "fast",
+        "auto_retrain": True,
+    }
+    created = await client.post("/automl/runs", headers=headers, json=body)
+    assert created.status_code == 202
+    assert created.json()["auto_retrain"] is True
+    assert created.json()["retrained_from_run_id"] is None
+
+    detail = await client.get(f"/automl/runs/{created.json()['id']}", headers=headers)
+    assert detail.json()["auto_retrain"] is True

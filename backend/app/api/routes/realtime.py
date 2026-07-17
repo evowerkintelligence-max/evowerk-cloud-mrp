@@ -49,8 +49,16 @@ def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
     """Live snapshot from the realtime_cache (populated by the Flink job's
     output via realtime_cache.CacheConsumer) if this stream has produced at
     least one windowed metrics message anywhere in the cluster, else a
-    definition-only snapshot."""
-    snap = realtime_cache.get_snapshot(stream.id)
+    definition-only snapshot.
+
+    A stopped stream's cached snapshot is never used, even if one exists -
+    stopping a TickProducer means no more ticks/windows will ever arrive to
+    overwrite it, so the cache would otherwise report a stale "running"
+    snapshot forever. And when a cached snapshot IS used, its "name" field
+    is overlaid with stream.name: the Flink job's MetricSnapshot.name is the
+    stream_id (its key), not the human-readable name - RealtimeStream isn't
+    in the tick payload, so this is the one place that can fill it in."""
+    snap = realtime_cache.get_snapshot(stream.id) if stream.desired_status != "stopped" else None
     if snap is None:
         snap = {
             "ts": None,
@@ -65,6 +73,8 @@ def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
             "last_tick_s": None,
             "metrics": {},
         }
+    else:
+        snap = {**snap, "name": stream.name}
     snap["alerts"] = [vars(a) for a in alerts]
     return snap
 

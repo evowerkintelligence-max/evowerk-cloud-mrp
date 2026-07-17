@@ -157,6 +157,56 @@ async def test_stop_then_start_resumes_collection(client, fake_rest_server):
 
 
 @pytest.mark.asyncio
+async def test_stopped_stream_with_stale_cache_reports_stopped_and_real_name(client, fake_rest_server, monkeypatch):
+    """Regression test for the final-review bug in _snapshot_dict: once
+    realtime_cache has ever cached a real snapshot for a stream_id,
+    get_snapshot() keeps returning it forever (nothing overwrites/evicts a
+    stopped stream's last snapshot) - and that cached snapshot's "name" is
+    the raw stream_id (the Flink job's MetricSnapshot.name = key), not
+    stream.name. No live broker is needed to prove _snapshot_dict handles
+    both: a fake cached snapshot is injected directly into a CacheConsumer
+    instance rather than running one against Redpanda."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
+    integration_id = await _create_rest_integration(client, headers, base_url)
+
+    create = await client.post(
+        "/realtime/streams",
+        headers=headers,
+        json={"integration_id": integration_id, "name": "Line 9", "interval_seconds": 1, "column_map": {}},
+    )
+    stream_id = create.json()["stream_id"]
+
+    fake_consumer = realtime_cache.CacheConsumer(group_id="test", brokers="unused")
+    fake_consumer._snapshots[stream_id] = {
+        "ts": 1.0, "stream_id": stream_id, "name": stream_id,
+        "status": "running", "error": None,
+        "rows_in_window": 3, "rows_collected": 3,
+        "duration": "00:00:05", "duration_s": 5.0, "last_tick_s": 1.0,
+        "metrics": {"throughput": 1.0},
+    }
+    monkeypatch.setattr(realtime_cache, "_instance", fake_consumer)
+
+    # While running, the cached data is used but "name" is overlaid with the
+    # real stream name instead of the raw stream_id.
+    running_snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
+    assert running_snap["status"] == "running"
+    assert running_snap["name"] == "Line 9"
+
+    # Stop the stream. The cache still holds the stale "running" snapshot
+    # (nothing ever overwrites it), but the reported status must reflect the
+    # stop, not the stale cache.
+    stop = await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
+    assert stop.json()["status"] == "stopped"
+    assert stop.json()["name"] == "Line 9"
+
+    snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
+    assert snap["status"] == "stopped"
+    assert snap["name"] == "Line 9"
+
+
+@pytest.mark.asyncio
 async def test_resume_all_streams_reattaches_after_simulated_restart(client, fake_rest_server):
     """The whole point of persisting stream definitions in the DB: a process
     restart (redeploy/crash) shouldn't permanently lose a "running" stream."""

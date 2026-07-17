@@ -5,10 +5,12 @@ fallback for machines with too little history to train on.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import IsolationForest
 
 from app.services import predictive as legacy
 from app.services.automl_templates import AutoMLTemplate, ColumnRole, PreprocessResult, register_template
@@ -175,6 +177,55 @@ def _machine_risk_from_prob(
         "failure_probability": round(fail_prob, 3), "risk_level": risk, "top_driver": driver, "rul_days": rul,
         "last_failure_days_ago": last_fail_ago, "ml_powered": ml_powered, "ml_drivers": drivers,
     }, risk
+
+
+_BADNESS_DIRECTION = {
+    "oee_7d": "low", "oee_slope_7d": "low", "scrap_rate_7d": "high",
+    "dt_rate_7d": "high", "fail_count_7d": "high", "days_since_fail": "low",
+}
+
+
+def _fit_anomaly_model(training_df: pd.DataFrame | None) -> tuple[IsolationForest, np.ndarray, np.ndarray] | None:
+    """Fits an unsupervised baseline over the same rolling-window features
+    used to train the classifier, for machines that don't have enough
+    labeled failures for supervised training but do have enough history to
+    define what "normal" looks like. Returns None below _MIN_ANOMALY_ROWS -
+    too few rows to trust a baseline."""
+    if training_df is None or len(training_df) < _MIN_ANOMALY_ROWS:
+        return None
+    x = training_df[legacy._ML_FEATURES].to_numpy(dtype=float)
+    model = IsolationForest(n_estimators=100, contamination=0.1, random_state=0).fit(x)
+    mean = x.mean(axis=0)
+    std = x.std(axis=0)
+    std[std == 0] = 1.0
+    return model, mean, std
+
+
+def _anomaly_score(
+    model: IsolationForest, mean: np.ndarray, std: np.ndarray, x_row: list[float],
+) -> tuple[float, list[dict]]:
+    """Scores one machine's latest rolling window against the fitted
+    baseline. IsolationForest.decision_function() is positive for inliers,
+    negative for outliers, unbounded - squashed into the same 0-1
+    failure_probability scale the classifier and statistical fallback both
+    already use."""
+    x = np.asarray(x_row, dtype=float).reshape(1, -1)
+    decision = float(model.decision_function(x)[0])
+    prob = round(min(0.99, max(0.01, 1.0 / (1.0 + math.exp(5.0 * decision)))), 3)
+
+    z = (x[0] - mean) / std
+    contributions = []
+    for idx, feature in enumerate(legacy._ML_FEATURES):
+        badness = -z[idx] if _BADNESS_DIRECTION[feature] == "low" else z[idx]
+        badness = max(0.0, badness)
+        if badness < 0.1:
+            continue
+        contributions.append({
+            "feature": feature, "label": legacy._ML_FEAT_LABELS[feature],
+            "importance": round(min(1.0, badness / 3.0), 3), "elevated": badness > 1.5,
+        })
+    contributions.sort(key=lambda d: d["importance"], reverse=True)
+    return prob, contributions[:3]
 
 
 def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

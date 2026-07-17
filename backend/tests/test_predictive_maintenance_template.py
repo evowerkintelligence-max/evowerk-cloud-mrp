@@ -296,3 +296,43 @@ def test_context_carries_training_df_regardless_of_ml_signal():
 
 def test_min_anomaly_rows_constant_is_below_classifier_floor():
     assert pm._MIN_ANOMALY_ROWS < pm._MIN_ROWS
+
+
+def test_fit_anomaly_model_returns_none_below_floor():
+    training_df = pd.DataFrame({f: [0.5] * 10 for f in pm.legacy._ML_FEATURES})
+    assert pm._fit_anomaly_model(training_df) is None
+    assert pm._fit_anomaly_model(None) is None
+
+
+def test_fit_anomaly_model_returns_fitted_model_at_or_above_floor():
+    training_df = pd.DataFrame({f: [0.5] * pm._MIN_ANOMALY_ROWS for f in pm.legacy._ML_FEATURES})
+    fitted = pm._fit_anomaly_model(training_df)
+    assert fitted is not None
+    model, mean, std = fitted
+    assert mean.shape == (6,)
+    assert std.shape == (6,)
+    assert (std > 0).all()  # zero-variance columns must be guarded, not left at 0
+
+
+def test_anomaly_score_flags_low_oee_and_high_scrap_as_top_drivers():
+    training_df = pd.DataFrame({
+        "oee_7d": [0.78, 0.79, 0.80, 0.81, 0.82] * 4,
+        "oee_slope_7d": [0.0] * 20,
+        "scrap_rate_7d": [0.09, 0.10, 0.11, 0.10, 0.09] * 4,
+        "dt_rate_7d": [0.1] * 20,
+        "fail_count_7d": [0.0] * 20,
+        "days_since_fail": [60.0] * 20,
+    })
+    fitted = pm._fit_anomaly_model(training_df)
+    assert fitted is not None
+    model, mean, std = fitted
+
+    bad_row = [0.3, -0.05, 0.6, 0.1, 0.0, 60.0]  # far lower OEE, far higher scrap than baseline
+    prob, drivers = pm._anomaly_score(model, mean, std, bad_row)
+    assert 0.0 <= prob <= 1.0
+    assert prob > 0.5  # this row is a clear outlier vs. the tight baseline
+    feature_names = {d["feature"] for d in drivers}
+    assert "oee_7d" in feature_names
+    assert "scrap_rate_7d" in feature_names
+    for d in drivers:
+        assert 0.0 <= d["importance"] <= 1.0

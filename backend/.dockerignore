@@ -9,3 +9,5 @@ tests/
 scripts/
 .env
 *.db
+streaming/lib/
+.venv-flink310/

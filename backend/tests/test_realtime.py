@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -9,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from app.services import realtime as realtime_service
+from app.services import realtime_cache
 
 PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
 
@@ -40,6 +42,23 @@ def _stop_all_runners_after_each_test():
     without this, a runner from one test could keep polling into the next."""
     yield
     realtime_service.stop_all_runners()
+
+
+@pytest.fixture(autouse=True)
+async def _cache_consumer():
+    """The ASGITransport test client never runs app.main's lifespan (see
+    conftest.client), so realtime_cache's background consumer - which
+    _snapshot_dict reads from - never starts on its own in this process.
+    Only start it when a broker is actually reachable (REDPANDA_BROKERS set,
+    same gate every other live-infra test in this plan uses); otherwise
+    leave it unstarted so these tests keep exercising the "not seen yet"
+    fallback path exactly as before, without needing live infra."""
+    if os.environ.get("REDPANDA_BROKERS"):
+        await realtime_cache.start_cache_consumer()
+        yield
+        await realtime_cache.stop_cache_consumer()
+    else:
+        yield
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
@@ -121,8 +140,20 @@ async def test_stop_then_start_resumes_collection(client, fake_rest_server):
     assert realtime_service.get_runner(stream_id) is None
 
     start = await client.post(f"/realtime/streams/{stream_id}/start", headers=headers)
-    assert start.json()["status"] == "running"
     assert realtime_service.get_runner(stream_id) is not None
+
+    # The /start response's own status field reflects whatever realtime_cache
+    # has cached at that instant, which is empty immediately after a restart -
+    # a real snapshot needs a Flink window (fixed 5s) to close first. Poll the
+    # same way test_stream_collects_and_computes_metrics does rather than
+    # asserting on the immediate response.
+    snap = start.json()
+    for _ in range(40):
+        if snap["status"] == "running":
+            break
+        snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
+        await asyncio.sleep(0.3)
+    assert snap["status"] == "running"
 
 
 @pytest.mark.asyncio

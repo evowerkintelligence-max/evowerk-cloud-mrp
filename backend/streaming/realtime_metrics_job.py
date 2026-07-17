@@ -7,7 +7,14 @@ across windows (not window-local) - same semantics TickProducer's predecessor
 through from the latest tick seen in the window untouched - that's the
 producer's connector-health signal, not something this job computes.
 
-Run: flink run --python realtime_metrics_job.py --jarfile /opt/flink/lib/flink-sql-connector-kafka.jar
+Run: flink run --python realtime_metrics_job.py --jarfile /opt/flink/kafka-connector-bundle.jar
+
+`--jarfile` (not `-C`/`--classpath`, which doesn't reach this same
+classloader) is required: the OperatorCoordinatorHolder that deserializes a
+KafkaSource's SplitEnumerator on job startup resolves classes through the
+per-job "user code" classloader, populated only from the single jar this
+flag points at - see flink.Dockerfile for why that bundle is built from,
+but kept separate from, /opt/flink/lib.
 """
 from __future__ import annotations
 

@@ -38,7 +38,6 @@ services:
       - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
       - --check=false
     ports:
-      - "9092:9092"
       - "19092:19092"
     healthcheck:
       test: ["CMD", "rpk", "cluster", "health"]

@@ -9,29 +9,17 @@ from __future__ import annotations
 import math
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
 
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.dataset import Dataset
 from app.models.maintenance_schedule import MaintenanceSchedule
-from app.services import datasets as ds_service
 
 _CRITICAL_OEE = 0.40
 _WARN_OEE = 0.60
 _RUL_MAX_DAYS = 365.0
 _TREND_WINDOW_DAYS = 21
-
-_HAS_ML = False
-try:
-    from sklearn.ensemble import GradientBoostingClassifier
-    from sklearn.model_selection import GroupKFold, TimeSeriesSplit, cross_val_score
-
-    _HAS_ML = True
-except ImportError:
-    pass
 
 _ML_FEATURES = ["oee_7d", "oee_slope_7d", "scrap_rate_7d", "dt_rate_7d", "fail_count_7d", "days_since_fail"]
 _ML_FEAT_LABELS = {
@@ -134,121 +122,6 @@ def _recent_slope(vals: list[float], window: int = _TREND_WINDOW_DAYS) -> float:
     lifetime - a long healthy history would otherwise dilute a real recent
     degradation almost flat."""
     return _linreg_slope(vals[-min(window, len(vals)):])
-
-
-def _ml_analyze(daily: pd.DataFrame) -> tuple[dict | None, dict | None, dict | None]:
-    """Train a GradientBoosting classifier on rolling 7-day features per
-    machine. Returns (machine_probs, machine_drivers, meta) or (None, None, None)
-    when there isn't enough signal to justify ML over the statistical fallback."""
-    if not _HAS_ML:
-        return None, None, None
-
-    import numpy as np
-
-    W, H, MIN_ROWS = 7, 3, 40
-    all_X: list = []
-    all_y: list = []
-    all_groups: list = []
-    last_X: dict = {}
-
-    def _days_since(fail_arr: Any, up_to: int) -> float:
-        idxs = np.where(fail_arr[:up_to] == 1)[0]
-        return float(up_to - idxs[-1]) if len(idxs) > 0 else 60.0
-
-    for machine, mdf in daily.groupby("machine"):
-        mdf = mdf.sort_values("date").reset_index(drop=True)
-        n = len(mdf)
-        if n < W + H + 1:
-            continue
-
-        oee = mdf["oee"].values.astype(float)
-        scr = mdf["scrap_rate"].values.astype(float)
-        dtr = mdf["dt_rate"].values.astype(float)
-        fail = mdf["is_failure"].values.astype(int)
-
-        for i in range(W, n - H):
-            ow = oee[i - W:i]
-            x = [
-                float(np.mean(ow)), _linreg_slope(ow.tolist()),
-                float(np.mean(scr[i - W:i])), float(np.mean(dtr[i - W:i])),
-                float(np.sum(fail[i - W:i])), _days_since(fail, i),
-            ]
-            y = 1 if np.sum(fail[i:i + H]) > 0 else 0
-            all_X.append(x)
-            all_y.append(y)
-            all_groups.append(str(machine))
-
-        if n >= W:
-            ow = oee[n - W:n]
-            last_X[str(machine)] = [
-                float(np.mean(ow)), _linreg_slope(ow.tolist()),
-                float(np.mean(scr[n - W:n])), float(np.mean(dtr[n - W:n])),
-                float(np.sum(fail[n - W:n])), _days_since(fail, n),
-            ]
-
-    if len(all_X) < MIN_ROWS:
-        return None, None, None
-
-    X = np.array(all_X)
-    y = np.array(all_y)
-    groups = np.array(all_groups)
-
-    pos_rate = float(y.mean())
-    if pos_rate < 0.05 or pos_rate > 0.90:
-        return None, None, None
-
-    model = GradientBoostingClassifier(
-        n_estimators=120, max_depth=3, learning_rate=0.08, min_samples_leaf=4, subsample=0.8, random_state=42,
-    )
-
-    n_machines = len(set(all_groups))
-    if n_machines >= 2:
-        cv = GroupKFold(n_splits=min(3, n_machines))
-        cv_scores = cross_val_score(model, X, y, cv=cv, groups=groups, scoring="balanced_accuracy")
-    else:
-        cv = TimeSeriesSplit(n_splits=3)
-        cv_scores = cross_val_score(model, X, y, cv=cv, scoring="balanced_accuracy")
-
-    cv_acc = float(np.mean(cv_scores))
-    if cv_acc < 0.55:
-        return None, None, None
-
-    model.fit(X, y)
-    imps = model.feature_importances_
-
-    top3 = sorted(zip(_ML_FEATURES, imps), key=lambda z: z[1], reverse=True)[:3]
-    top_features = [{"feature": f, "label": _ML_FEAT_LABELS[f], "importance": round(float(v), 3)} for f, v in top3]
-
-    X_mean = X.mean(axis=0)
-    X_std = X.std(axis=0, ddof=1) + 1e-9 if len(X) > 1 else X.std(axis=0) + 1e-9
-
-    machine_probs: dict = {}
-    machine_drivers: dict = {}
-
-    for machine, x_row in last_X.items():
-        xv = np.array(x_row).reshape(1, -1)
-        prob = float(model.predict_proba(xv)[0][1])
-        machine_probs[machine] = round(min(prob, 0.99), 3)
-
-        z = (np.array(x_row) - X_mean) / X_std
-        drivers = []
-        for j, (feat, imp) in enumerate(zip(_ML_FEATURES, imps)):
-            if imp < 0.04:
-                continue
-            elevated = (
-                (feat in ("scrap_rate_7d", "dt_rate_7d", "fail_count_7d") and z[j] > 0.3)
-                or (feat in ("oee_7d", "oee_slope_7d") and z[j] < -0.3)
-                or (feat == "days_since_fail" and z[j] < -0.5)
-            )
-            drivers.append({"feature": feat, "label": _ML_FEAT_LABELS[feat], "importance": round(float(imp), 3), "elevated": bool(elevated)})
-        drivers.sort(key=lambda d: d["importance"], reverse=True)
-        machine_drivers[machine] = drivers[:3]
-
-    meta = {
-        "algorithm": "Gradient Boosting Classifier", "accuracy_pct": round(cv_acc * 100, 1),
-        "n_training_samples": len(X), "top_features": top_features,
-    }
-    return machine_probs, machine_drivers, meta
 
 
 def _stat_analyze(
@@ -413,124 +286,6 @@ def _build_daily(
         daily_ml["is_failure"] = 0
 
     return grouped, daily_ml, days_per_period
-
-
-def analyze(
-    dataset: Dataset, *, date_col: str, machine_col: str, planned_time_col: str, operating_time_col: str,
-    total_units_col: str, good_units_col: str, target_rate: float | None, failure_col: str | None,
-    downtime_category_col: str | None, hourly_value: float,
-) -> PredictiveResult:
-    ds_service.validate_columns(dataset, [
-        date_col, machine_col, planned_time_col, operating_time_col, total_units_col, good_units_col,
-        failure_col, downtime_category_col,
-    ])
-    df = ds_service.dataframe_for(dataset)
-
-    grouped, daily_ml, days_per_period = _build_daily(
-        df, date_col=date_col, machine_col=machine_col, planned_time_col=planned_time_col,
-        operating_time_col=operating_time_col, total_units_col=total_units_col, good_units_col=good_units_col,
-        target_rate=target_rate, downtime_category_col=downtime_category_col,
-    )
-    # _build_daily copies its own df internally (so it doesn't mutate ours),
-    # but analyze()'s own df is reused below for the failure_col/
-    # downtime_category_col last_fail_ago lookback and needs the same
-    # datetime-coerced date_col dtype.
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df.dropna(subset=[date_col]).sort_values(date_col)
-
-    ml_probs, ml_drivers, ml_meta_raw = _ml_analyze(daily_ml)
-    model_meta = ModelMeta(**ml_meta_raw) if ml_meta_raw else None
-
-    fleet_last_oee: list[float] = []
-    for _, mdf in grouped.groupby(machine_col):
-        vals = mdf.sort_values(date_col)["oee"].tolist()
-        if vals:
-            fleet_last_oee.append(vals[-1])
-    fleet_last_oee.sort()
-    fleet_oee_median = fleet_last_oee[len(fleet_last_oee) // 2] if fleet_last_oee else 0.0
-
-    machines_out: list[MachineRisk] = []
-    recs_out: list[MaintenanceRec] = []
-
-    for machine, mdf in grouped.groupby(machine_col):
-        mdf = mdf.sort_values(date_col)
-        oee_s, avail_s, perf_s, qual_s = mdf["oee"].tolist(), mdf["avail"].tolist(), mdf["perf"].tolist(), mdf["qual"].tolist()
-        if not oee_s:
-            continue
-
-        current_oee = oee_s[-1]
-        slope = _recent_slope(oee_s)
-        avg_a, avg_p, avg_q = sum(avail_s) / len(avail_s), sum(perf_s) / len(perf_s), sum(qual_s) / len(qual_s)
-        driver = _top_driver(avg_a, avg_p, avg_q)
-
-        last_fail_ago: float | None = None
-        machine_max_date = mdf[date_col].max()
-        if failure_col and failure_col in df.columns:
-            mfail_df = df[df[machine_col] == machine].copy()
-            mfail_df[failure_col] = pd.to_numeric(mfail_df[failure_col], errors="coerce").fillna(0)
-            mfail = mfail_df[mfail_df[failure_col] > 0]
-            if not mfail.empty:
-                last_fail_ago = float((machine_max_date - mfail[date_col].max()).days)
-        elif downtime_category_col and downtime_category_col in df.columns:
-            mfail = df[(df[machine_col] == machine) & df[downtime_category_col].isin(_UNPLANNED_CATS)]
-            if not mfail.empty:
-                last_fail_ago = float((machine_max_date - mfail[date_col].max()).days)
-
-        machine_key = str(machine)
-        if ml_probs and machine_key in ml_probs:
-            fail_prob, ml_powered = ml_probs[machine_key], True
-            drivers = ml_drivers.get(machine_key, []) if ml_drivers else []
-        else:
-            fail_prob, drivers = _stat_analyze(oee_s, avail_s, perf_s, qual_s, last_fail_ago, fleet_oee_median)
-            ml_powered = False
-
-        accel = 0.0
-        if len(oee_s) >= 14:
-            accel = _linreg_slope(oee_s[-7:]) - _linreg_slope(oee_s[-14:-7])
-        rul = _rul_days(current_oee, slope, days_per_period, accel=accel)
-
-        if fail_prob >= 0.65 or current_oee < _CRITICAL_OEE:
-            risk = "high"
-        elif fail_prob >= 0.35 or current_oee < _WARN_OEE:
-            risk = "medium"
-        else:
-            risk = "low"
-
-        machines_out.append(MachineRisk(
-            machine=machine_key, current_oee=round(current_oee, 4), trend_slope=round(slope, 5),
-            failure_probability=fail_prob, risk_level=risk, top_driver=driver, rul_days=rul,
-            last_failure_days_ago=last_fail_ago, ml_powered=ml_powered, ml_drivers=drivers,
-        ))
-
-        priority = {"high": "immediate", "medium": "scheduled", "low": "monitor"}[risk]
-        action, reason = _ACTIONS.get(driver, ("General inspection recommended", "Multiple metrics declining"))
-        pm_hours = _PM_HOURS[priority]
-        avoided_h = round(fail_prob * 48.0, 1)
-        net_saving = round((avoided_h - pm_hours) * hourly_value, 2)
-
-        recs_out.append(MaintenanceRec(
-            machine=machine_key, priority=priority, action=action, reason=reason,
-            estimated_pm_hours=pm_hours, avoided_downtime_hours=avoided_h, net_saving=net_saving,
-        ))
-
-    risk_order = {"high": 0, "medium": 1, "low": 2}
-    machines_out.sort(key=lambda m: (risk_order.get(m.risk_level, 3), -m.failure_probability))
-    recs_out.sort(key=lambda r: {"immediate": 0, "scheduled": 1, "monitor": 2}.get(r.priority, 3))
-
-    at_risk = sum(1 for m in machines_out if m.risk_level in ("high", "medium"))
-    total_avoided = sum(r.avoided_downtime_hours * hourly_value for r in recs_out)
-    total_pm = sum(r.estimated_pm_hours * hourly_value for r in recs_out)
-    net_savings = round(total_avoided - total_pm, 2)
-    roi_pct = round((net_savings / total_pm * 100) if total_pm > 0 else 0.0, 1)
-
-    return PredictiveResult(
-        machines=machines_out, recommendations=recs_out,
-        cost_summary=CostSummary(
-            total_avoided_cost=round(total_avoided, 2), total_pm_cost=round(total_pm, 2),
-            net_savings=net_savings, roi_pct=roi_pct, machines_at_risk=at_risk,
-        ),
-        model_meta=model_meta,
-    )
 
 
 # ─── Maintenance schedule CRUD ──────────────────────────────────────────────

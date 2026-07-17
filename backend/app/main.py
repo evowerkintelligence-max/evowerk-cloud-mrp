@@ -50,6 +50,7 @@ from app.api.routes import (
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
 from app.services import realtime as realtime_service
+from app.services import realtime_cache
 
 settings = get_settings()
 
@@ -59,7 +60,11 @@ async def lifespan(app: FastAPI):
     # Re-adopt any realtime stream that was running before this process
     # started (redeploy/restart/crash) - see app.services.realtime.
     await realtime_service.resume_all_streams()
+    # Start this replica's realtime_cache consumer - see its module
+    # docstring for why every replica needs its own consumer group.
+    await realtime_cache.start_cache_consumer()
     yield
+    await realtime_cache.stop_cache_consumer()
     realtime_service.stop_all_runners()
 
 

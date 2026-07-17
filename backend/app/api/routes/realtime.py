@@ -28,6 +28,7 @@ from app.models.integration import Integration
 from app.models.realtime import RealtimeStream
 from app.services import alerts as alerts_service
 from app.services import realtime as realtime_service
+from app.services import realtime_cache
 
 router = APIRouter(prefix="/realtime", tags=["realtime"])
 
@@ -45,15 +46,12 @@ class StreamCreate(BaseModel):
 
 
 def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
-    """Live snapshot if this process has a running collector for this stream,
-    else a definition-only snapshot (honest about "not running here" rather
-    than silently showing stale/blank metrics - see module docstring on the
-    in-memory/multi-replica caveat). Alarm state from any enabled stream_metric
-    alert rules targeting this stream rides along, same as the desktop app."""
-    runner = realtime_service.get_runner(stream.id)
-    if runner is not None:
-        snap = runner.snapshot()
-    else:
+    """Live snapshot from the realtime_cache (populated by the Flink job's
+    output via realtime_cache.CacheConsumer) if this stream has produced at
+    least one windowed metrics message anywhere in the cluster, else a
+    definition-only snapshot."""
+    snap = realtime_cache.get_snapshot(stream.id)
+    if snap is None:
         snap = {
             "ts": None,
             "stream_id": str(stream.id),

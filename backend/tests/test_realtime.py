@@ -84,12 +84,14 @@ async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
     assert create.status_code == 200, create.text
     stream_id = create.json()["stream_id"]
 
-    # Give the background collector a couple of ticks.
-    for _ in range(20):
+    # Give the background collector a couple of ticks. Poll budget is wider
+    # than the Flink job's fixed 5s tumbling window (~12s total) so metrics
+    # have time to arrive even against live infra.
+    for _ in range(40):
         snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
         if snap["rows_collected"] > 0:
             break
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.3)
 
     assert snap["status"] == "running"
     assert snap["rows_collected"] > 0

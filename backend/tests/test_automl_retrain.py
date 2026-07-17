@@ -231,3 +231,40 @@ async def test_circuit_breaker_trips_after_max_consecutive_rejections(client, te
         run = (await db.execute(select(AutoMLRun).where(AutoMLRun.id == uuid.UUID(run_id)))).scalar_one()
         assert run.auto_retrain is False
         assert run.auto_retrain_streak == automl_retrain.MAX_AUTO_RETRAIN_STREAK
+
+
+async def test_incident_close_schedules_retrain_check_end_to_end(client, test_engine, monkeypatch):
+    """Full path: real HTTP incident-close -> overwrite_dataset_file ->
+    BackgroundTasks -> maybe_retrain_for_dataset. Patches
+    maybe_retrain_for_dataset itself (not its internals) so this test
+    verifies the WIRING (was it called, with what args), not the drift
+    policy already covered by Task 3's tests."""
+    from app.services import automl_retrain
+
+    calls: list[tuple[str, str]] = []
+
+    async def _fake_retrain(org_id: str, dataset_id: str) -> None:
+        calls.append((org_id, dataset_id))
+
+    monkeypatch.setattr(automl_retrain, "maybe_retrain_for_dataset", _fake_retrain)
+
+    token = await _register_and_login_local(client, "arwiring@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    start = await client.post(
+        "/downtime-tracking/incidents", headers=headers,
+        json={"machine": "Line 1", "reason": "breakdown", "shift": "A"},
+    )
+    incident_id = start.json()["id"]
+    ended = await client.post(f"/downtime-tracking/incidents/{incident_id}/end", headers=headers)
+    dataset_id = ended.json()["live_dataset_id"]
+    assert calls == []  # first materialization is a create, not an overwrite - no trigger yet
+
+    start2 = await client.post(
+        "/downtime-tracking/incidents", headers=headers,
+        json={"machine": "Line 2", "reason": "other", "shift": "A"},
+    )
+    await client.post(f"/downtime-tracking/incidents/{start2.json()['id']}/end", headers=headers)
+
+    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
+    assert calls == [(org_id, dataset_id)]

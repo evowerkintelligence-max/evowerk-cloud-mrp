@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import duckdb
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -149,17 +149,34 @@ async def create_dataset(
     return dataset
 
 
-async def overwrite_dataset_file(db: AsyncSession, dataset: Dataset, *, data: bytes) -> Dataset:
+async def overwrite_dataset_file(
+    db: AsyncSession, dataset: Dataset, *, data: bytes, background_tasks: "BackgroundTasks | None" = None
+) -> Dataset:
     """Rewrite an existing, already-created dataset's file in place and
     re-sniff its schema/row count. Used by live-capture features (the
-    downtime-tracking board) whose Dataset keeps growing instead of being
-    created once - see storage.replace_dataset_file for the atomicity note."""
+    downtime-tracking board, shift-forecast source) whose Dataset keeps
+    growing/refreshing instead of being created once - see
+    storage.replace_dataset_file for the atomicity note.
+
+    When background_tasks is provided, also schedules a check of whether
+    any AutoML run watching this dataset (AutoMLRun.auto_retrain=True)
+    should be retrained for drift - see app.services.automl_retrain. The
+    import below is local, not at module level, specifically to avoid a
+    circular import: automl_retrain imports dataframe_for from this same
+    module at its own module level.
+    """
     storage.replace_dataset_file(dataset.org_id, dataset.id, dataset.storage_ext, data)
     columns, row_count = _sniff(storage.dataset_path(dataset.org_id, dataset.id, dataset.storage_ext))
     dataset.columns = columns
     dataset.row_count = row_count
     dataset.size_bytes = len(data)
     await db.flush()
+    if background_tasks is not None:
+        from app.services import automl_retrain
+
+        background_tasks.add_task(
+            automl_retrain.maybe_retrain_for_dataset, str(dataset.org_id), str(dataset.id)
+        )
     return dataset
 
 

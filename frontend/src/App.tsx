@@ -37,6 +37,7 @@ import { AutoMLRun } from "./pages/automl/AutoMLRun";
 import { TemplatesHome } from "./pages/automl/TemplatesHome";
 import { ResultsView as AutoMLTemplateResultsView } from "./pages/automl/templates/ResultsView";
 import { Kpis } from "./pages/Kpis";
+import { KpiDashboards } from "./pages/KpiDashboards";
 import { Integrations } from "./pages/Integrations";
 import { Realtime } from "./pages/Realtime";
 import { RcaCases } from "./pages/RcaCases";
@@ -109,6 +110,7 @@ export function App() {
         <Route path="/automl/advanced/new" element={<AutoMLRun />} />
         <Route path="/automl/advanced/:id" element={<AutoMLRun />} />
         <Route path="/kpis" element={<Kpis />} />
+        <Route path="/kpis/dashboards" element={<KpiDashboards />} />
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/realtime" element={<Realtime />} />
         <Route path="/rca-cases" element={<RcaCases />} />

@@ -16,7 +16,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { C, ColumnChecklist, EChart, QueryBuilderFields, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { C, ColumnChecklist, EChart, QueryBuilderFields, SendToReportButton, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
 import { controlChart } from "./Spc";
 import { StatCard } from "@/components/StatCard";
 
@@ -1048,8 +1048,9 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
 
       {query.isSuccess && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <CardTitle>Results ({query.data.rows.length} rows)</CardTitle>
+            <SendToReportButton spec={{ type: "table", dataset_id: d.id, query: qb.toRequestBody() }} label={d.name} />
           </CardHeader>
           <CardContent>
             <TableWrap className="max-h-[32rem] overflow-y-auto">
@@ -1081,6 +1082,13 @@ function QueryPanel({ d }: { d: DatasetDetail }) {
   );
 }
 
+// Strips DuckDB's internal error-class jargon ("Binder Error:", "Parser Error:", ...)
+// from the message the backend passes through as-is (see sql_query.py) so the
+// user sees the useful part (what's wrong with their query) without the label.
+function friendlySqlError(detail: string): string {
+  return detail.replace(/^Query failed: (Binder|Parser|Catalog|Conversion|Syntax) Error:\s*/i, "Query failed: ");
+}
+
 function SqlPanel({ d }: { d: DatasetDetail }) {
   const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 100`);
 
@@ -1107,7 +1115,7 @@ function SqlPanel({ d }: { d: DatasetDetail }) {
         method: "POST",
         body: JSON.stringify({ sql, limit: 500 }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Query failed");
+      if (!res.ok) throw new Error(friendlySqlError((await res.json()).detail ?? "Query failed"));
       return res.json() as Promise<QueryResult>;
     },
   });

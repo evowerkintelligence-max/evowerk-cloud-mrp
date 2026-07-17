@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import * as echarts from "echarts";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
@@ -452,10 +452,8 @@ export function EngineScreen<T>({
   runLabel?: string;
   children: (result: T) => ReactNode;
 }) {
-  const qc = useQueryClient();
   const [datasetId, setDatasetId] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
-  const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -499,31 +497,6 @@ export function EngineScreen<T>({
     const cols = datasets.data?.find((d) => d.id === id)?.columns.map((c) => c.name) ?? [];
     setForm(autoMapColumns(fields, cols));
   }
-
-  const upload = useMutation({
-    mutationFn: async () => {
-      if (!file) throw new Error("Choose a file first");
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await apiFetch("/datasets", { method: "POST", body: fd });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Upload failed");
-      return res.json() as Promise<Dataset>;
-    },
-    onSuccess: async (ds) => {
-      setError(null);
-      await qc.invalidateQueries({ queryKey: ["datasets"] });
-      setDatasetId(ds.id);
-      const cols = ds.columns.map((c) => c.name);
-      const next: Record<string, string> = {};
-      for (const f of fields) {
-        if (f.kind && f.kind !== "col") continue;
-        const match = f.hints?.map((h) => cols.find((c) => h.test(c))).find(Boolean);
-        if (match) next[f.key] = match;
-      }
-      setForm(next);
-    },
-    onError: (e: Error) => setError(e.message),
-  });
 
   const lastComputeBody = useRef<Record<string, unknown> | null>(null);
 
@@ -593,7 +566,7 @@ export function EngineScreen<T>({
         <CardHeader>
           <CardTitle>Dataset</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        <CardContent className="grid gap-2 sm:max-w-sm">
           <Field label="Dataset">
             <Select value={datasetId} onChange={(e) => pickDataset(e.target.value)}>
               <option value="">Select a dataset…</option>
@@ -604,19 +577,13 @@ export function EngineScreen<T>({
               ))}
             </Select>
           </Field>
-          <Field label="…or upload CSV / Excel">
-            <div className="flex gap-2">
-              <Input
-                type="file"
-                accept=".csv,.tsv,.xlsx,.xls,.json,.parquet"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                className="file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-foreground"
-              />
-              <Button variant="secondary" loading={upload.isPending} onClick={() => upload.mutate()}>
-                Upload
-              </Button>
-            </div>
-          </Field>
+          <p className="text-sm text-muted-foreground">
+            Need a new dataset?{" "}
+            <Link to="/datasets" className="text-primary underline underline-offset-2">
+              Upload one in Datasets
+            </Link>
+            .
+          </p>
         </CardContent>
       </Card>
 

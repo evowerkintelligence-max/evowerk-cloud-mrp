@@ -11,7 +11,7 @@ import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EChart } from "../analytics/shared";
+import { EChart, SendToReportButton } from "../analytics/shared";
 import { chartOption, THEMES, toCategoryValueRows, type ChartType, type ThemeKey } from "./shared";
 
 interface ChartMeta {
@@ -101,7 +101,8 @@ function ChartCard({
           </Button>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-2">
+        <SendToReportButton spec={{ type: "bi_chart", chart_id: chart.id }} label={chart.name} />
         {data.isLoading ? (
           <Skeleton className="h-64 w-full" />
         ) : data.isError ? (

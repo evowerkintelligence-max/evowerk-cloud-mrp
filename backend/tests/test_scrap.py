@@ -81,7 +81,22 @@ async def test_scrap_swapped_columns_warn(client):
     assert res.status_code == 200
     b = res.json()
     assert b["scrap_rate_pct"] > 100
-    assert any("swapped" in w or "exceed" in w.lower() for w in b["warnings"])
+    assert any("swapped" in w.lower() or "exceed" in w.lower() for w in b["warnings"])
+
+
+async def test_scrap_text_total_column_warns(client):
+    # Mapping total to a text column sums to 0 — must warn, not report 0% scrap.
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    res = await client.post(
+        "/analytics/scrap",
+        json={"dataset_id": dataset_id, "total_units_col": "reason", "scrap_col": "scrap"},
+        headers=_h(token),
+    )
+    assert res.status_code == 200
+    b = res.json()
+    assert b["total_units"] == 0.0
+    assert len(b["warnings"]) > 0
 
 
 async def test_scrap_clean_data_has_no_warnings(client):

@@ -109,7 +109,7 @@ interface QualityAnalyzeResponse {
   correlations: QualityCorrelation[];
   trend: QualityTrendPoint[];
   trend_control: QualityTrendControl | null;
-  warnings: string[];
+  warnings?: string[];
 }
 
 interface ProcessActivity {
@@ -730,9 +730,11 @@ function QualityPanel({ d }: { d: DatasetDetail }) {
 
       {quality.data && (
         <>
-          {quality.data.warnings.length > 0 && (
-            <Alert variant="destructive">{quality.data.warnings.join(" ")}</Alert>
-          )}
+          {quality.data.warnings?.map((w) => (
+            <Alert key={w} variant="warning">
+              {w}
+            </Alert>
+          ))}
           <Card>
             <CardContent className="pt-6 text-sm">
               <strong>

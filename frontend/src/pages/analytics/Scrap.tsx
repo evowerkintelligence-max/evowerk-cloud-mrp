@@ -35,7 +35,11 @@ export function Scrap() {
     >
       {(r) => (
         <div className="space-y-6">
-          {(r.warnings?.length ?? 0) > 0 && <Alert variant="destructive">{r.warnings!.join(" ")}</Alert>}
+          {r.warnings?.map((w) => (
+            <Alert key={w} variant="warning">
+              {w}
+            </Alert>
+          ))}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard label="Total units" value={fmt(r.total_units)} tone="primary" />
             <StatCard label="Scrap units" value={<span style={{ color: C.red }}>{fmt(r.total_scrap)}</span>} tone="accent" />

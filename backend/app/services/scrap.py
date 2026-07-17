@@ -57,7 +57,10 @@ def compute_scrap(dataset: Dataset, req: Any) -> dict:
     # Wrong column mappings produce plausible-looking garbage; flag the two
     # cases that can only mean a mismapped column so the UI can warn.
     warnings: list[str] = []
-    if total_scrap > total_units > 0:
+    # total_scrap > 0 guard keeps all-zero datasets warning-free; comparing
+    # against total_units (even 0, e.g. a text column TRY_CASTing to NULL)
+    # catches both swapped and dead total columns.
+    if total_scrap > 0 and total_scrap > total_units:
         warnings.append(
             "Scrap units exceed total units — the scrap and total columns are likely swapped or mismapped."
         )

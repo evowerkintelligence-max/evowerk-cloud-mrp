@@ -74,3 +74,4 @@ def list_templates() -> list[AutoMLTemplate]:
 
 
 from app.services.automl_templates import predictive_maintenance  # noqa: E402,F401 - registers the template
+from app.services.automl_templates import scrap_prediction  # noqa: E402,F401 - registers the template

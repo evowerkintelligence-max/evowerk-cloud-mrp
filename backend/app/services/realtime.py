@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
 
+from kafka import KafkaProducer
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -32,6 +32,7 @@ from app.models.integration import Integration
 from app.models.realtime import RealtimeStream
 from app.services.connectors import get_connector
 from app.services.integrations import decrypt_config
+from streaming.schemas import TICKS_TOPIC, Tick
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -83,7 +84,16 @@ def delete_history(stream_id: str) -> None:
         pass
 
 
-class StreamRunner:
+class TickProducer:
+    """Polls one Integration's connector on an interval and publishes each
+    row to Redpanda's realtime.ticks topic, partitioned by stream_id. This
+    replaces StreamRunner's old in-memory buffer + metric computation - both
+    now live downstream, in the Flink job (streaming/realtime_metrics_job.py)
+    and the cache consumer (app.services.realtime_cache). Still a plain
+    background thread, same as the old StreamRunner: the connectors are all
+    blocking sync I/O, so a thread (not asyncio) is the right primitive
+    here, and kafka-python's synchronous KafkaProducer matches that."""
+
     def __init__(
         self,
         stream_id: str,
@@ -93,7 +103,6 @@ class StreamRunner:
         column_map: dict[str, str],
         interval_seconds: int,
         accumulate: bool,
-        max_rows: int = 10_000,
     ):
         self.stream_id = stream_id
         self.name = name
@@ -104,15 +113,14 @@ class StreamRunner:
         self.accumulate = accumulate
         self.status = "running"
         self.error: str | None = None
-        self.rows_collected = 0
-        self.started_at = datetime.now(timezone.utc)
-        self.last_tick: datetime | None = None
 
-        self._buffer: deque = deque(maxlen=max_rows)
-        self._lock = Lock()
-        self._history_path = history_path(stream_id)
+        # No network I/O here - KafkaProducer construction (and its ~30s
+        # bootstrap timeout against an unreachable broker) happens in _run(),
+        # on the background thread, so __init__ (called from the request
+        # thread handling POST /realtime/streams) always returns immediately.
+        self._producer: KafkaProducer | None = None
         self._stop = Event()
-        self._thread = Thread(target=self._run, daemon=True, name=f"stream-{stream_id[:8]}")
+        self._thread = Thread(target=self._run, daemon=True, name=f"tick-producer-{stream_id[:8]}")
         self._thread.start()
 
     def _run(self) -> None:
@@ -123,126 +131,54 @@ class StreamRunner:
             self.error = f"Connector init failed: {exc}"
             return
 
+        settings = get_settings()
+        try:
+            self._producer = KafkaProducer(
+                bootstrap_servers=settings.redpanda_brokers,
+                value_serializer=lambda v: v,
+                key_serializer=lambda k: k.encode("utf-8") if isinstance(k, str) else k,
+            )
+        except Exception as exc:
+            self.status = "error"
+            self.error = f"Redpanda connection failed: {exc}"
+            return
+
         while not self._stop.is_set():
             try:
                 rows: list[dict] = conn.fetch_all()
-                if rows:
-                    with self._lock:
-                        if not self.accumulate:
-                            self._buffer.clear()
-                        # cap per-fetch append to avoid millions of rows from large SQL pulls
-                        self._buffer.extend(rows[-1_000:])
-                        self.rows_collected += len(rows)
-                    self.last_tick = datetime.now(timezone.utc)
-                    self._append_history()
                 self.error = None
                 if self.status == "error":
                     self.status = "running"
+                now = datetime.now(timezone.utc).isoformat()
+                for row in rows[-1_000:]:
+                    tick = Tick(
+                        stream_id=self.stream_id,
+                        org_id="",  # filled in by callers that have org context; not needed downstream today
+                        column_map=self.column_map,
+                        row=row,
+                        status=self.status,
+                        error=self.error,
+                        collected_at=now,
+                    )
+                    self._producer.send(TICKS_TOPIC, key=self.stream_id, value=tick.to_json())
+                self._producer.flush()
             except Exception as exc:
                 self.error = str(exc)
                 self.status = "error"
 
-            # MQTT fetch_all already blocks for collect_seconds; others need explicit wait.
             if self.integration_type != "mqtt":
                 self._stop.wait(timeout=self.interval_seconds)
 
     def stop(self) -> None:
         self._stop.set()
         self._thread.join(timeout=5)
-
-    def _append_history(self) -> None:
-        # History persistence is a nice-to-have for replay/restart-survival, not
-        # the collector's core job — a disk hiccup here must never take down the
-        # background thread that's actually pulling live data.
-        try:
-            snap = self.snapshot()
-            with self._history_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"ts": snap["ts"], "metrics": snap["metrics"]}) + "\n")
-        except Exception:
-            pass
-
-    def snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            rows = list(self._buffer)
-
-        now = datetime.now(timezone.utc)
-        age_s = (now - self.started_at).total_seconds()
-        age_min = age_s / 60
-
-        metrics: dict[str, Any] = {}
-        cm = self.column_map
-
-        uc = cm.get("units_col")
-        if uc:
-            vals = [_safe_float(r.get(uc, 0)) for r in rows]
-            total_units = sum(vals)
-            metrics["throughput"] = round(total_units, 1)
-            if age_min > 0:
-                metrics["throughput_rate"] = round(total_units / age_min, 2)
-
-        sc = cm.get("scrap_col")
-        tuc = cm.get("total_units_col") or uc
-        if sc and tuc:
-            total = sum(_safe_float(r.get(tuc, 0)) for r in rows)
-            scrap = sum(_safe_float(r.get(sc, 0)) for r in rows)
-            if total > 0:
-                scrap_pct = round(scrap / total * 100, 2)
-                metrics["scrap_rate_pct"] = scrap_pct
-                metrics["fpy_pct"] = round(100 - scrap_pct, 2)
-
-        dc = cm.get("downtime_col")
-        if dc:
-            metrics["total_downtime_min"] = round(sum(_safe_float(r.get(dc, 0)) for r in rows), 1)
-
-        pt = cm.get("planned_time_col")
-        ot = cm.get("operating_time_col")
-        guc = cm.get("good_units_col")
-        tpc = cm.get("target_rate_col")
-        if pt and ot and guc and uc:
-            tp_total = sum(_safe_float(r.get(pt, 0)) for r in rows)
-            op_total = sum(_safe_float(r.get(ot, 0)) for r in rows)
-            u_total = sum(_safe_float(r.get(uc, 0)) for r in rows)
-            g_total = sum(_safe_float(r.get(guc, 0)) for r in rows)
-            avail = (op_total / tp_total * 100) if tp_total > 0 else 0.0
-            quality = (g_total / u_total * 100) if u_total > 0 else 0.0
-            perf = 100.0
-            if tpc:
-                target_total = sum(_safe_float(r.get(tpc, 0)) for r in rows)
-                if target_total > 0:
-                    perf = u_total / target_total * 100
-            oee = avail * (perf / 100) * (quality / 100)
-            metrics["availability_pct"] = round(avail, 1)
-            metrics["quality_pct"] = round(quality, 1)
-            metrics["performance_pct"] = round(perf, 1)
-            metrics["oee_pct"] = round(oee, 1)
-
-        dur_s = int(age_s)
-        h, rem = divmod(dur_s, 3600)
-        m, s = divmod(rem, 60)
-        duration_str = f"{h:02d}:{m:02d}:{s:02d}"
-
-        last_tick_s: float | None = None
-        if self.last_tick:
-            last_tick_s = round((now - self.last_tick).total_seconds(), 1)
-
-        return {
-            "ts": now.isoformat(),
-            "stream_id": self.stream_id,
-            "name": self.name,
-            "status": self.status,
-            "error": self.error,
-            "rows_in_window": len(rows),
-            "rows_collected": self.rows_collected,
-            "duration": duration_str,
-            "duration_s": dur_s,
-            "last_tick_s": last_tick_s,
-            "metrics": metrics,
-        }
+        if self._producer is not None:
+            self._producer.close(timeout=5)
 
 
 # ── Global registry (this process only - see module docstring) ──────────────
 
-_runners: dict[str, StreamRunner] = {}
+_runners: dict[str, TickProducer] = {}
 _registry_lock = Lock()
 
 
@@ -255,7 +191,7 @@ def start_runner(
     column_map: dict[str, str],
     interval_seconds: int,
     accumulate: bool,
-) -> StreamRunner:
+) -> TickProducer:
     """(Re)start the in-memory collector for an existing stream_id. Stopping
     any prior runner for the same id first makes this idempotent, needed both
     for an explicit "start" call on an already-defined stream and for
@@ -267,7 +203,7 @@ def start_runner(
     if existing is not None:
         existing.stop()
 
-    runner = StreamRunner(
+    runner = TickProducer(
         stream_id=sid,
         name=name,
         integration_type=integration_type,
@@ -281,7 +217,7 @@ def start_runner(
     return runner
 
 
-def get_runner(stream_id: uuid.UUID) -> StreamRunner | None:
+def get_runner(stream_id: uuid.UUID) -> TickProducer | None:
     return _runners.get(str(stream_id))
 
 

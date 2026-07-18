@@ -16,11 +16,25 @@
 # delay every tick until the buffer filled, and its 60s default read timeout
 # would silently cut a stream whose interval_seconds is set above that.
 
+# Plain `proxy_pass http://host:port` resolves the hostname once, at nginx
+# startup, and caches it for the worker's lifetime. In ECS, the frontend task
+# can (and does) start before the backend task exists in Cloud Map yet, so
+# that one-time lookup fails and every request 502s/hangs forever after -
+# restarting the frontend task once the backend is up was the only fix. A
+# `resolver` + a variable in proxy_pass makes nginx re-resolve per the `valid`
+# TTL instead, so it recovers on its own once the backend registers.
+resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+
 server {
     listen 80;
 
     root /usr/share/nginx/html;
     index index.html;
+
+    # Default is 1m - too small for dataset uploads (/datasets accepts CSV,
+    # Excel, and Parquet production data files). Backend imposes no limit of
+    # its own, so this is the only cap in the request path.
+    client_max_body_size 200m;
 
     gzip on;
     gzip_types text/css application/javascript application/json;
@@ -31,7 +45,8 @@ server {
     }
 
     location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|alerts|artifacts|computer-vision|data-chat|predictive|rca-cases|scenarios)(/|$) {
-        proxy_pass http://${BACKEND_UPSTREAM};
+        set $backend_upstream ${BACKEND_UPSTREAM};
+        proxy_pass http://$backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

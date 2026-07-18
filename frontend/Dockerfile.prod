@@ -30,4 +30,9 @@ COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 # *.template files in /etc/nginx/templates/ automatically before starting.
 ENV BACKEND_UPSTREAM=backend:8000
 
+# Makes the official entrypoint export $NGINX_LOCAL_RESOLVERS (read from this
+# container's own /etc/resolv.conf - the VPC's DNS resolver under ECS) - see
+# nginx.conf.template's `resolver` directive for why this needs to be dynamic.
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+
 EXPOSE 80

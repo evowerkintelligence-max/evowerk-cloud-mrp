@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { SendToReportButton } from "./analytics/shared";
+import { SendToReportButton, fmt } from "./analytics/shared";
 
 interface ItemResponse {
   id: string;
@@ -330,17 +330,17 @@ export function Planning() {
                             </Badge>
                           )}
                         </TD>
-                        <TD>{line.independent_demand}</TD>
-                        <TD>{line.dependent_demand}</TD>
-                        <TD>{line.gross_demand}</TD>
-                        <TD>{line.on_hand}</TD>
-                        <TD>{line.on_order}</TD>
-                        <TD>{line.on_draft}</TD>
-                        <TD className="font-semibold">{line.net_requirement}</TD>
+                        <TD>{fmt(Number(line.independent_demand))}</TD>
+                        <TD>{fmt(Number(line.dependent_demand))}</TD>
+                        <TD>{fmt(Number(line.gross_demand))}</TD>
+                        <TD>{fmt(Number(line.on_hand))}</TD>
+                        <TD>{fmt(Number(line.on_order))}</TD>
+                        <TD>{fmt(Number(line.on_draft))}</TD>
+                        <TD className="font-semibold">{fmt(Number(line.net_requirement))}</TD>
                         <TD>
                           {qty > 0 ? (
                             <Badge variant={line.is_manufactured ? "accent" : "info"}>
-                              {line.is_manufactured ? "Build" : "Order"} {line.suggested_order_quantity}
+                              {line.is_manufactured ? "Build" : "Order"} {fmt(qty)}
                             </Badge>
                           ) : (
                             <span className="text-muted-foreground">—</span>

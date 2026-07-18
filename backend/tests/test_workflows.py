@@ -217,6 +217,49 @@ async def test_skip_dependents_marks_downstream_skipped_not_failed(client):
     assert "node_finished" in events_by_step["independent"]
 
 
+async def test_continue_runs_downstream_steps_despite_upstream_failure(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    body = {
+        "name": "Continue anyway",
+        "failure_policy": "continue",
+        "steps": [
+            # Missing config.dataset_id -> StepError, this step fails.
+            {"id": "bad_sql", "name": "Bad SQL", "type": "sql", "config": {"sql": "SELECT 1"}},
+            {
+                "id": "after",
+                "name": "Attempted anyway",
+                "type": "export_result",
+                "depends_on": ["bad_sql"],
+                "config": {"input_step": "bad_sql", "format": "csv"},
+            },
+            {"id": "independent", "name": "Independent", "type": "load_dataset", "config": {"dataset_id": dataset_id}},
+        ],
+    }
+    created = await client.post("/workflows", headers=headers, json=body)
+    assert created.status_code == 201
+    workflow_id = created.json()["id"]
+
+    ran = await client.post(f"/workflows/{workflow_id}/run", headers=headers)
+    run_id = ran.json()["id"]
+
+    detail = await client.get(f"/workflows/{workflow_id}/runs/{run_id}", headers=headers)
+    result = detail.json()
+    assert result["status"] == "partial"
+
+    events_by_step: dict[str, list[str]] = {}
+    for e in result["events"]:
+        if e["step_id"]:
+            events_by_step.setdefault(e["step_id"], []).append(e["event_type"])
+    # "after" was actually attempted (not pre-emptively skipped) - it failed on
+    # its own missing upstream data, proving continue really does try every
+    # step regardless, per its own UI description.
+    assert events_by_step["after"] == ["node_started", "node_finished"]
+    assert "node_finished" in events_by_step["independent"]
+
+
 async def test_run_history_lists_across_workflows_with_status_filter_and_org_scoping(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

@@ -8,12 +8,24 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
+needs_broker = pytest.mark.skipif(
     not os.environ.get("REDPANDA_BROKERS"),
     reason="set REDPANDA_BROKERS to run against a live Redpanda",
 )
 
 
+@pytest.mark.asyncio
+async def test_start_cache_consumer_unreachable_broker_does_not_raise():
+    """An unreachable broker (e.g. no streaming stack deployed) must degrade
+    the realtime-metrics feature, not crash the whole app's startup lifespan."""
+    from app.services import realtime_cache
+
+    await realtime_cache.start_cache_consumer(brokers="127.0.0.1:1")  # nothing listens here
+    assert realtime_cache._instance is None
+    assert realtime_cache.get_snapshot(uuid.uuid4()) is None
+
+
+@needs_broker
 @pytest.mark.asyncio
 async def test_cache_consumer_reflects_published_metric_snapshot(monkeypatch):
     from app.core.config import get_settings
@@ -54,6 +66,7 @@ async def test_cache_consumer_reflects_published_metric_snapshot(monkeypatch):
         await realtime_cache.stop_cache_consumer()
 
 
+@needs_broker
 @pytest.mark.asyncio
 async def test_two_consumer_groups_both_see_every_stream():
     """Proves the per-replica-unique-group-id requirement: two independent

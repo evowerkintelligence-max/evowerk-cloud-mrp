@@ -107,7 +107,14 @@ _instance: CacheConsumer | None = None
 async def start_cache_consumer(brokers: str | None = None) -> None:
     global _instance
     _instance = CacheConsumer(brokers=brokers)
-    await _instance.start()
+    try:
+        await _instance.start()
+    except Exception as exc:
+        # Same posture as a mid-flight disconnect (see _on_task_done): realtime
+        # metrics are optional, the rest of the app isn't - don't let an
+        # unreachable broker (e.g. no streaming stack deployed) take the API down.
+        logger.error("realtime_cache consumer failed to start (brokers=%s): %r", _instance.brokers, exc)
+        _instance = None
 
 
 async def stop_cache_consumer() -> None:

@@ -96,7 +96,10 @@ RealtimeStream (existing, extended)
 SensorReading
   id, org_id, machine, sensor, value: float, ts: datetime
   index: (org_id, machine, sensor, ts)
-  retention: 90 days raw, pruned by periodic job (config default, no downsampling yet)
+  retention: unbounded in v1 - no scheduler exists to run a prune job (see Refit
+  cadence below), and no real sensor volume exists yet to prove pruning is needed.
+  `ponytail: add retention pruning (lazy-on-write, mirroring the Weibull refit
+  pattern, or a manual admin action) once real sensor volume makes it a real problem.`
 
 SensorBaseline
   org_id, machine, sensor, n, centerline, ucl, lcl, mr_bar, updated_at: datetime
@@ -156,7 +159,17 @@ reimplemented (ladder rung: already in this codebase).
   2. Else fleet-wide pooled Weibull (all machines' breakdowns combined)
   3. Else (fleet-wide also <5 total breakdowns): **no RUL number shown** —
      "insufficient failure history," not a fabricated estimate.
-- **Refit cadence**: nightly batch job, persisted to `WeibullFit` — not recomputed per
+- **Refit cadence — revised**: this codebase has no job scheduler at all (confirmed: no
+  APScheduler/celery/cron, `backend/app/main.py`'s lifespan only starts the realtime
+  consumer). It has an existing, documented pattern for exactly this problem instead —
+  `backend/app/services/morning_brief.py`'s `_ensure_todays_snapshot`: the first read of
+  the day lazily recomputes and persists, with `IntegrityError`-on-unique-index race
+  safety since nothing serializes concurrent requests. CBM's Weibull refit reuses that
+  pattern (`get_or_refit(db, org_id, machine)`), not a new nightly batch job — no new
+  scheduler infrastructure is introduced. Refit cadence in practice: once per calendar
+  day per machine, triggered by whichever read (dashboard, machine detail, alert scan)
+  touches it first.
+- Persisted to `WeibullFit` — not recomputed per
   request (fixes the "retrains from scratch every call" gap in the old implementation).
 - **Output**: conditional probability of failure in the next 30 days
   (`1 - S(t+30)/S(t)`, properly conditioned on survival to current age `t`), plus median

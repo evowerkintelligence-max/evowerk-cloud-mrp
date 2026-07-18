@@ -83,6 +83,10 @@ async def _create_rest_integration(client, headers, base_url):
     return res.json()["id"]
 
 
+def _h(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("REDPANDA_BROKERS"),
@@ -382,3 +386,29 @@ async def test_cannot_access_another_orgs_stream(client, fake_rest_server):
     headers_b = {"Authorization": f"Bearer {token_b}"}
     res = await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers_b)
     assert res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_stream_with_machine_and_sensor_map(client):
+    token = await _register_and_login(client)
+    integ = await client.post(
+        "/integrations",
+        headers=_h(token),
+        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
+    )
+    assert integ.status_code == 201, integ.text
+    integration_id = integ.json()["id"]
+
+    res = await client.post(
+        "/realtime/streams",
+        headers=_h(token),
+        json={
+            "integration_id": integration_id,
+            "name": "Line 1 sensors",
+            "machine": "M1",
+            "sensor_map": {"vib_x": "vibration_x_mm_s", "brg_temp": "bearing_temp_c"},
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["stream_id"]

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
@@ -339,6 +339,69 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     )
 
 
+async def eval_cbm_anomaly(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
+    """Fires when a machine has any unacknowledged SensorAnomaly in the
+    trailing window (default 24h, config['window_hours'])."""
+    from app.models.sensor import SensorAnomaly
+
+    cfg = rule.config
+    machine = cfg.get("machine", "")
+    window_hours = float(cfg.get("window_hours", 24))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+
+    query = select(SensorAnomaly).where(
+        SensorAnomaly.org_id == org_id, SensorAnomaly.detected_at >= cutoff,
+        SensorAnomaly.acknowledged_at.is_(None),
+    )
+    if machine:
+        query = query.where(SensorAnomaly.machine == machine)
+    anomalies = (await db.execute(query)).scalars().all()
+
+    triggered = len(anomalies) > 0
+    machines = sorted({a.machine for a in anomalies})
+    message = (
+        f"{len(anomalies)} unacknowledged sensor anomal{'y' if len(anomalies) == 1 else 'ies'}"
+        f" in the last {window_hours:g}h" if triggered
+        else "No unacknowledged sensor anomalies."
+    )
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, triggered, float(len(anomalies)), 0.0,
+        message, machines,
+    )
+
+
+async def eval_cbm_rul(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
+    """Fires when a machine's 30-day failure probability crosses config['threshold']
+    (default 0.65, matching the app-wide "high risk" convention)."""
+    from app.services.rul import days_since_last_breakdown, failure_probability_30d, get_or_refit
+
+    cfg = rule.config
+    machine = cfg.get("machine", "")
+    threshold = float(cfg.get("threshold", 0.65))
+
+    if not machine:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, "No machine configured.")
+
+    fit = await get_or_refit(db, org_id, machine)
+    age = await days_since_last_breakdown(db, org_id, machine)
+    prob = failure_probability_30d(fit, age)
+    if prob is None:
+        return AlertTrigger(
+            str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
+            f"Insufficient failure history for {machine} to estimate RUL.",
+        )
+
+    triggered = prob >= threshold
+    message = (
+        f"{machine}: {prob * 100:.1f}% 30-day failure probability (threshold {threshold * 100:.0f}%)"
+        if triggered else f"{machine}: {prob * 100:.1f}% 30-day failure probability (within threshold)"
+    )
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, triggered, round(prob, 4), threshold,
+        message, [machine] if triggered else [],
+    )
+
+
 # ─── Andon / relay output ───────────────────────────────────────────────────
 
 async def _fire_webhook(rule: AlertRule, trigger: AlertTrigger) -> None:
@@ -390,6 +453,10 @@ async def evaluate_rule(
 ) -> AlertTrigger:
     if rule.type == "stream_metric":
         return eval_stream_metric(rule)
+    if rule.type == "cbm_anomaly":
+        return await eval_cbm_anomaly(db, org_id, rule)
+    if rule.type == "cbm_rul":
+        return await eval_cbm_rul(db, org_id, rule)
     evaluator = _DATASET_EVALUATORS.get(rule.type)
     if evaluator is None:
         raise ValueError(f"Unknown alert type: {rule.type}")
@@ -429,7 +496,7 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
     by_dataset: dict[uuid.UUID, list[AlertRule]] = {}
     solo: list[AlertRule] = []
     for rule in rules:
-        if rule.type != "stream_metric" and rule.dataset_id is not None:
+        if rule.type not in ("stream_metric", "cbm_anomaly", "cbm_rul") and rule.dataset_id is not None:
             by_dataset.setdefault(rule.dataset_id, []).append(rule)
         else:
             solo.append(rule)

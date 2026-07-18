@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
+
+from app.db import session as db_session
 
 pytestmark = pytest.mark.asyncio
 
@@ -127,3 +131,86 @@ async def test_scan_all_skips_webhook_when_not_configured(client, webhook_server
     scan = await client.post("/alerts/scan", headers=_h(token))
     assert scan.status_code == 200, scan.text
     assert len(handler.received) == 0
+
+
+async def test_cbm_anomaly_rule_fires_webhook(client, webhook_server):
+    server, handler = webhook_server
+    url = f"http://127.0.0.1:{server.server_port}/andon"
+
+    token = await _register_and_login(client)
+    integ = await client.post(
+        "/integrations", headers=_h(token),
+        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
+    )
+    stream = await client.post(
+        "/realtime/streams", headers=_h(token),
+        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {"vib_x": "v"}},
+    )
+    assert stream.status_code == 200, stream.text
+    stream_id = stream.json()["stream_id"]
+
+    async with db_session.async_session_factory() as db:
+        from app.models.realtime import RealtimeStream
+        from app.models.sensor import SensorAnomaly, SensorReading
+        from sqlalchemy import select
+
+        org_id = (
+            await db.execute(select(RealtimeStream.org_id).where(RealtimeStream.id == uuid.UUID(stream_id)))
+        ).scalar_one()
+
+        for _ in range(24):
+            db.add(SensorReading(org_id=org_id, machine="M1", sensor="vib_x", value=10.0, ts=datetime.now(timezone.utc)))
+        reading = SensorReading(org_id=org_id, machine="M1", sensor="vib_x", value=50.0, ts=datetime.now(timezone.utc))
+        db.add(reading)
+        await db.flush()
+        db.add(SensorAnomaly(org_id=org_id, machine="M1", sensor="vib_x", reading_id=reading.id, violations=[1]))
+        await db.commit()
+
+    rule = await client.post(
+        "/alerts/rules",
+        json={
+            "name": "CBM anomaly", "type": "cbm_anomaly", "severity": "warning",
+            "config": {"machine": "M1", "webhook_url": url},
+        },
+        headers=_h(token),
+    )
+    assert rule.status_code == 201, rule.text
+
+    scan = await client.post("/alerts/scan", headers=_h(token))
+    assert scan.status_code == 200, scan.text
+    assert scan.json()["triggered_count"] == 1
+    assert len(handler.received) == 1
+    assert handler.received[0]["triggered"] is True
+
+
+async def test_cbm_rul_rule_reports_insufficient_data_without_breakdown_history(client, webhook_server):
+    server, handler = webhook_server
+    url = f"http://127.0.0.1:{server.server_port}/andon"
+
+    token = await _register_and_login(client)
+    integ = await client.post(
+        "/integrations", headers=_h(token),
+        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
+    )
+    stream = await client.post(
+        "/realtime/streams", headers=_h(token),
+        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M9", "sensor_map": {"vib_x": "v"}},
+    )
+    assert stream.status_code == 200, stream.text
+
+    rule = await client.post(
+        "/alerts/rules",
+        json={
+            "name": "CBM RUL", "type": "cbm_rul", "severity": "warning",
+            "config": {"machine": "M9", "threshold": 0.65, "webhook_url": url},
+        },
+        headers=_h(token),
+    )
+    assert rule.status_code == 201, rule.text
+
+    scan = await client.post("/alerts/scan", headers=_h(token))
+    assert scan.status_code == 200, scan.text
+    assert scan.json()["triggered_count"] == 0
+    assert len(handler.received) == 1
+    assert handler.received[0]["triggered"] is False
+    assert "insufficient" in handler.received[0]["message"].lower()

@@ -2,8 +2,11 @@
 ticks for streams that have a sensor_map configured, extracts named sensor
 channels, persists them as SensorReading rows, and scores each new reading
 via app.services.anomaly. Mirrors app.services.realtime_cache.CacheConsumer's
-structure (own consumer group per replica, asyncio background task) but
-writes to Postgres instead of an in-memory snapshot cache.
+structure (asyncio background task) but writes to Postgres instead of an
+in-memory snapshot cache. Unlike CacheConsumer, all replicas share a single
+consumer group here so Kafka partitions the tick stream across them instead
+of every replica processing every tick - this consumer does durable writes,
+where duplicate processing would mean duplicate rows and racing upserts.
 
 ponytail: no in-memory RealtimeStream cache - looks the stream up per tick.
 At typical 5s+ poll intervals this is a bounded, cheap query; add caching
@@ -13,8 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import socket
 import uuid
 from datetime import datetime, timezone
 
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 class SensorConsumer:
     def __init__(self, group_id: str | None = None, brokers: str | None = None):
-        self.group_id = group_id or f"sensor-consumer-{socket.gethostname()}-{os.getpid()}"
+        self.group_id = group_id or "sensor-consumer"
         self.brokers = brokers or get_settings().redpanda_brokers
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None

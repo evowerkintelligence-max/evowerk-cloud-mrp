@@ -43,8 +43,6 @@ class StreamCreate(BaseModel):
     interval_seconds: int = Field(5, ge=1, le=300)
     accumulate: bool = True
     column_map: dict[str, str] = Field(default_factory=dict)
-    machine: str | None = None
-    sensor_map: dict[str, str] = Field(default_factory=dict)
 
 
 def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
@@ -115,8 +113,6 @@ async def create_stream(
         integration_id=integration.id,
         name=req.name or integration.name,
         column_map=req.column_map,
-        machine=req.machine,
-        sensor_map=req.sensor_map,
         interval_seconds=req.interval_seconds,
         accumulate=req.accumulate,
         desired_status="running",

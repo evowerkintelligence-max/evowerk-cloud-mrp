@@ -1,0 +1,384 @@
+---
+const modules = [
+  {
+    id: 'mrp',
+    name: 'MRP & BOMs',
+    summary: 'Revisioned recipes, netted-vs-gross explosion, build calculator.',
+    points: [
+      'BOMs and recipes with full revision history',
+      'Netted-vs-gross MRP explosion across the plan horizon',
+      'Build calculator with unit conversion on every BOM line',
+    ],
+  },
+  {
+    id: 'procurement',
+    name: 'Procurement',
+    summary: 'Suppliers, MOQ rounding, POs generated straight off the plan.',
+    points: [
+      'Purchase orders and preferred-supplier selection',
+      'MOQ rounding applied automatically',
+      'POs auto-generated off the live MRP plan',
+    ],
+  },
+  {
+    id: 'inventory',
+    name: 'Inventory & Lots',
+    summary: 'On-hand tracking with FEFO consumption and a full audit trail.',
+    points: [
+      'Lot/FEFO consumption across multiple locations',
+      'Concurrency-safe stock adjustments',
+      'Every movement written to an append-only audit trail',
+    ],
+  },
+  {
+    id: 'forecasting',
+    name: 'Demand Forecasting',
+    summary: 'Moving average and exponential smoothing feed the plan directly.',
+    points: [
+      'Moving average / exponential smoothing models',
+      'Forecast feeds the MRP plan without a manual handoff',
+      'Same numbers drive automatic PO generation',
+    ],
+  },
+  {
+    id: 'shopfloor',
+    name: 'Shop-Floor Analytics',
+    summary: 'OEE, SPC, downtime and scrap, rolled up to a plant summary.',
+    points: [
+      'OEE and SPC control charts',
+      'Downtime Pareto / MTTR and scrap tracking',
+      'Shift comparison and a rolled-up plant summary',
+    ],
+  },
+  {
+    id: 'quality',
+    name: 'Quality & RCA',
+    summary: 'Defect-rate analysis with fishbone cause trees and CAPA.',
+    points: [
+      'Defect-rate and DPU analysis',
+      'Root-cause cases with fishbone-style cause trees',
+      'CAPA actions tracked to closure',
+    ],
+  },
+  {
+    id: 'maintenance',
+    name: 'Predictive Maintenance',
+    summary: 'Machine risk scoring drives the maintenance schedule.',
+    points: [
+      'Machine risk scoring from real operating data',
+      'Maintenance scheduling driven by that score',
+      'Feeds the same shop-floor analytics, not a separate silo',
+    ],
+  },
+  {
+    id: 'bi',
+    name: 'BI & Integrations',
+    summary: 'Dashboards, an Ask-your-data chat, and the connectors to feed both.',
+    points: [
+      'Pivot/SQL query, custom dashboards, saved reports',
+      'Natural-language "Ask" chat over your own data',
+      'OPC-UA, MQTT, SAP OData, and OSIsoft PI connectors, plus a DAG workflow builder',
+    ],
+  },
+];
+---
+
+<section class="breadth section" id="breadth" aria-labelledby="breadth-heading">
+  <div class="container">
+    <div class="breadth-head reveal">
+      <p class="label">one platform</p>
+      <h2 id="breadth-heading" class="breadth-title">
+        Not eleven tools stitched together. One system, eight disciplines.
+      </h2>
+    </div>
+
+    <div class="explorer spotlight reveal reveal-scan">
+      {modules.map((_, i) => (
+        <input type="radio" name="module" id={`tab-${i}`} class="tab-input" checked={i === 0} />
+      ))}
+
+      <fieldset class="tabs">
+        <legend class="sr-only">Choose a module to inspect</legend>
+        {modules.map((m, i) => (
+          <label for={`tab-${i}`} class="tab">
+            <span class="tab-dot" aria-hidden="true"></span>
+            <span class="tab-index">{String(i + 1).padStart(2, '0')}</span>
+            <span class="tab-name">{m.name}</span>
+            <span class="tab-summary">{m.summary}</span>
+          </label>
+        ))}
+      </fieldset>
+
+      <div class="panels">
+        {modules.map((m, i) => (
+          <div class:list={['panel', `panel-${i}`]}>
+            <p class="label panel-eyebrow">{m.name}</p>
+            <p class="panel-summary">{m.summary}</p>
+            <ul class="panel-points">
+              {m.points.map((pt) => (
+                <li>{pt}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .breadth-head {
+    max-width: 42rem;
+  }
+
+  .breadth-title {
+    margin-top: var(--space-sm);
+    font-size: clamp(1.75rem, 3vw, 2.75rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+  }
+
+  .explorer {
+    position: relative;
+    margin-top: var(--space-xl);
+    display: grid;
+    gap: var(--space-md);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--surface);
+    box-shadow: 0 32px 96px oklch(0 0 0 / 0.45);
+  }
+
+  .explorer::before {
+    content: '';
+    position: absolute;
+    inset: -30% -10% auto -10%;
+    height: 60%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(45% 70% at 12% 0%, oklch(0.72 0.10 174 / 0.16), transparent 70%),
+      radial-gradient(35% 60% at 100% 15%, oklch(0.65 0.17 295 / 0.10), transparent 70%);
+  }
+
+  .tabs,
+  .panels {
+    position: relative;
+    z-index: 1;
+  }
+
+  .tabs {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    border: none;
+  }
+
+  .tab-input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .tab {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    gap: var(--space-2xs) var(--space-sm);
+    padding: var(--space-md) var(--space-md) var(--space-md) calc(var(--space-md) + 20px);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background var(--dur-sm) var(--ease-out-quart),
+      transform var(--dur-sm) var(--ease-out-quart);
+  }
+
+  .tab:last-of-type {
+    border-bottom: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tab:hover {
+      transform: none;
+    }
+  }
+
+  .tab-dot {
+    position: absolute;
+    left: var(--space-md);
+    top: 1.6rem;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+    transition: background var(--dur-sm) var(--ease-out-quart),
+      box-shadow var(--dur-sm) var(--ease-out-quart);
+  }
+
+  .tab-index {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .tab-name {
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .tab-summary {
+    grid-column: 2;
+    font-size: 0.9375rem;
+    color: var(--muted);
+    max-width: 34ch;
+  }
+
+  .tab:hover {
+    background: var(--surface-raised);
+    transform: translateX(3px);
+  }
+
+  .panels {
+    padding: var(--space-lg);
+    display: grid;
+  }
+
+  .panel {
+    grid-area: 1 / 1;
+    display: none;
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  /* Pure-CSS tab switching: each radio is a sibling of .tabs and .panels,
+     so :checked can drive both the active tab style and the visible panel
+     with no JS and no hidden-by-default content if scripts fail to run.
+     :has() pairs a focused (invisible) radio with its label by position. */
+  .explorer:has(.tab-input:focus-visible) .tabs label {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+  }
+  .explorer:has(.tab-input:nth-of-type(1):focus-visible) .tabs label:nth-of-type(1) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(2):focus-visible) .tabs label:nth-of-type(2) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(3):focus-visible) .tabs label:nth-of-type(3) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(4):focus-visible) .tabs label:nth-of-type(4) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(5):focus-visible) .tabs label:nth-of-type(5) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(6):focus-visible) .tabs label:nth-of-type(6) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(7):focus-visible) .tabs label:nth-of-type(7) { outline-color: var(--primary); }
+  .explorer:has(.tab-input:nth-of-type(8):focus-visible) .tabs label:nth-of-type(8) { outline-color: var(--primary); }
+
+  .tab-input:nth-of-type(1):checked ~ .tabs label:nth-of-type(1) {
+    background: var(--surface-raised);
+  }
+  .tab-input:nth-of-type(1):checked ~ .tabs label:nth-of-type(1) .tab-index,
+  .tab-input:nth-of-type(1):checked ~ .tabs label:nth-of-type(1) .tab-name {
+    color: var(--primary);
+  }
+  .tab-input:nth-of-type(1):checked ~ .tabs label:nth-of-type(1) .tab-dot {
+    background: var(--primary);
+    box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22);
+  }
+  .tab-input:nth-of-type(1):checked ~ .panels .panel-0 { display: flex; }
+
+  .tab-input:nth-of-type(2):checked ~ .tabs label:nth-of-type(2) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(2):checked ~ .tabs label:nth-of-type(2) .tab-index,
+  .tab-input:nth-of-type(2):checked ~ .tabs label:nth-of-type(2) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(2):checked ~ .tabs label:nth-of-type(2) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(2):checked ~ .panels .panel-1 { display: flex; }
+
+  .tab-input:nth-of-type(3):checked ~ .tabs label:nth-of-type(3) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(3):checked ~ .tabs label:nth-of-type(3) .tab-index,
+  .tab-input:nth-of-type(3):checked ~ .tabs label:nth-of-type(3) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(3):checked ~ .tabs label:nth-of-type(3) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(3):checked ~ .panels .panel-2 { display: flex; }
+
+  .tab-input:nth-of-type(4):checked ~ .tabs label:nth-of-type(4) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(4):checked ~ .tabs label:nth-of-type(4) .tab-index,
+  .tab-input:nth-of-type(4):checked ~ .tabs label:nth-of-type(4) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(4):checked ~ .tabs label:nth-of-type(4) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(4):checked ~ .panels .panel-3 { display: flex; }
+
+  .tab-input:nth-of-type(5):checked ~ .tabs label:nth-of-type(5) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(5):checked ~ .tabs label:nth-of-type(5) .tab-index,
+  .tab-input:nth-of-type(5):checked ~ .tabs label:nth-of-type(5) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(5):checked ~ .tabs label:nth-of-type(5) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(5):checked ~ .panels .panel-4 { display: flex; }
+
+  .tab-input:nth-of-type(6):checked ~ .tabs label:nth-of-type(6) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(6):checked ~ .tabs label:nth-of-type(6) .tab-index,
+  .tab-input:nth-of-type(6):checked ~ .tabs label:nth-of-type(6) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(6):checked ~ .tabs label:nth-of-type(6) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(6):checked ~ .panels .panel-5 { display: flex; }
+
+  .tab-input:nth-of-type(7):checked ~ .tabs label:nth-of-type(7) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(7):checked ~ .tabs label:nth-of-type(7) .tab-index,
+  .tab-input:nth-of-type(7):checked ~ .tabs label:nth-of-type(7) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(7):checked ~ .tabs label:nth-of-type(7) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(7):checked ~ .panels .panel-6 { display: flex; }
+
+  .tab-input:nth-of-type(8):checked ~ .tabs label:nth-of-type(8) { background: var(--surface-raised); }
+  .tab-input:nth-of-type(8):checked ~ .tabs label:nth-of-type(8) .tab-index,
+  .tab-input:nth-of-type(8):checked ~ .tabs label:nth-of-type(8) .tab-name { color: var(--primary); }
+  .tab-input:nth-of-type(8):checked ~ .tabs label:nth-of-type(8) .tab-dot { background: var(--primary); box-shadow: 0 0 0 4px oklch(0.72 0.10 174 / 0.22); }
+  .tab-input:nth-of-type(8):checked ~ .panels .panel-7 { display: flex; }
+
+  .panel-eyebrow {
+    color: var(--primary);
+  }
+
+  .panel-summary {
+    font-size: 1.25rem;
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    max-width: 32ch;
+  }
+
+  .panel-points {
+    margin: var(--space-sm) 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: var(--space-xs);
+  }
+
+  .panel-points li {
+    padding-left: var(--space-md);
+    position: relative;
+    color: var(--muted);
+    font-size: 1rem;
+  }
+
+  .panel-points li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.6em;
+    width: 6px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  @media (min-width: 900px) {
+    .explorer {
+      grid-template-columns: 22rem 1fr;
+    }
+
+    .tabs {
+      border-right: 1px solid var(--border);
+    }
+  }
+</style>

@@ -1,0 +1,260 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+:root {
+  /* Colors — see DESIGN.md. Primary/accent match the product app's real
+     dark-mode brand tokens (frontend/src/index.css --primary / --accent). */
+  --bg: oklch(0.08 0 0);
+  --surface: oklch(0.15 0 0);
+  --surface-raised: oklch(0.19 0 0);
+  --ink: oklch(0.96 0 0);
+  --muted: oklch(0.64 0 0);
+  --primary: oklch(0.72 0.10 174);
+  --primary-deep: oklch(0.58 0.11 174);
+  --primary-dim: oklch(0.30 0.05 174);
+  --on-primary: oklch(0.22 0.03 174);
+  --accent: oklch(0.65 0.17 295);
+  --accent-deep: oklch(0.54 0.17 295);
+  --border: oklch(0.26 0 0);
+  --danger: oklch(0.60 0.19 25);
+
+  /* Type */
+  --font-display: 'Space Grotesk', Inter, system-ui, sans-serif;
+  --font-body: Inter, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Spacing (4pt scale) */
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 3rem;
+  --space-xl: 6rem;
+  --space-2xl: 9rem;
+
+  /* Motion */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-sm: 180ms;
+  --dur-md: 320ms;
+  --dur-lg: 640ms;
+
+  /* z-index scale */
+  --z-base: 0;
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-nav: 30;
+  --z-modal-backdrop: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-tooltip: 70;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: inherit;
+}
+
+img, svg {
+  display: block;
+  max-width: 100%;
+}
+
+::selection {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.container {
+  width: 100%;
+  max-width: 78rem;
+  margin-inline: auto;
+  padding-inline: var(--space-md);
+}
+
+@media (min-width: 640px) {
+  .container {
+    padding-inline: var(--space-lg);
+  }
+}
+
+.section {
+  padding-block: var(--space-2xl);
+}
+
+@media (max-width: 640px) {
+  .section {
+    padding-block: var(--space-xl);
+  }
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2xs);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 1rem 2rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--dur-sm) var(--ease-out-quart),
+    border-color var(--dur-sm) var(--ease-out-quart),
+    transform var(--dur-sm) var(--ease-out-quart),
+    box-shadow var(--dur-sm) var(--ease-out-quart);
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.btn-primary:hover {
+  background: var(--primary-deep);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px oklch(0.72 0.10 174 / 0.25);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover {
+  background: var(--surface);
+  border-color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-primary:hover {
+    transform: none;
+  }
+}
+
+/* Spotlight border: a cursor-tracked glow on the two "hero panel" surfaces
+   (module explorer, audit terminal). Scoped to [data-spotlight] elements only
+   — not a hover-scale-everything pattern, one deliberate touch per panel. */
+.spotlight {
+  position: relative;
+}
+
+.spotlight::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 300ms ease;
+  background: radial-gradient(
+    260px circle at var(--mx, 50%) var(--my, 50%),
+    oklch(0.72 0.10 174 / 0.16),
+    transparent 72%
+  );
+}
+
+.spotlight:hover::after {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spotlight::after {
+    transition: none;
+  }
+}
+
+/* Scroll reveal: visible by default; JS + IntersectionObserver opt in to the animated version. */
+.reveal {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html.reveal-ready .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity var(--dur-lg) var(--ease-out-expo), transform var(--dur-lg) var(--ease-out-expo);
+  }
+
+  html.reveal-ready .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Selective variant for the one "hero panel" per section (the module
+     explorer, the audit terminal) — a scan-line wipe instead of the default
+     fade+rise, so not every block on the page shares an identical entrance. */
+  html.reveal-ready .reveal.reveal-scan {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 100% 0 0);
+    transition: clip-path 900ms var(--ease-out-expo);
+  }
+
+  html.reveal-ready .reveal.reveal-scan.is-visible {
+    clip-path: inset(0 0 0 0);
+  }
+}

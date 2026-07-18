@@ -1,0 +1,29 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Hero from '../components/Hero.astro';
+import Marquee from '../components/Marquee.astro';
+import Pain from '../components/Pain.astro';
+import Breadth from '../components/Breadth.astro';
+import Trust from '../components/Trust.astro';
+import ShowFloor from '../components/ShowFloor.astro';
+import Close from '../components/Close.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<BaseLayout
+  title="EvoWerk Cloud MRP — One system for the whole plant"
+  description="Multi-tenant cloud MRP covering BOMs, procurement, inventory, forecasting, shop-floor analytics, quality, and predictive maintenance — one platform instead of a patchwork."
+>
+  <Nav />
+  <main>
+    <Hero />
+    <Marquee />
+    <Pain />
+    <Breadth />
+    <Trust />
+    <ShowFloor />
+    <Close />
+  </main>
+  <Footer />
+</BaseLayout>

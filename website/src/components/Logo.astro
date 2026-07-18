@@ -1,0 +1,47 @@
+---
+// Renders the real EvoWerk lockup (public/evowerk-logo.svg) cropped to just
+// the visible ring-mark + wordmark band via viewBox, so no wordmark text is
+// duplicated in markup and the asset never drifts from the source file.
+interface Props {
+  variant?: 'full' | 'icon';
+  class?: string;
+}
+
+const { variant = 'full', class: className = '' } = Astro.props;
+const isIcon = variant === 'icon';
+---
+
+<span class:list={['logo', className]}>
+  {isIcon ? (
+    <svg class="logo-mark logo-mark-icon" viewBox="-6 318 164 164" role="img" aria-label="EvoWerk">
+      <image href="/evowerk-logo.svg" x="0" y="0" width="800" height="800" />
+    </svg>
+  ) : (
+    <svg class="logo-mark logo-mark-full" viewBox="0 318 800 164" role="img" aria-label="EvoWerk">
+      <image href="/evowerk-logo.svg" x="0" y="0" width="800" height="800" />
+    </svg>
+  )}
+</span>
+
+<style>
+  .logo {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .logo-mark {
+    display: block;
+  }
+
+  .logo-mark-full {
+    height: 26px;
+    width: auto;
+    aspect-ratio: 800 / 164;
+  }
+
+  .logo-mark-icon {
+    height: 28px;
+    width: auto;
+    aspect-ratio: 1 / 1;
+  }
+</style>

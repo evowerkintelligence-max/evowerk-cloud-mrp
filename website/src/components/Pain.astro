@@ -1,0 +1,110 @@
+---
+const points = [
+  {
+    term: 'Spreadsheets',
+    body: "MRP math done by hand in a workbook one broken formula away from a stockout, held together by whoever built it.",
+  },
+  {
+    term: 'Legacy ERP',
+    body: 'Six-figure licenses, an eighteen-month rollout, and a module fee for features that should be table stakes.',
+  },
+  {
+    term: 'Point tools',
+    body: "A forecasting app that doesn't talk to inventory, that doesn't talk to the quality log — three logins to answer one question.",
+  },
+  {
+    term: 'Tribal knowledge',
+    body: 'The one planner who knows why the BOM is wrong leaves, and the plant finds out the expensive way.',
+  },
+];
+---
+
+<section class="pain section" aria-labelledby="pain-heading">
+  <div class="container pain-grid">
+    <div class="pain-lead reveal">
+      <p class="label">the actual cost</p>
+      <h2 id="pain-heading" class="pain-title">
+        The plant is already paying for the system it doesn't have.
+      </h2>
+      <p class="pain-copy">
+        Every workaround has a price. Most plants just never add it up.
+      </p>
+    </div>
+
+    <ul class="pain-list">
+      {points.map((p, i) => (
+        <li class="pain-item reveal" style={`transition-delay:${i * 70}ms`}>
+          <span class="pain-term">{p.term}</span>
+          <span class="pain-body">{p.body}</span>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .pain-grid {
+    display: grid;
+    gap: var(--space-xl);
+  }
+
+  .pain-lead {
+    max-width: 34rem;
+  }
+
+  .pain-title {
+    margin-top: var(--space-sm);
+    font-size: clamp(1.75rem, 3vw, 2.75rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+  }
+
+  .pain-copy {
+    margin-top: var(--space-md);
+    color: var(--muted);
+    font-size: 1.0625rem;
+  }
+
+  .pain-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .pain-item {
+    display: grid;
+    grid-template-columns: 10rem 1fr;
+    gap: var(--space-md);
+    padding-block: var(--space-md);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pain-term {
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    color: var(--accent);
+    padding-top: 0.15em;
+  }
+
+  .pain-body {
+    font-size: 1.0625rem;
+    color: var(--ink);
+    max-width: 46ch;
+  }
+
+  @media (min-width: 900px) {
+    .pain-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+      align-items: start;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .pain-item {
+      grid-template-columns: 1fr;
+      gap: var(--space-2xs);
+    }
+  }
+</style>

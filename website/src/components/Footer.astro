@@ -1,0 +1,78 @@
+---
+import Logo from './Logo.astro';
+
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <Logo />
+      <p class="footer-tag">Cloud MRP · One system for the whole plant.</p>
+    </div>
+
+    <nav class="footer-links" aria-label="Footer">
+      <a href="#breadth">Platform</a>
+      <a href="#trust">Security</a>
+      <a href="#product">Inside</a>
+      <a href="mailto:sales@evowerk.io">Contact</a>
+    </nav>
+
+    <p class="footer-meta">© {year} EvoWerk. Multi-tenant cloud MRP, industry-agnostic core.</p>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--border);
+    padding-block: var(--space-lg);
+  }
+
+  .footer-inner {
+    display: grid;
+    gap: var(--space-md);
+  }
+
+  .footer-tag {
+    margin-top: var(--space-sm);
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+
+  .footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-md);
+  }
+
+  .footer-links a {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color var(--dur-sm) var(--ease-out-quart);
+  }
+
+  .footer-links a:hover {
+    color: var(--primary);
+  }
+
+  .footer-meta {
+    font-size: 0.8125rem;
+    color: var(--muted);
+    opacity: 0.7;
+  }
+
+  @media (min-width: 860px) {
+    .footer-inner {
+      grid-template-columns: 1fr auto;
+      align-items: start;
+    }
+
+    .footer-meta {
+      grid-column: 1 / -1;
+      padding-top: var(--space-sm);
+      border-top: 1px solid var(--border);
+    }
+  }
+</style>

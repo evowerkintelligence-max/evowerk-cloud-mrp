@@ -1,0 +1,216 @@
+---
+const facts = [
+  {
+    term: 'Multi-tenant by design',
+    body: 'org_id scoping is baked into every table from day one, not bolted on after the first customer complaint.',
+  },
+  {
+    term: 'Audit log, enforced by the database',
+    body: 'A Postgres trigger blocks UPDATE and DELETE on audit rows — insert-only holds even if the app layer has a bug.',
+  },
+  {
+    term: 'MFA that fails safe',
+    body: 'TOTP secrets encrypted at rest; re-enrollment requires a password, and the old factor never drops until the new one verifies.',
+  },
+  {
+    term: 'Gated on every push',
+    body: 'SAST, dependency scanning, secret scanning, and container scanning all run in CI before code ships — not on a quarterly schedule.',
+  },
+];
+
+const logLines = [
+  { t: '14:02:11', tag: 'audit.insert', detail: 'actor=user:412 action=stock_adjustment org=acme-foods status=ok', tone: 'primary' },
+  { t: '14:02:11', tag: 'trigger.check', detail: 'UPDATE audit_logs → rejected (immutable)', tone: 'accent' },
+  { t: '14:01:58', tag: 'auth.mfa_verify', detail: 'actor=user:412 totp=ok', tone: 'primary' },
+  { t: '14:01:40', tag: 'ci.gate', detail: 'bandit — 0 high, 0 critical', tone: 'accent' },
+  { t: '14:01:40', tag: 'ci.gate', detail: 'pip-audit — 0 vulnerabilities', tone: 'accent' },
+  { t: '14:01:22', tag: 'ci.gate', detail: 'trivy backend-image — 0 critical', tone: 'accent' },
+  { t: '14:01:05', tag: 'migration-check', detail: 'audit_logs UPDATE/DELETE → both raised, as expected', tone: 'primary' },
+];
+---
+
+<section class="trust section" id="trust" aria-labelledby="trust-heading">
+  <div class="container trust-grid">
+    <div class="trust-lead reveal">
+      <p class="label">no logos yet — here's the proof instead</p>
+      <h2 id="trust-heading" class="trust-title">
+        Security isn't a feature request here. It's the foundation.
+      </h2>
+
+      <ul class="trust-list">
+        {facts.map((f) => (
+          <li class="trust-item">
+            <span class="trust-term">{f.term}</span>
+            <span class="trust-body">{f.body}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+
+    <div class="terminal-wrap reveal reveal-scan" aria-hidden="true">
+      <div class="terminal spotlight">
+        <div class="terminal-bar">
+          <span class="dot dot-a"></span>
+          <span class="dot dot-b"></span>
+          <span class="dot dot-c"></span>
+          <span class="terminal-title">audit_logs · live</span>
+        </div>
+        <div class="terminal-body">
+          {logLines.map((l) => (
+            <p class="log-line">
+              <span class="log-time">{l.t}</span>
+              <span class:list={['log-tag', `is-${l.tone}`]}>{l.tag}</span>
+              <span class="log-detail">{l.detail}</span>
+            </p>
+          ))}
+          <p class="log-line log-cursor" aria-hidden="true"><span class="log-time">&nbsp;</span><span class="cursor-blink">▍</span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .trust-grid {
+    display: grid;
+    gap: var(--space-xl);
+    align-items: start;
+  }
+
+  .trust-title {
+    margin-top: var(--space-sm);
+    max-width: 30rem;
+    font-size: clamp(1.75rem, 3vw, 2.75rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+  }
+
+  .trust-list {
+    list-style: none;
+    margin: var(--space-lg) 0 0;
+    padding: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .trust-item {
+    display: grid;
+    gap: var(--space-2xs);
+    padding-block: var(--space-md);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trust-term {
+    font-family: var(--font-display);
+    font-size: 1.0625rem;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .trust-body {
+    font-size: 0.9375rem;
+    color: var(--muted);
+    max-width: 40ch;
+  }
+
+  .terminal-wrap {
+    position: relative;
+  }
+
+  .terminal-wrap::before {
+    content: '';
+    position: absolute;
+    inset: -12% -12% auto -12%;
+    height: 55%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(50% 80% at 20% 0%, oklch(0.72 0.10 174 / 0.14), transparent 70%),
+      radial-gradient(40% 70% at 90% 10%, oklch(0.65 0.17 295 / 0.12), transparent 70%);
+  }
+
+  .terminal {
+    position: relative;
+    z-index: 1;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: oklch(0.07 0 0);
+    box-shadow: 0 24px 64px oklch(0 0 0 / 0.4);
+  }
+
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .terminal-title {
+    margin-left: var(--space-xs);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .terminal-body {
+    padding: var(--space-md);
+    display: grid;
+    gap: 0.55rem;
+    overflow-x: auto;
+  }
+
+  .log-line {
+    margin: 0;
+    display: flex;
+    gap: var(--space-sm);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+
+  .log-time {
+    color: var(--muted);
+    opacity: 0.7;
+  }
+
+  .log-tag {
+    color: var(--accent);
+    min-width: 11ch;
+  }
+
+  .log-detail {
+    color: var(--ink);
+    opacity: 0.85;
+  }
+
+  .cursor-blink {
+    color: var(--primary);
+    animation: cursor-blink 1.1s steps(2, jump-none) infinite;
+  }
+
+  @keyframes cursor-blink {
+    50% { opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor-blink {
+      animation: none;
+    }
+  }
+
+  @media (min-width: 960px) {
+    .trust-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+  }
+</style>

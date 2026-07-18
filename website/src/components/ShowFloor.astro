@@ -1,0 +1,330 @@
+---
+const kpis = [
+  { label: 'OEE', value: '83.4%', delta: '+2.1', points: '0,20 10,16 20,17 30,12 40,13 50,8 60,9 70,4' },
+  { label: 'Scrap rate', value: '1.8%', delta: '-0.4', points: '0,6 10,8 20,7 30,10 40,9 50,12 60,11 70,14' },
+  { label: 'Downtime', value: '3h 12m', delta: '-38m', points: '0,18 10,14 20,15 30,10 40,11 50,7 60,8 70,5' },
+];
+
+const pareto = [
+  { label: 'Changeover', value: 92 },
+  { label: 'Material wait', value: 68 },
+  { label: 'Unplanned stop', value: 51 },
+  { label: 'Minor stop', value: 33 },
+  { label: 'Quality hold', value: 21 },
+];
+---
+
+<section class="floor section" id="product" aria-labelledby="floor-heading">
+  <div class="container">
+    <div class="floor-head reveal">
+      <p class="label">show, don't dashboard</p>
+      <h2 id="floor-heading" class="floor-title">
+        The shape of the shop floor, not a slide about it.
+      </h2>
+      <p class="floor-copy">
+        Real OEE, scrap, and downtime data — read live off the plant, not typed into a report once a week.
+      </p>
+    </div>
+
+    <div class="panel-frame reveal">
+      <div class="panel-bar">
+        <span class="dot dot-a"></span>
+        <span class="dot dot-b"></span>
+        <span class="dot dot-c"></span>
+        <span class="panel-title">Line 3 · Plant Summary</span>
+        <span class="live-pill"><span class="live-dot"></span>live</span>
+      </div>
+
+      <div class="panel-body">
+        <div class="kpi-row">
+          {kpis.map((k) => (
+            <div class="kpi">
+              <span class="kpi-label label">{k.label}</span>
+              <div class="kpi-value-row">
+                <span class="kpi-value">{k.value}</span>
+                <span class:list={['kpi-delta', k.delta.startsWith('-') && k.label !== 'OEE' ? 'is-good' : k.delta.startsWith('+') ? 'is-good' : 'is-bad']}>{k.delta}</span>
+              </div>
+              <svg class="sparkline" viewBox="0 0 70 24" preserveAspectRatio="none" aria-hidden="true">
+                <polyline points={k.points} fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </div>
+          ))}
+        </div>
+
+        <div class="chart-row">
+          <div class="chart-card">
+            <span class="label">Throughput · last 12h</span>
+            <svg class="line-chart" viewBox="0 0 320 110" preserveAspectRatio="none" aria-hidden="true">
+              <line x1="0" y1="27.5" x2="320" y2="27.5" class="grid-line" />
+              <line x1="0" y1="55" x2="320" y2="55" class="grid-line" />
+              <line x1="0" y1="82.5" x2="320" y2="82.5" class="grid-line" />
+              <polyline
+                class="chart-line"
+                points="0,80 27,74 54,78 81,60 108,64 135,42 162,48 189,30 216,36 243,20 270,26 297,14 320,18"
+                fill="none"
+              />
+              <polygon
+                class="chart-fill"
+                points="0,80 27,74 54,78 81,60 108,64 135,42 162,48 189,30 216,36 243,20 270,26 297,14 320,18 320,110 0,110"
+              />
+            </svg>
+          </div>
+
+          <div class="chart-card">
+            <span class="label">Downtime · Pareto</span>
+            <div class="bars">
+              {pareto.map((p) => (
+                <div class="bar-row">
+                  <span class="bar-label">{p.label}</span>
+                  <div class="bar-track">
+                    <div class="bar-fill" style={`--w:${p.value}%`}></div>
+                  </div>
+                  <span class="bar-value">{p.value}h</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .floor-head {
+    max-width: 40rem;
+  }
+
+  .floor-title {
+    margin-top: var(--space-sm);
+    font-size: clamp(1.75rem, 3vw, 2.75rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+  }
+
+  .floor-copy {
+    margin-top: var(--space-md);
+    color: var(--muted);
+  }
+
+  .panel-frame {
+    margin-top: var(--space-xl);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--surface);
+    box-shadow: 0 24px 80px oklch(0 0 0 / 0.4);
+  }
+
+  .panel-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .panel-title {
+    margin-left: var(--space-xs);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .live-pill {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .panel-body {
+    padding: var(--space-lg);
+    display: grid;
+    gap: var(--space-lg);
+  }
+
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-md);
+  }
+
+  .kpi {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: var(--space-md);
+    background: var(--surface-raised);
+  }
+
+  .kpi-value-row {
+    margin-top: 0.4rem;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2xs);
+  }
+
+  .kpi-value {
+    font-family: var(--font-display);
+    font-size: 1.75rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+
+  .kpi-delta {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .kpi-delta.is-good { color: var(--primary); }
+  .kpi-delta.is-bad { color: var(--danger); }
+
+  .sparkline {
+    display: block;
+    width: 100%;
+    height: 24px;
+    margin-top: var(--space-sm);
+  }
+
+  .chart-row {
+    display: grid;
+    gap: var(--space-md);
+  }
+
+  .chart-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: var(--space-md);
+    background: var(--surface-raised);
+  }
+
+  .line-chart {
+    width: 100%;
+    height: 110px;
+    margin-top: var(--space-sm);
+    overflow: visible;
+  }
+
+  .grid-line {
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+
+  .chart-line {
+    stroke: var(--primary);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .chart-fill {
+    fill: oklch(0.72 0.10 174 / 0.16);
+    stroke: none;
+  }
+
+  .bars {
+    margin-top: var(--space-sm);
+    display: grid;
+    gap: var(--space-sm);
+  }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: 8rem 1fr 3rem;
+    align-items: center;
+    gap: var(--space-sm);
+  }
+
+  .bar-label {
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+
+  .bar-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    width: var(--w);
+    background: var(--accent);
+    border-radius: 3px;
+  }
+
+  .bar-value {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal .chart-line {
+      stroke-dasharray: 700;
+      stroke-dashoffset: 700;
+    }
+
+    .reveal .chart-fill {
+      opacity: 0;
+    }
+
+    .reveal.is-visible .chart-line {
+      animation: draw-line var(--dur-lg) var(--ease-out-expo) 200ms forwards;
+    }
+
+    .reveal.is-visible .chart-fill {
+      animation: fade-fill 900ms ease-out 500ms forwards;
+    }
+
+    @keyframes draw-line {
+      to { stroke-dashoffset: 0; }
+    }
+
+    @keyframes fade-fill {
+      to { opacity: 1; }
+    }
+
+    .reveal .bar-fill {
+      width: 0;
+      transition: width 900ms var(--ease-out-expo) 200ms;
+    }
+
+    .reveal.is-visible .bar-fill {
+      width: var(--w);
+    }
+  }
+
+  @media (min-width: 860px) {
+    .chart-row {
+      grid-template-columns: 1.3fr 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .kpi-row {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

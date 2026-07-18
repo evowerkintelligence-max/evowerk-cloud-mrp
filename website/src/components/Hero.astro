@@ -1,0 +1,157 @@
+---
+---
+
+<section class="hero" id="top">
+  <div class="hero-glow" aria-hidden="true"></div>
+  <div class="hero-grid" aria-hidden="true"></div>
+
+  <div class="container hero-inner">
+    <p class="label eyebrow">evowerk cloud mrp · multi-tenant manufacturing system</p>
+
+    <h1 class="hero-title" data-reveal>
+      One system for<br />the whole plant.
+    </h1>
+
+    <p class="hero-sub" data-reveal>
+      MRP, procurement, inventory, quality, and shop-floor analytics —
+      running as one platform instead of a patchwork you're duct-taping
+      together with spreadsheets and point tools.
+    </p>
+
+    <div class="hero-actions" data-reveal>
+      <a href="#cta" class="btn btn-primary">Book a demo</a>
+      <a href="#breadth" class="btn btn-ghost">See what's inside</a>
+    </div>
+  </div>
+
+  <a href="#marquee" class="scroll-cue" aria-label="Scroll to learn more">
+    <svg width="16" height="24" viewBox="0 0 16 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0.75" y="0.75" width="14.5" height="22.5" rx="7.25" stroke="var(--border)" stroke-width="1.5"/>
+      <circle class="scroll-dot" cx="8" cy="7" r="2" fill="var(--primary)"/>
+    </svg>
+  </a>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    min-height: 100svh;
+    display: flex;
+    align-items: center;
+    padding-block: calc(var(--space-2xl) + var(--space-lg)) var(--space-xl);
+    overflow: clip;
+  }
+
+  .hero-glow {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background:
+      radial-gradient(60% 50% at 78% 18%, oklch(0.72 0.10 174 / 0.26), transparent 70%),
+      radial-gradient(40% 35% at 15% 85%, oklch(0.65 0.17 295 / 0.10), transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-grid {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background-image:
+      linear-gradient(oklch(0.72 0.10 174 / 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, oklch(0.72 0.10 174 / 0.06) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(65% 60% at 50% 30%, black, transparent);
+    pointer-events: none;
+  }
+
+  .hero-inner {
+    position: relative;
+    z-index: 1;
+    max-width: 52rem;
+  }
+
+  .eyebrow {
+    margin-bottom: var(--space-md);
+    text-transform: none;
+  }
+
+  .hero-title {
+    font-size: clamp(2.75rem, 6vw, 5.75rem);
+    font-weight: 500;
+    line-height: 0.98;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+  }
+
+  .hero-sub {
+    margin-top: var(--space-md);
+    max-width: 42rem;
+    font-size: 1.1875rem;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    margin-top: var(--space-lg);
+  }
+
+  .scroll-cue {
+    position: absolute;
+    left: 50%;
+    bottom: var(--space-lg);
+    transform: translateX(-50%);
+    z-index: 1;
+    opacity: 0.7;
+    transition: opacity var(--dur-sm) var(--ease-out-quart);
+  }
+
+  .scroll-cue:hover {
+    opacity: 1;
+  }
+
+  .scroll-dot {
+    animation: scroll-cue-move 1.8s var(--ease-out-quart) infinite;
+  }
+
+  @keyframes scroll-cue-move {
+    0% { transform: translateY(0); opacity: 1; }
+    60% { transform: translateY(9px); opacity: 0.2; }
+    61% { transform: translateY(0); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    [data-reveal] {
+      animation: hero-rise var(--dur-lg) var(--ease-out-expo) both;
+    }
+
+    .hero-title[data-reveal] { animation-delay: 40ms; }
+    .hero-sub[data-reveal] { animation-delay: 160ms; }
+    .hero-actions[data-reveal] { animation-delay: 260ms; }
+
+    @keyframes hero-rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: none; }
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scroll-dot {
+      animation: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .hero {
+      padding-block: calc(var(--space-2xl) + var(--space-sm)) var(--space-lg);
+    }
+  }
+</style>

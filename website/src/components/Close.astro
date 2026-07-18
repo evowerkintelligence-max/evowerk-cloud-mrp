@@ -1,0 +1,80 @@
+---
+---
+
+<section class="close section" id="cta" aria-labelledby="close-heading">
+  <div class="close-glow" aria-hidden="true"></div>
+  <div class="container close-inner">
+    <p class="label">worth twenty minutes</p>
+    <h2 id="close-heading" class="close-title">
+      Switching isn't the eighteen-month project you're picturing.
+    </h2>
+    <p class="close-copy">
+      No forklift migration, no six-figure commitment before you've seen it run.
+      Bring one line, one BOM, or one week of downtime data — we'll show you
+      the plan explosion on your own numbers.
+    </p>
+
+    <div class="close-actions">
+      <a href="mailto:sales@evowerk.io?subject=Demo%20request" class="btn btn-primary btn-lg">
+        Book a demo
+      </a>
+      <a href="mailto:sales@evowerk.io?subject=Question%20about%20EvoWerk%20Cloud%20MRP" class="btn btn-ghost btn-lg">
+        Ask a question first
+      </a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .close {
+    position: relative;
+    overflow: clip;
+    text-align: center;
+  }
+
+  .close-glow {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(55% 60% at 42% 40%, oklch(0.72 0.10 174 / 0.22), transparent 70%),
+      radial-gradient(35% 45% at 68% 55%, oklch(0.65 0.17 295 / 0.12), transparent 70%);
+    pointer-events: none;
+  }
+
+  .close-inner {
+    position: relative;
+    max-width: 42rem;
+    margin-inline: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .close-title {
+    margin-top: var(--space-sm);
+    font-size: clamp(2rem, 4vw, 3.25rem);
+    font-weight: 500;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+  }
+
+  .close-copy {
+    margin-top: var(--space-md);
+    color: var(--muted);
+    font-size: 1.0625rem;
+    max-width: 38ch;
+  }
+
+  .close-actions {
+    margin-top: var(--space-lg);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-sm);
+  }
+
+  .btn-lg {
+    padding: 1.125rem 2.25rem;
+    font-size: 1.0625rem;
+  }
+</style>

@@ -1,0 +1,117 @@
+---
+import Logo from './Logo.astro';
+
+const links = [
+  { href: '#breadth', label: 'Platform' },
+  { href: '#trust', label: 'Security' },
+  { href: '#product', label: 'Inside' },
+];
+---
+
+<header class="nav" id="site-nav">
+  <div class="container nav-inner">
+    <a href="#top" class="mark" aria-label="EvoWerk home">
+      <Logo />
+    </a>
+
+    <nav class="links" aria-label="Primary">
+      {links.map((l) => (
+        <a href={l.href}>{l.label}</a>
+      ))}
+    </nav>
+
+    <a href="#cta" class="btn btn-primary nav-cta">Book a demo</a>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: fixed;
+    inset-inline: 0;
+    top: 0;
+    z-index: var(--z-nav);
+    padding-block: var(--space-sm);
+    transition: background var(--dur-md) var(--ease-out-quart),
+      border-color var(--dur-md) var(--ease-out-quart),
+      backdrop-filter var(--dur-md) var(--ease-out-quart);
+    border-bottom: 1px solid transparent;
+  }
+
+  .nav[data-scrolled='true'] {
+    background: oklch(0.08 0 0 / 0.72);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom-color: var(--border);
+  }
+
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-md);
+  }
+
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    color: var(--ink);
+  }
+
+  .links {
+    display: none;
+    align-items: center;
+    gap: var(--space-lg);
+  }
+
+  .links a {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    color: var(--muted);
+    position: relative;
+    padding-block: 0.25rem;
+    transition: color var(--dur-sm) var(--ease-out-quart);
+  }
+
+  .links a::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 100%;
+    bottom: 0;
+    height: 1px;
+    background: var(--primary);
+    transition: right var(--dur-md) var(--ease-out-quart);
+  }
+
+  .links a:hover {
+    color: var(--ink);
+  }
+
+  .links a:hover::after {
+    right: 0;
+  }
+
+  .nav-cta {
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+  }
+
+  @media (min-width: 860px) {
+    .links {
+      display: flex;
+    }
+  }
+</style>
+
+<script>
+  const nav = document.getElementById('site-nav');
+  const setScrolled = () => {
+    if (!nav) return;
+    nav.dataset.scrolled = window.scrollY > 24 ? 'true' : 'false';
+  };
+  setScrolled();
+  window.addEventListener('scroll', setScrolled, { passive: true });
+</script>

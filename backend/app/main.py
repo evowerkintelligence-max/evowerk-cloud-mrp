@@ -44,7 +44,6 @@ from app.api.routes import (
     spc,
     suppliers,
     throughput,
-    what_if_scenarios,
     workflows,
 )
 from app.core.config import get_settings
@@ -125,7 +124,6 @@ app.include_router(rca_cases.router)
 app.include_router(predictive.analyze_router)
 app.include_router(predictive.router)
 app.include_router(mfg_forecast.router)
-app.include_router(what_if_scenarios.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
 app.include_router(alerts.router)

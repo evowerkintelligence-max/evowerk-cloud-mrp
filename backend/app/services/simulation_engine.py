@@ -57,6 +57,18 @@ def _delta(baseline: float, projected: float) -> dict[str, Any]:
     }
 
 
+def compare_snapshots(snapshot_a: dict[str, Any], snapshot_b: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per-metric delta of `snapshot_a` relative to `snapshot_b` as the
+    baseline (e.g. from two saved SimulationRuns) - reuses the same
+    {absolute, pct, direction} shape run_whatif() already returns for
+    baseline-vs-projected, so a saved run can be diffed against another
+    saved run with no new rendering logic. Note the argument order into
+    _delta(): snapshot_b is the baseline, snapshot_a is "projected" -
+    compare_snapshots(a, b) reads as "how does a differ from b"."""
+    keys = snapshot_a.keys() & snapshot_b.keys()
+    return {k: _delta(snapshot_b[k], snapshot_a[k]) for k in sorted(keys)}
+
+
 def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
     """Compute projected manufacturing outcomes after applying `changes` to `baseline`.
 

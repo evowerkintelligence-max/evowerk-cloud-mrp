@@ -42,7 +42,6 @@ import { RcaCases } from "./pages/RcaCases";
 import { RunHistory } from "./pages/workflows/RunHistory";
 import { Predictive } from "./pages/Predictive";
 import { MfgForecast } from "./pages/MfgForecast";
-import { Scenarios } from "./pages/Scenarios";
 import { ComputerVision } from "./pages/ComputerVision";
 import { Alerts } from "./pages/Alerts";
 
@@ -111,7 +110,6 @@ export function App() {
         <Route path="/rca-cases" element={<RcaCases />} />
         <Route path="/predictive" element={<Predictive />} />
         <Route path="/mfg-forecast" element={<MfgForecast />} />
-        <Route path="/scenarios" element={<Scenarios />} />
         <Route path="/computer-vision" element={<ComputerVision />} />
         <Route path="/alerts" element={<Alerts />} />
       </Route>

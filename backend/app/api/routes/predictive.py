@@ -10,89 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user
 from app.db.session import get_db
-from app.services import datasets as ds_service
 from app.services import predictive as service
 
-analyze_router = APIRouter(prefix="/datasets/{dataset_id}/predictive", tags=["predictive"])
 router = APIRouter(prefix="/predictive", tags=["predictive"])
-
-
-class PredictiveRequest(BaseModel):
-    date_col: str = Field(..., min_length=1)
-    machine_col: str = Field(..., min_length=1)
-    planned_time_col: str = Field(..., min_length=1)
-    operating_time_col: str = Field(..., min_length=1)
-    total_units_col: str = Field(..., min_length=1)
-    good_units_col: str = Field(..., min_length=1)
-    target_rate: float | None = None
-    failure_col: str | None = None
-    downtime_category_col: str | None = None
-    hourly_value: float = 1000.0
-
-
-class MachineRiskResponse(BaseModel):
-    machine: str
-    current_oee: float
-    trend_slope: float
-    failure_probability: float
-    risk_level: str
-    top_driver: str
-    rul_days: float | None
-    last_failure_days_ago: float | None
-    ml_powered: bool
-    ml_drivers: list[dict]
-
-
-class ModelMetaResponse(BaseModel):
-    algorithm: str
-    accuracy_pct: float
-    n_training_samples: int
-    top_features: list[dict]
-
-
-class MaintenanceRecResponse(BaseModel):
-    machine: str
-    priority: str
-    action: str
-    reason: str
-    estimated_pm_hours: float
-    avoided_downtime_hours: float
-    net_saving: float
-
-
-class CostSummaryResponse(BaseModel):
-    total_avoided_cost: float
-    total_pm_cost: float
-    net_savings: float
-    roi_pct: float
-    machines_at_risk: int
-
-
-class PredictiveResponse(BaseModel):
-    machines: list[MachineRiskResponse]
-    recommendations: list[MaintenanceRecResponse]
-    cost_summary: CostSummaryResponse
-    model_meta: ModelMetaResponse | None
-
-
-@analyze_router.post("/analyze", response_model=PredictiveResponse)
-async def analyze_predictive(
-    dataset_id: uuid.UUID,
-    req: PredictiveRequest,
-    current: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> PredictiveResponse:
-    dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
-    result = service.analyze(dataset, **req.model_dump())
-    return PredictiveResponse(
-        machines=[MachineRiskResponse(**vars(m)) for m in result.machines],
-        recommendations=[MaintenanceRecResponse(**vars(r)) for r in result.recommendations],
-        cost_summary=CostSummaryResponse(**vars(result.cost_summary)),
-        model_meta=ModelMetaResponse(**vars(result.model_meta)) if result.model_meta else None,
-    )
-
-
-# ─── Maintenance schedule CRUD ──────────────────────────────────────────────
 
 ScheduleStatus = Literal["pending", "in_progress", "done", "skipped"]
 SchedulePriority = Literal["immediate", "scheduled", "monitor"]

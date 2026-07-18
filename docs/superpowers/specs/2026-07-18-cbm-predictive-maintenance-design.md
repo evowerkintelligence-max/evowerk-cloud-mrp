@@ -99,11 +99,13 @@ SensorReading
   retention: 90 days raw, pruned by periodic job (config default, no downsampling yet)
 
 SensorBaseline
-  org_id, machine, sensor, mean, std, n, learning_until: datetime
-  updated incrementally on every SensorReading write (Welford's algorithm, O(1))
+  org_id, machine, sensor, n, centerline, ucl, lcl, mr_bar, updated_at: datetime
+  refreshed on every SensorReading write from spc_calc.individuals_chart() over the
+  trailing window (last 200 readings) — reuses existing SPC math, not a new stat engine
 
 SensorAnomaly
-  id, org_id, machine, sensor, reading_id, z_score, detected_at, acknowledged_at: datetime | None
+  id, org_id, machine, sensor, reading_id, violations: list[int], detected_at, acknowledged_at: datetime | None
+  violations stores the Nelson rule numbers (1-8) from spc_calc.nelson_violations()
 
 WeibullFit
   org_id, machine, shape_k, scale_lambda, n_failures, n_censored, fit_tier, fit_at: datetime
@@ -112,20 +114,30 @@ WeibullFit
 
 ## Anomaly Detection
 
-- **Baseline learning**: first 14 days or 500 readings (whichever first) per
-  (machine, sensor) — no flags fire during this window, mirrors the existing auto-baseline
-  UX convention already used by Throughput's target estimation.
-- **Detection rule (v1)**: 3-sigma control limit —
-  `is_anomaly = abs(value - mean) > 3 * std`, `z_score` stored as severity.
-  `ponytail: plain 3-sigma, not the full Western Electric rule set (run-length,
-  trending patterns) — add specific WECO rules only if false-positive rate on real data
-  shows plain 3-sigma insufficient.`
+**Revised after discovering existing infrastructure**: `backend/app/analytics/spc_calc.py`
+already implements a full Individuals/Moving-Range (I-MR) control chart with all 8 Nelson
+(Western Electric) rules (`individuals_chart()`, `nelson_violations()`) — a complete,
+already-correct textbook SPC engine, currently used by the `Spc` analytics page. This is
+strictly more rigorous than a bespoke plain-3-sigma scorer and is reused as-is rather than
+reimplemented (ladder rung: already in this codebase).
+
+- **Scoring**: on each new `SensorReading`, fetch the trailing window (last 200 readings,
+  or fewer during baseline learning) for that `(machine, sensor)` and call
+  `spc_calc.individuals_chart(values, labels)`. The last point's `in_control` /
+  `violations` becomes this reading's anomaly result — reuses the exact same control-limit
+  math the SPC page already ships, no second, weaker implementation.
+- **Baseline learning**: fewer than `spc_calc.MIN_BASELINE` (20) readings for a
+  (machine, sensor) — no flags fire yet (`individuals_chart` already exposes this via
+  `low_sample_warning`, reused rather than a new threshold invented for CBM).
+- **Persisted cache**: `SensorBaseline(machine, sensor, n, centerline, ucl, lcl, mr_bar,
+  updated_at)` — refreshed on every write from `individuals_chart`'s output, so the
+  dashboard/API read the last computed control limits without recomputing per request.
 - **Baseline reset**: manual "relearn baseline" action per (machine, sensor), for when a
   real repair legitimately shifts the normal operating range. Automatic detection of
   "this shift is legitimate vs. degradation" is out of scope for v1.
-- **ML seam**: `AnomalyScorer` protocol — `score(reading, baseline) -> AnomalyResult`.
-  One implementation (`SPCScorer`) ships now. This abstraction is justified because
-  swappable-scorer-later was an explicit requirement, not spec-ulative design — no second
+- **ML seam**: an `AnomalyScorer` protocol — `score(readings, baseline) -> AnomalyResult`
+  — wraps the `individuals_chart` call today. This abstraction is justified because
+  swappable-scorer-later was an explicit requirement, not speculative design — no second
   implementation is built in this pass.
 - **Out of scope for v1**: multi-signal/cross-sensor anomaly correlation — deferred to the
   future ML scorer.

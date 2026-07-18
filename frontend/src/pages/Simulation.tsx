@@ -137,6 +137,12 @@ interface SimulationRun {
   created_at: string;
 }
 
+interface CompareResult {
+  run_a_id: string;
+  run_b_id: string;
+  delta: Record<string, { absolute: number; pct: number; direction: string }>;
+}
+
 async function j<T>(resPromise: Promise<Response>): Promise<T> {
   const res = await resPromise;
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Request failed");
@@ -152,6 +158,8 @@ export function Simulation() {
   const [changes, setChanges] = useState<Changes>({});
   const [simulationId, setSimulationId] = useState<string | null>(null);
   const [expandedSimId, setExpandedSimId] = useState<string | null>(null);
+  const [compareA, setCompareA] = useState("");
+  const [compareB, setCompareB] = useState("");
   const [result, setResult] = useState<SimResult | null>(null);
   const [downloading, setDownloading] = useState(false);
 
@@ -219,6 +227,16 @@ export function Simulation() {
       if (id === simulationId) setSimulationId(null);
       if (id === expandedSimId) setExpandedSimId(null);
     },
+  });
+
+  const compare = useMutation({
+    mutationFn: () =>
+      j<CompareResult>(
+        apiFetch("/simulation/compare", {
+          method: "POST",
+          body: JSON.stringify({ run_a_id: compareA, run_b_id: compareB }),
+        }),
+      ),
   });
 
   function loadSimulation(sim: SavedSimulation) {
@@ -454,7 +472,13 @@ export function Simulation() {
                               <span>
                                 {new Date(r.created_at).toLocaleString()} — {Object.keys(r.changes).length} change(s)
                               </span>
-                              <div className="flex gap-2">
+                              <div className="flex items-center gap-3">
+                                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <input type="radio" name="compareA" checked={compareA === r.id} onChange={() => setCompareA(r.id)} /> A
+                                </label>
+                                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <input type="radio" name="compareB" checked={compareB === r.id} onChange={() => setCompareB(r.id)} /> B
+                                </label>
                                 <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "csv")}>
                                   CSV
                                 </Button>
@@ -480,8 +504,60 @@ export function Simulation() {
             </Table>
           </TableWrap>
           {del.isError && <Alert variant="destructive">{(del.error as Error).message}</Alert>}
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              disabled={!compareA || !compareB || compareA === compareB}
+              loading={compare.isPending}
+              onClick={() => compare.mutate()}
+            >
+              Compare selected runs
+            </Button>
+            {compareA && compareB && compareA === compareB && (
+              <span className="text-xs text-muted-foreground">Pick two different runs.</span>
+            )}
+          </div>
+          {compare.isError && <Alert variant="destructive">{(compare.error as Error).message}</Alert>}
         </CardContent>
       </Card>
+
+      {compare.isSuccess && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Run comparison</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Metric</TH>
+                    <TH>Δ (A → B)</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {Object.keys(METRIC_LABELS)
+                    .filter((k) => k in compare.data.delta)
+                    .map((k) => {
+                      const d = compare.data.delta[k];
+                      const arrow = d.direction === "increase" ? "↑" : d.direction === "decrease" ? "↓" : "→";
+                      return (
+                        <TR key={k}>
+                          <TD className="font-medium">{METRIC_LABELS[k]}</TD>
+                          <TD className={deltaColor(k, d.direction) + " font-semibold"}>
+                            {arrow} {fmtVal(k, d.absolute)} ({d.pct > 0 ? "+" : ""}
+                            {d.pct.toFixed(1)}%)
+                          </TD>
+                        </TR>
+                      );
+                    })}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

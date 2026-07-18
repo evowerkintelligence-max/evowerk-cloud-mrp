@@ -362,7 +362,7 @@ export function WorkflowBuilder() {
               <div className="w-96 shrink-0 space-y-4 overflow-y-auto rounded-md border border-border p-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold">Step config</h3>
-                  <Button variant="destructive" size="sm" onClick={() => removeStep(selectedStep.key)}>
+                  <Button variant="destructive" size="sm" disabled={steps.length === 1} onClick={() => removeStep(selectedStep.key)}>
                     Remove step
                   </Button>
                 </div>

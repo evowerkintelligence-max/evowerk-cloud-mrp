@@ -388,6 +388,7 @@ export function WorkflowBuilder() {
                 onEdgesDelete={onEdgesDelete}
                 onNodeClick={(_, node) => setSelectedKey(node.id)}
                 onPaneClick={() => setSelectedKey(null)}
+                deleteKeyCode={null}
                 fitView
               >
                 <Background />

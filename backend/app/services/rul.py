@@ -87,6 +87,27 @@ async def _compute_fit(db: AsyncSession, org_id: uuid.UUID, machine: str) -> tup
     return None, None, n_failures, n_censored, "insufficient_data"
 
 
+async def days_since_last_breakdown(db: AsyncSession, org_id: uuid.UUID, machine: str) -> float:
+    """Elapsed time since this machine's last breakdown - the "current age" t
+    that failure_probability_30d must condition survival on. 0.0 (unconditioned)
+    when there's no breakdown history yet for this machine to measure age from."""
+    result = await db.execute(
+        select(DowntimeIncident.started_at)
+        .where(
+            DowntimeIncident.org_id == org_id,
+            DowntimeIncident.machine == machine,
+            DowntimeIncident.reason == "breakdown",
+        )
+        .order_by(DowntimeIncident.started_at.desc())
+        .limit(1)
+    )
+    started_at = result.scalar_one_or_none()
+    if started_at is None:
+        return 0.0
+    started_at = ensure_utc(started_at)
+    return max((datetime.now(timezone.utc) - started_at).total_seconds() / 86400.0, 0.0)
+
+
 async def get_or_refit(db: AsyncSession, org_id: uuid.UUID, machine: str) -> WeibullFit:
     today = datetime.now(timezone.utc).date()
     existing = (
@@ -143,19 +164,14 @@ def _weibull_survival(t: float, k: float, lam: float) -> float:
         return 0.0
 
 
-def failure_probability_30d(fit: WeibullFit) -> float | None:
+def failure_probability_30d(fit: WeibullFit, t: float = 0.0) -> float | None:
     """Probability this machine has a breakdown within the next 30 days,
-    conditioned on however long it's already run since its last breakdown
-    (or since records began). None when the fit is insufficient_data - never
-    fabricate a number with no calibration behind it."""
+    conditioned on `t` - days already run since its last breakdown (get this
+    from days_since_last_breakdown()). None when the fit is insufficient_data
+    - never fabricate a number with no calibration behind it."""
     if fit.shape_k is None or fit.scale_lambda is None:
         return None
     k, lam = fit.shape_k, fit.scale_lambda
-    t = 0.0  # conditioning on "since the last breakdown" is handled by the
-    # caller passing a fit whose durations already encode elapsed time;
-    # the unconditional 30-day window from a fresh interval is the
-    # reported figure - see rul.py module docstring in the design spec
-    # for why a per-request "current age" isn't threaded through here.
     survival_now = _weibull_survival(t, k, lam)
     survival_30 = _weibull_survival(t + _RUL_HORIZON_DAYS, k, lam)
     if survival_now <= 0:

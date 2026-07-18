@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Uuid
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -79,6 +79,12 @@ class WeibullFit(Base):
     docstring for why there's no scheduled job."""
 
     __tablename__ = "weibull_fits"
+    # Matches alembic's ix_weibull_fits_org_machine (b4d8f2a96e37) - declaring
+    # it here too so get_or_refit's IntegrityError race-safety path (see
+    # app.services.rul, mirroring app.services.morning_brief's pattern) is
+    # actually enforced under Base.metadata.create_all in tests, not just
+    # against a real Postgres migration.
+    __table_args__ = (Index("ix_weibull_fits_org_machine", "org_id", "machine", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(

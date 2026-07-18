@@ -25,7 +25,6 @@ import { Scrap } from "./pages/analytics/Scrap";
 import { Shifts } from "./pages/analytics/Shifts";
 import { Spc } from "./pages/analytics/Spc";
 import { Ask } from "./pages/Ask";
-import { Reports } from "./pages/Reports";
 import { Dashboards as BiDashboards } from "./pages/bi/Dashboards";
 import { ChartBuilder } from "./pages/bi/ChartBuilder";
 import { DashboardDetail as BiDashboardDetail } from "./pages/bi/DashboardDetail";
@@ -93,7 +92,6 @@ export function App() {
         <Route path="/sql-editor" element={<SqlEditor />} />
         <Route path="/simulation" element={<Simulation />} />
         <Route path="/ask" element={<Ask />} />
-        <Route path="/reports" element={<Reports />} />
         <Route path="/bi" element={<BiDashboards />} />
         <Route path="/bi/new" element={<ChartBuilder />} />
         <Route path="/bi/:id" element={<BiDashboardDetail />} />

@@ -25,7 +25,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     procurement,
     rca_case,
     realtime,
-    scenario,
+    simulation,
     shift_schedule,
     telemetry,
     tenant,

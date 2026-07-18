@@ -20,6 +20,23 @@
 # (Server-Sent Events) - nginx buffers responses by default, which would
 # delay every tick until the buffer filled, and its 60s default read timeout
 # would silently cut a stream whose interval_seconds is set above that.
+#
+# Several of these prefixes are ALSO SPA routes (/analytics, /bi, /reports,
+# /workflows, /automl, /alerts, /integrations, /realtime, /simulation,
+# /predictive, /rca-cases - see App.tsx). Client-side nav never hits this
+# proxy, but a hard refresh or a direct URL open does: that's a full-page GET
+# whose Accept header leads with text/html, vs apiFetch()'s fetch() calls
+# which never send that. Without the map/try_files pair below, a refresh on
+# e.g. /analytics/oee got proxied straight to the backend and hit a bare
+# JSON 404 (no HTML route matches "/analytics/oee" there) instead of
+# index.html - same fix vite.config.ts's dev proxy already has via its
+# bypass() callback. (`if` + `rewrite ... last` inside a regex location is a
+# known nginx footgun - it internal-redirects back into the same regex
+# location and loops - so this uses map + try_files instead.)
+map $http_accept $spa_fallback {
+    default "";
+    "~*text/html" "/index.html";
+}
 
 server {
     listen 80;
@@ -36,6 +53,10 @@ server {
     }
 
     location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace)(/|$) {
+        try_files $spa_fallback @api;
+    }
+
+    location @api {
         proxy_pass http://${BACKEND_UPSTREAM};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

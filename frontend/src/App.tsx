@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { useAuthStore } from "./store/authStore";
+import { useAuthHydrated, useAuthStore } from "./store/authStore";
 import { AppShell } from "./components/AppShell";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
@@ -46,6 +46,8 @@ import { Alerts } from "./pages/Alerts";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const hydrated = useAuthHydrated();
+  if (!hydrated) return null;
   if (!accessToken) return <Navigate to="/login" replace />;
   return children;
 }

@@ -153,6 +153,7 @@ export function Simulation() {
   const [simulationId, setSimulationId] = useState<string | null>(null);
   const [expandedSimId, setExpandedSimId] = useState<string | null>(null);
   const [result, setResult] = useState<SimResult | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const loadBaseline = useMutation({
     mutationFn: async () => {
@@ -227,6 +228,22 @@ export function Simulation() {
     setBaseline((b) => ({ ...b, ...sim.baseline }));
     setChanges(sim.changes ?? {});
     setResult(null);
+  }
+
+  async function downloadRun(simId: string, runId: string, fmt: "csv" | "xlsx") {
+    setDownloading(true);
+    try {
+      const res = await apiFetch(`/simulation/${simId}/runs/${runId}/export?fmt=${fmt}`);
+      if (!res.ok) throw new Error("Export failed");
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `simulation-run.${fmt}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
   }
 
   function setBaselineField(key: keyof Baseline, value: string) {
@@ -437,6 +454,14 @@ export function Simulation() {
                               <span>
                                 {new Date(r.created_at).toLocaleString()} — {Object.keys(r.changes).length} change(s)
                               </span>
+                              <div className="flex gap-2">
+                                <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "csv")}>
+                                  CSV
+                                </Button>
+                                <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "xlsx")}>
+                                  XLSX
+                                </Button>
+                              </div>
                             </div>
                           ))}
                         </TD>

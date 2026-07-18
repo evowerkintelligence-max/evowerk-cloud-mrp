@@ -51,6 +51,7 @@ from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
 from app.services import realtime as realtime_service
 from app.services import realtime_cache
+from app.services import sensor_consumer
 
 settings = get_settings()
 
@@ -63,7 +64,9 @@ async def lifespan(app: FastAPI):
     # Start this replica's realtime_cache consumer - see its module
     # docstring for why every replica needs its own consumer group.
     await realtime_cache.start_cache_consumer()
+    await sensor_consumer.start_sensor_consumer()
     yield
+    await sensor_consumer.stop_sensor_consumer()
     await realtime_cache.stop_cache_consumer()
     realtime_service.stop_all_runners()
 

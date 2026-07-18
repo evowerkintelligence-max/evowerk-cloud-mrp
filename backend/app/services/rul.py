@@ -80,9 +80,10 @@ async def _compute_fit(db: AsyncSession, org_id: uuid.UUID, machine: str) -> tup
 
     fleet_durations, fleet_observed = await _breakdown_durations(db, org_id, None)
     fleet_failures = sum(fleet_observed)
+    fleet_censored = len(fleet_observed) - fleet_failures
     if fleet_failures >= _MIN_FAILURES_FLEET:
         shape_k, scale_lambda = _fit_weibull(fleet_durations, fleet_observed)
-        return shape_k, scale_lambda, n_failures, n_censored, "fleet_pooled"
+        return shape_k, scale_lambda, fleet_failures, fleet_censored, "fleet_pooled"
 
     return None, None, n_failures, n_censored, "insufficient_data"
 

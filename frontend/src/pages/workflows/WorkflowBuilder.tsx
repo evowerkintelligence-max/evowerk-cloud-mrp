@@ -152,6 +152,37 @@ export function WorkflowBuilder() {
       query.state.data?.some((r) => r.status === "queued" || r.status === "running") ? 1500 : false,
   });
 
+  const latestRun = runs.data?.[0];
+  const latestRunDetail = useQuery<RunDetail>({
+    queryKey: ["workflow-run", id, "latest", latestRun?.id],
+    queryFn: async () => {
+      const res = await apiFetch(`/workflows/${id}/runs/${latestRun!.id}`);
+      if (!res.ok) throw new Error("Failed to load run");
+      return res.json();
+    },
+    enabled: !isNew && !!latestRun,
+    refetchInterval: (query) =>
+      query.state.data?.status === "queued" || query.state.data?.status === "running" ? 1500 : false,
+  });
+
+  const statusByStepId = useMemo(() => {
+    const map: Record<string, { status: RunNodeStatus; error?: string }> = {};
+    for (const e of latestRunDetail.data?.events ?? []) {
+      if (!e.step_id) continue;
+      if (e.event_type === "node_started") map[e.step_id] = { status: "running" };
+      if (e.event_type === "node_skipped") map[e.step_id] = { status: "skipped" };
+      if (e.event_type === "node_finished") {
+        const status = typeof e.payload.status === "string" ? e.payload.status : "success";
+        const failed = status !== "success";
+        map[e.step_id] = {
+          status: failed ? "failed" : "success",
+          error: failed && typeof e.payload.error === "string" ? e.payload.error : undefined,
+        };
+      }
+    }
+    return map;
+  }, [latestRunDetail.data]);
+
   const runDetail = useQuery<RunDetail>({
     queryKey: ["workflow-run", id, expandedRun],
     queryFn: async () => {
@@ -231,9 +262,14 @@ export function WorkflowBuilder() {
         type: "workflowStep",
         position: s.position,
         selected: s.key === selectedKey,
-        data: { name: s.name, type: s.type, status: "idle" as RunNodeStatus } satisfies WorkflowNodeData,
+        data: {
+          name: s.name,
+          type: s.type,
+          status: statusByStepId[s.id]?.status ?? "idle",
+          error: statusByStepId[s.id]?.error,
+        } satisfies WorkflowNodeData,
       })),
-    [steps, selectedKey],
+    [steps, selectedKey, statusByStepId],
   );
 
   const edges: Edge[] = useMemo(

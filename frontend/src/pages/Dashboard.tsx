@@ -6,7 +6,6 @@ import {
   Boxes,
   CalendarRange,
   Database,
-  FileText,
   Layers,
   LayoutGrid,
   Package,
@@ -90,7 +89,6 @@ const LINKS = [
   { to: "/datasets", label: "Datasets", description: "Upload, clean, and query production data", icon: Database },
   { to: "/bi", label: "BI Dashboards", description: "Build charts and save them to dashboards", icon: LayoutGrid },
   { to: "/ask", label: "Ask", description: "Natural-language Q&A over your data", icon: Sparkles },
-  { to: "/reports", label: "Reports", description: "Export PDF/CSV reports", icon: FileText },
 ];
 
 /** Cycled per explore-card index so the grid reads as multi-color, not monochrome. */

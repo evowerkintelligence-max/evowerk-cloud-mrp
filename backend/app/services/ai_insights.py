@@ -24,6 +24,25 @@ _STATUS_WORDS = ("stockout", "low", "dead_stock", "excess", "slow_moving", "heal
 _ABC_PATTERN = re.compile(r"\bclass\s*([abc])\b", re.IGNORECASE)
 _LEAD_TIME_NUMBER = re.compile(r"lead\s*time\D{0,15}(\d+)", re.IGNORECASE)
 
+# English phrasing for each status word - _health_narrative reads these into
+# sentences rather than dumping the raw enum value (e.g. "no_data") at the user.
+_STATUS_PHRASES = {
+    "stockout": "at stockout",
+    "low": "low on stock",
+    "dead_stock": "dead stock",
+    "excess": "overstocked",
+    "slow_moving": "slow-moving",
+    "healthy": "healthy",
+}
+
+
+def _join_natural(parts: list[str]) -> str:
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return f"{', '.join(parts[:-1])}, and {parts[-1]}"
+
 
 @dataclass
 class AiInsightResult:
@@ -87,19 +106,37 @@ def _filter_lines(lines: list[InventoryAnalyticsLine], q_lower: str) -> list[Inv
 def _health_narrative(lines: list[InventoryAnalyticsLine]) -> str:
     if not lines:
         return "No items match that question."
+
+    # no_data isn't a health verdict, it's an absence of one - keep it out of
+    # the status breakdown so it doesn't read as if "no_data" were a real state.
+    no_data = [ln for ln in lines if ln.status == "no_data"]
+    rated = [ln for ln in lines if ln.status != "no_data"]
+
+    if not rated:
+        noun = "item" if len(no_data) == 1 else "items"
+        return f"You have {len(no_data)} {noun}, but none has enough transaction history yet for me to assess status."
+
     counts: dict[str, int] = {}
-    for ln in lines:
+    for ln in rated:
         counts[ln.status] = counts.get(ln.status, 0) + 1
-    summary = ", ".join(f"{count} {status}" for status, count in sorted(counts.items(), key=lambda kv: -kv[1]))
+    clauses = [
+        f"{count} {_STATUS_PHRASES.get(status, status)}"
+        for status, count in sorted(counts.items(), key=lambda kv: -kv[1])
+    ]
+    text = f"Of {len(lines)} item(s), {_join_natural(clauses)}."
+    if no_data:
+        noun = "item" if len(no_data) == 1 else "items"
+        verb = "doesn't" if len(no_data) == 1 else "don't"
+        text += f" {len(no_data)} {noun} {verb} have enough history yet to assess."
+
     worst = sorted(
-        (ln for ln in lines if ln.status in ("stockout", "low")), key=lambda ln: ln.days_of_supply or 0.0
+        (ln for ln in rated if ln.status in ("stockout", "low")), key=lambda ln: ln.days_of_supply or 0.0
     )[:3]
-    text = f"{len(lines)} item(s): {summary}."
     if worst:
         parts = [
-            f"{ln.item_sku} ({ln.status}, {ln.days_of_supply:.0f}d supply)"
+            f"{ln.item_sku} ({_STATUS_PHRASES.get(ln.status, ln.status)}, {ln.days_of_supply:.0f}d supply)"
             if ln.days_of_supply is not None
-            else f"{ln.item_sku} ({ln.status})"
+            else f"{ln.item_sku} ({_STATUS_PHRASES.get(ln.status, ln.status)})"
             for ln in worst
         ]
         text += f" Most urgent: {', '.join(parts)}."

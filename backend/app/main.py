@@ -12,6 +12,7 @@ from app.api.routes import (
     auth,
     bi,
     boms,
+    cbm,
     computer_vision,
     data_chat,
     datasets,
@@ -132,6 +133,7 @@ app.include_router(what_if_scenarios.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
 app.include_router(alerts.router)
+app.include_router(cbm.router)
 
 
 @app.get("/health")

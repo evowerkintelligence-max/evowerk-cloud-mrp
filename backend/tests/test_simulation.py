@@ -187,3 +187,22 @@ async def test_simulation_run_export_tenant_isolation(client):
     assert res.status_code == 404
     res_list = await client.get(f"/simulation/{sim['id']}/runs", headers=_h(token_b))
     assert res_list.status_code == 404
+
+
+async def test_simulation_compare_tenant_isolation(client):
+    token_a = await _register_and_login(client, email="cmpa@example.com", org_name="CmpOrgA")
+    sim = await _create_simulation(client, token_a)
+    run_a = await client.post(f"/simulation/{sim['id']}/run", headers=_h(token_a), json={"changes": {}})
+    run_a_id = run_a.json()["id"]
+
+    token_b = await _register_and_login(client, email="cmpb@example.com", org_name="CmpOrgB")
+    sim_b = await _create_simulation(client, token_b)
+    run_b = await client.post(f"/simulation/{sim_b['id']}/run", headers=_h(token_b), json={"changes": {}})
+    run_b_id = run_b.json()["id"]
+
+    # org A cannot compare its own run against org B's run
+    res = await client.post(
+        "/simulation/compare", headers=_h(token_a),
+        json={"run_a_id": run_a_id, "run_b_id": run_b_id},
+    )
+    assert res.status_code == 404

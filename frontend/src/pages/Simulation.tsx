@@ -210,13 +210,21 @@ export function Simulation() {
   });
 
   const runAndSave = useMutation({
-    mutationFn: () =>
-      j<SimulationRun>(
-        apiFetch(`/simulation/${simulationId}/run`, { method: "POST", body: JSON.stringify({ changes }) }),
-      ),
+    mutationFn: async () => {
+      await j(
+        apiFetch(`/simulation/${simulationId}`, {
+          method: "PUT",
+          body: JSON.stringify({ name: scenarioName, baseline, changes }),
+        }),
+      );
+      return j<SimulationRun>(
+        apiFetch(`/simulation/${simulationId}/run`, { method: "POST", body: JSON.stringify({ changes: {} }) }),
+      );
+    },
     onSuccess: (data) => {
       setResult(data.result);
       qc.invalidateQueries({ queryKey: ["simulation-runs", simulationId] });
+      qc.invalidateQueries({ queryKey: ["simulations"] });
     },
   });
 
@@ -533,7 +541,7 @@ export function Simulation() {
                 <THead>
                   <TR>
                     <TH>Metric</TH>
-                    <TH>Δ (A → B)</TH>
+                    <TH>Δ (B → A)</TH>
                   </TR>
                 </THead>
                 <TBody>

@@ -138,12 +138,13 @@ reimplemented (ladder rung: already in this codebase).
 - **Baseline reset**: manual "relearn baseline" action per (machine, sensor), for when a
   real repair legitimately shifts the normal operating range. Automatic detection of
   "this shift is legitimate vs. degradation" is out of scope for v1.
-- **ML seam**: an `AnomalyScorer` protocol — `score(readings, baseline) -> AnomalyResult`
-  — wraps the `individuals_chart` call today. This abstraction is justified because
-  swappable-scorer-later was an explicit requirement, not speculative design — no second
-  implementation is built in this pass.
-- **Out of scope for v1**: multi-signal/cross-sensor anomaly correlation — deferred to the
-  future ML scorer.
+- **ML seam**: not built in this pass, correcting an earlier draft of this spec that
+  claimed an `AnomalyScorer` protocol wrapper shipped with Task 3. `app.services.anomaly`
+  is a plain `score_reading()` function wrapping `individuals_chart` - swapping in an
+  ML scorer later means introducing that seam then, not carrying an unused abstraction
+  now (ladder rung: no interface for one implementation).
+- **Out of scope for v1**: multi-signal/cross-sensor anomaly correlation, and any ML
+  scorer implementation - deferred until a second scorer is actually being built.
 
 ## RUL — Weibull Survival Analysis
 

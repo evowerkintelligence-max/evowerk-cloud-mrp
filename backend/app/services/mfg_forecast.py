@@ -1,7 +1,10 @@
-"""Manufacturing-aware forecasting: auto-engineers 12 time-series features
-(lags, rolling stats, trend, calendar/seasonality), trains a TimeSeriesSplit-
-validated GradientBoostingRegressor, projects a recursive multi-step forecast
-with bootstrap-ensemble confidence intervals that honestly widen with the
+"""Manufacturing-aware forecasting: reindexes to a gapless calendar so lag
+features are true calendar lags, clips IQR outliers, auto-engineers 12
+time-series features (lags, rolling stats, trend, calendar/seasonality) on
+top of a linear detrend (so the tree model extrapolates the trend instead of
+flatlining at the historical max), trains a TimeSeriesSplit-validated
+GradientBoostingRegressor, projects a recursive multi-step forecast with
+bootstrap-ensemble confidence intervals that honestly widen with the
 horizon, and translates feature importances into plain-English prescriptive
 insights. Ported near-verbatim from the desktop app's mfg_forecast.py +
 forecast_features.py (dataset-agnostic pandas/numpy/sklearn math).
@@ -10,16 +13,20 @@ from __future__ import annotations
 
 import math
 import statistics
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_percentage_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dataset import Dataset
+from app.models.forecast import ForecastSnapshot
 from app.services import datasets as ds_service
 
 N_LAGS = 14
@@ -94,6 +101,19 @@ class ForecastResult:
     prescriptive: list[PrescriptiveInsight]
     summary: str
     machines: list[str] = field(default_factory=list)
+    gap_count: int = 0
+    outliers_clipped: int = 0
+
+
+@dataclass
+class TrackRecordPoint:
+    date: str
+    actual: float
+    predicted: float
+    lower: float
+    upper: float
+    made_at: str
+    error_pct: float | None
 
 
 def _feature_row(values: list[float], i: int, date_str: str) -> list[float] | None:
@@ -138,6 +158,29 @@ def _aggregate_daily(df: pd.DataFrame, date_col: str, target_col: str, aggregate
     return daily.groupby("date", as_index=False)["value"].agg(agg_fn).sort_values("date")
 
 
+def _reindex_to_calendar(daily: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Fill missing calendar days so lag-7/lag-14 are true calendar lags, not
+    row-position lags. The first and last date are always present (they came
+    from the data), so a forward-fill has no leading gap to worry about."""
+    full_range = pd.date_range(daily["date"].min(), daily["date"].max(), freq="D").strftime("%Y-%m-%d")
+    reindexed = daily.set_index("date").reindex(full_range)
+    gap_count = int(reindexed["value"].isna().sum())
+    reindexed["value"] = reindexed["value"].ffill()
+    return reindexed.reset_index().rename(columns={"index": "date"}), gap_count
+
+
+def _clip_outliers(daily: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    # ponytail: IQR clip, not a full anomaly model - good enough to stop one
+    # bad data-entry day from poisoning 14 days of lag/rolling features.
+    q1, q3 = daily["value"].quantile([0.25, 0.75])
+    iqr = q3 - q1
+    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    clipped_count = int(((daily["value"] < lo) | (daily["value"] > hi)).sum())
+    daily = daily.copy()
+    daily["value"] = daily["value"].clip(lo, hi)
+    return daily, clipped_count
+
+
 def _generate_prescriptive(importances: np.ndarray, target_col: str) -> list[PrescriptiveInsight]:
     total = float(importances.sum()) or 1.0
     ranked = sorted(enumerate(FEATURE_NAMES), key=lambda x: importances[x[0]], reverse=True)
@@ -179,19 +222,32 @@ def run_forecast(
     if len(daily) < 30:
         raise ValueError(f"Need at least 30 daily data points after aggregation (got {len(daily)}). Try a different date column or aggregate method.")
 
+    daily, gap_count = _reindex_to_calendar(daily)
+    daily, outliers_clipped = _clip_outliers(daily)
+
     values = daily["value"].tolist()
     dates = daily["date"].tolist()
 
-    X_list, y_list = [], []
+    # Linear detrend: the GBM below fits a residual around this line, so its
+    # extrapolation isn't capped at the historical max/min of `values` - tree
+    # models otherwise can't project a trend past the range they were trained on.
+    idx_arr = np.arange(len(values), dtype=float)
+    slope, intercept = np.polyfit(idx_arr, np.array(values, dtype=float), 1)
+    trend = slope * idx_arr + intercept
+
+    X_list, y_list, feat_idx = [], [], []
     for i in range(len(values)):
         feat = _feature_row(values, i, dates[i])
         if feat is not None:
             X_list.append(feat)
-            y_list.append(values[i])
+            y_list.append(values[i] - trend[i])
+            feat_idx.append(i)
     if len(X_list) < 20:
         raise ValueError("Not enough data after feature engineering (need 20+ points)")
 
     X, y = np.array(X_list, dtype=float), np.array(y_list, dtype=float)
+    feat_idx_arr = np.array(feat_idx, dtype=int)
+    raw_values_arr = np.array(values, dtype=float)
 
     tscv = TimeSeriesSplit(n_splits=4)
     cv_preds, cv_actuals = [], []
@@ -200,8 +256,10 @@ def run_forecast(
             continue
         m = GradientBoostingRegressor(n_estimators=150, max_depth=4, learning_rate=0.08, subsample=0.85, min_samples_leaf=3, random_state=42)
         m.fit(X[tr_idx], y[tr_idx])
-        cv_preds.extend(m.predict(X[te_idx]).tolist())
-        cv_actuals.extend(y[te_idx].tolist())
+        # Compare on the raw scale, not the (near-zero) residual scale - MAPE
+        # against a residual blows up whenever the residual is close to 0.
+        cv_preds.extend((m.predict(X[te_idx]) + trend[feat_idx_arr[te_idx]]).tolist())
+        cv_actuals.extend(raw_values_arr[feat_idx_arr[te_idx]].tolist())
 
     mape = round(mean_absolute_percentage_error(cv_actuals, cv_preds) * 100, 2) if cv_preds else 0.0
     r2 = round(r2_score(cv_actuals, cv_preds), 3) if cv_preds else 0.0
@@ -218,23 +276,21 @@ def run_forecast(
         bm.fit(X[idx], y[idx])
         boot_models.append(bm)
 
-    def _predict_with_ci(x_row: np.ndarray) -> tuple[float, float, float]:
-        pred = float(model.predict(x_row)[0])
-        return pred, pred - _Z975 * cv_residual_std, pred + _Z975 * cv_residual_std
-
     series: list[ForecastPoint] = []
     hist_start = max(0, len(dates) - 90)
-    x_offset = len(dates) - len(X_list)  # X_list starts at first valid feature row (i >= N_LAGS)
+    row_of_idx = {ii: row for row, ii in enumerate(feat_idx)}
     for i in range(hist_start, len(dates)):
-        xi_idx = i - x_offset
-        if xi_idx < 0:
+        row = row_of_idx.get(i)
+        if row is None:
             continue
-        pred, lo, hi = _predict_with_ci(X[xi_idx].reshape(1, -1))
-        series.append(ForecastPoint(date=dates[i], actual=round(float(y[xi_idx]), 3), predicted=round(pred, 3), lower=round(lo, 3), upper=round(hi, 3)))
+        pred = float(model.predict(X[row].reshape(1, -1))[0]) + trend[i]
+        lo, hi = pred - _Z975 * cv_residual_std, pred + _Z975 * cv_residual_std
+        series.append(ForecastPoint(date=dates[i], actual=round(values[i], 3), predicted=round(pred, 3), lower=round(lo, 3), upper=round(hi, 3)))
 
     main_buf = list(values[-N_LAGS:])
     boot_bufs = [list(values[-N_LAGS:]) for _ in boot_models]
     last_dt = datetime.strptime(dates[-1], "%Y-%m-%d")
+    last_idx = len(values) - 1
 
     def _roll(buf: list, v: float) -> None:
         buf.append(v)
@@ -243,11 +299,12 @@ def run_forecast(
 
     for h in range(1, horizon + 1):
         future_date = (last_dt + timedelta(days=h)).strftime("%Y-%m-%d")
-        pred = float(model.predict(np.array([_engineer_single_future(list(main_buf), future_date)], dtype=float))[0])
+        trend_future = slope * (last_idx + h) + intercept
+        pred = float(model.predict(np.array([_engineer_single_future(list(main_buf), future_date)], dtype=float))[0]) + trend_future
 
         bpred: list[float] = []
         for bm, buf in zip(boot_models, boot_bufs):
-            yb = float(bm.predict(np.array([_engineer_single_future(list(buf), future_date)], dtype=float))[0])
+            yb = float(bm.predict(np.array([_engineer_single_future(list(buf), future_date)], dtype=float))[0]) + trend_future
             bpred.append(yb)
             _roll(buf, yb)
 
@@ -276,4 +333,63 @@ def run_forecast(
     return ForecastResult(
         target_col=target_col, horizon=horizon, mape_pct=mape, r2=r2, n_training_points=len(y),
         series=series, prescriptive=prescriptive, summary=summary, machines=machines,
+        gap_count=gap_count, outliers_clipped=outliers_clipped,
     )
+
+
+async def save_snapshot(
+    db: AsyncSession, org_id: uuid.UUID, dataset_id: uuid.UUID, target_col: str,
+    machine_filter: str | None, series: list[ForecastPoint],
+) -> None:
+    """Append this run's future points so a later run can grade them against
+    reality once those dates have actuals. Append-only - never overwritten -
+    so get_track_record can always find the earliest (longest-lead-time) call."""
+    now = datetime.now(timezone.utc)
+    for p in series:
+        if p.actual is not None:
+            continue
+        db.add(ForecastSnapshot(
+            org_id=org_id, dataset_id=dataset_id, target_col=target_col, machine_filter=machine_filter or "",
+            date=datetime.strptime(p.date, "%Y-%m-%d").date(),
+            predicted=p.predicted, lower=p.lower, upper=p.upper, made_at=now,
+        ))
+    await db.commit()
+
+
+async def get_track_record(
+    db: AsyncSession, org_id: uuid.UUID, target_col: str, machine_filter: str | None,
+    actual_by_date: dict[str, float],
+) -> list[TrackRecordPoint]:
+    """For each date we now have an actual for, find the OLDEST prediction
+    ever made for it (the fairest test - the longest-lead-time call, not a
+    last-minute one) and compare. Empty until a later run's data reaches
+    dates this run predicted - there's no track record on the first run."""
+    if not actual_by_date:
+        return []
+    dates = [datetime.strptime(d, "%Y-%m-%d").date() for d in actual_by_date]
+    rows = (await db.execute(
+        select(ForecastSnapshot)
+        .where(
+            ForecastSnapshot.org_id == org_id,
+            ForecastSnapshot.target_col == target_col,
+            ForecastSnapshot.machine_filter == (machine_filter or ""),
+            ForecastSnapshot.date.in_(dates),
+        )
+        .order_by(ForecastSnapshot.date, ForecastSnapshot.made_at)
+    )).scalars().all()
+
+    earliest_by_date: dict[str, ForecastSnapshot] = {}
+    for row in rows:
+        key = row.date.isoformat()
+        earliest_by_date.setdefault(key, row)
+
+    points = []
+    for key, row in sorted(earliest_by_date.items()):
+        actual = actual_by_date[key]
+        error_pct = round(abs(actual - row.predicted) / actual * 100, 1) if actual else None
+        points.append(TrackRecordPoint(
+            date=key, actual=round(actual, 3), predicted=round(row.predicted, 3),
+            lower=round(row.lower, 3), upper=round(row.upper, 3),
+            made_at=row.made_at.isoformat(), error_pct=error_pct,
+        ))
+    return points

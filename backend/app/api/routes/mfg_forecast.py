@@ -40,6 +40,16 @@ class PrescriptiveInsightResponse(BaseModel):
     icon: str
 
 
+class TrackRecordPointResponse(BaseModel):
+    date: str
+    actual: float
+    predicted: float
+    lower: float
+    upper: float
+    made_at: str
+    error_pct: float | None
+
+
 class ForecastResponse(BaseModel):
     target_col: str
     horizon: int
@@ -50,6 +60,10 @@ class ForecastResponse(BaseModel):
     prescriptive: list[PrescriptiveInsightResponse]
     summary: str
     machines: list[str]
+    gap_count: int
+    outliers_clipped: int
+    track_record: list[TrackRecordPointResponse]
+    track_record_mape: float | None
 
 
 @router.post("/run", response_model=ForecastResponse)
@@ -64,10 +78,20 @@ async def run_forecast(
         result = service.run_forecast(dataset, **req.model_dump())
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    actual_by_date = {p.date: p.actual for p in result.series if p.actual is not None}
+    track_record = await service.get_track_record(db, current.org_id, req.target_col, req.machine_filter, actual_by_date)
+    await service.save_snapshot(db, current.org_id, dataset_id, req.target_col, req.machine_filter, result.series)
+    track_errors = [tr.error_pct for tr in track_record if tr.error_pct is not None]
+    track_record_mape = round(sum(track_errors) / len(track_errors), 2) if track_errors else None
+
     return ForecastResponse(
         target_col=result.target_col, horizon=result.horizon, mape_pct=result.mape_pct, r2=result.r2,
         n_training_points=result.n_training_points,
         series=[ForecastPointResponse(**vars(p)) for p in result.series],
         prescriptive=[PrescriptiveInsightResponse(**vars(p)) for p in result.prescriptive],
         summary=result.summary, machines=result.machines,
+        gap_count=result.gap_count, outliers_clipped=result.outliers_clipped,
+        track_record=[TrackRecordPointResponse(**vars(p)) for p in track_record],
+        track_record_mape=track_record_mape,
     )

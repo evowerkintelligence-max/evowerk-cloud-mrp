@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Numeric, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -60,4 +60,51 @@ class DemandForecast(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ForecastSnapshot(Base):
+    """One future point from one mfg-forecast run, kept forever (append-only,
+    never overwritten) so a later run can compare what we predicted for a
+    date against what actually happened once that date has passed. This is
+    the only way to know real forecast accuracy - the model's own MAPE/R2 are
+    cross-validated on history, not a genuine out-of-sample track record.
+
+    Keyed by (org_id, target_col, machine_filter) rather than dataset_id -
+    Datasets are immutable-after-create (see Dataset's docstring), so a
+    real "new data came in" workflow is a fresh upload with a new dataset_id,
+    not a growing row count on the same one. Scoping to dataset_id would mean
+    a track record that almost never accumulates. dataset_id is kept as a
+    plain informational column (which upload produced this point), not part
+    of the lookup key, and has no FK so deleting an old dataset after a
+    re-upload doesn't cascade-delete its forecast history.
+
+    # ponytail: target_col name is the whole identity - two unrelated
+    # datasets that both happen to use a column called "output" will blend
+    # into the same track record. Add a real named-series concept if that
+    # collision becomes a problem in practice.
+
+    Track record only looks at the OLDEST snapshot per date (see
+    app.services.mfg_forecast.get_track_record) - the longest-lead-time call,
+    which is the fairest test of whether the model saw something coming.
+    """
+
+    __tablename__ = "mfg_forecast_snapshots"
+    __table_args__ = (
+        Index("ix_mfg_forecast_snapshots_lookup", "org_id", "target_col", "machine_filter", "date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    target_col: Mapped[str] = mapped_column(String(255), nullable=False)
+    machine_filter: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    predicted: Mapped[float] = mapped_column(Float, nullable=False)
+    lower: Mapped[float] = mapped_column(Float, nullable=False)
+    upper: Mapped[float] = mapped_column(Float, nullable=False)
+    made_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

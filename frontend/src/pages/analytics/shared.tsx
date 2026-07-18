@@ -332,7 +332,7 @@ export function useDatasets() {
   });
 }
 
-function useDatasetPreview(datasetId: string) {
+export function useDatasetPreview(datasetId: string) {
   return useQuery<{ preview: Record<string, unknown>[] }>({
     queryKey: ["dataset-preview", datasetId],
     queryFn: async () => {
@@ -753,17 +753,16 @@ export interface FilterRow {
   value: string;
 }
 
-interface HealthColumnDtype {
+export interface HealthColumnDtype {
   name: string;
   inferred_dtype: string;
 }
 
-/** Owns all state for a select/group-by/filter/order-by query builder, plus
- * the numeric-column detection (via the dataset health endpoint - CSV/TSV
- * columns are sniffed ALL_VARCHAR, so dtype must come from cell content, not
- * the schema). Shared by the dataset Query tab and the BI chart builder. */
-export function useQueryBuilder(datasetId: string, names: string[]) {
-  const health = useQuery<{ columns: HealthColumnDtype[] }>({
+/** Column dtype inference (via the dataset health endpoint - CSV/TSV columns
+ * are sniffed ALL_VARCHAR, so dtype must come from cell content, not the
+ * schema). Shared by the query builder and the mfg-forecast column pickers. */
+export function useDatasetHealth(datasetId: string) {
+  return useQuery<{ columns: HealthColumnDtype[] }>({
     queryKey: ["dataset-health", datasetId],
     queryFn: async () => {
       const res = await apiFetch(`/datasets/${datasetId}/health`);
@@ -772,6 +771,13 @@ export function useQueryBuilder(datasetId: string, names: string[]) {
     },
     enabled: !!datasetId,
   });
+}
+
+/** Owns all state for a select/group-by/filter/order-by query builder, plus
+ * the numeric-column detection. Shared by the dataset Query tab and the BI
+ * chart builder. */
+export function useQueryBuilder(datasetId: string, names: string[]) {
+  const health = useDatasetHealth(datasetId);
   const dtypeByColumn = new Map(health.data?.columns.map((c) => [c.name, c.inferred_dtype]));
 
   const [joinItemsOn, setJoinItemsOn] = useState("");

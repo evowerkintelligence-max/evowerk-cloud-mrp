@@ -7,8 +7,9 @@ import { InventoryPanel } from "./Inventory";
 import { LocationsPanel } from "./Locations";
 import { ApprovalsPanel } from "./Approvals";
 
-interface OrgMeResponse {
+export interface OrgMeResponse {
   role: string;
+  adjust_approval_threshold: string;
 }
 
 const BASE_TABS = [
@@ -44,7 +45,7 @@ export function Warehouse() {
       <div key={tab} className="animate-fade-in">
         {tab === "inventory" && <InventoryPanel />}
         {tab === "locations" && <LocationsPanel />}
-        {tab === "approvals" && canSeeApprovals && <ApprovalsPanel />}
+        {tab === "approvals" && canSeeApprovals && org.data && <ApprovalsPanel org={org.data} />}
       </div>
     </div>
   );

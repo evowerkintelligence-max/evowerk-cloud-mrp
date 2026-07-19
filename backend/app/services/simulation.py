@@ -44,6 +44,10 @@ async def create_simulation(
 async def update_simulation(db: AsyncSession, org_id: uuid.UUID, simulation_id: uuid.UUID, patch: dict) -> Simulation:
     simulation = await get_simulation_or_404(db, org_id, simulation_id)
     for key, value in patch.items():
+        # baseline/changes are NOT NULL columns - an explicit null in the patch
+        # means "clear it", not "store NULL" (which would fail the commit).
+        if key in ("baseline", "changes") and value is None:
+            value = {}
         setattr(simulation, key, value)
     await db.commit()
     await db.refresh(simulation)
@@ -101,9 +105,15 @@ async def get_run_or_404(db: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID)
     return run
 
 
+class RunsNotComparableError(ValueError):
+    """Raised when two runs don't belong to the same simulation."""
+
+
 async def compare_simulation_runs(
     db: AsyncSession, org_id: uuid.UUID, run_a_id: uuid.UUID, run_b_id: uuid.UUID
 ) -> dict[str, dict]:
     run_a = await get_run_or_404(db, org_id, run_a_id)
     run_b = await get_run_or_404(db, org_id, run_b_id)
+    if run_a.simulation_id != run_b.simulation_id:
+        raise RunsNotComparableError("Runs must belong to the same simulation")
     return compare_snapshots(run_a.result["projected"], run_b.result["projected"])

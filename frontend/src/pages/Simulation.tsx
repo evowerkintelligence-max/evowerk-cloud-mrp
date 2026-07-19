@@ -9,14 +9,13 @@ import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { useDatasets } from "@/pages/analytics/shared";
+import { SendToReportButton, useDatasets } from "@/pages/analytics/shared";
 
 interface Baseline {
   shifts_per_day: number;
   shift_hours: number;
   workers_per_shift: number;
   avg_wage_per_hour: number;
-  machine_count: number;
   throughput_per_shift: number;
   oee_pct: number;
   demand_units_per_day: number;
@@ -31,7 +30,6 @@ const DEFAULT_BASELINE: Baseline = {
   shift_hours: 8,
   workers_per_shift: 25,
   avg_wage_per_hour: 20,
-  machine_count: 10,
   throughput_per_shift: 1000,
   oee_pct: 75,
   demand_units_per_day: 1800,
@@ -46,7 +44,6 @@ const BASELINE_FIELDS: { key: keyof Baseline; label: string; step?: string }[] =
   { key: "shift_hours", label: "Shift hours" },
   { key: "workers_per_shift", label: "Workers / shift" },
   { key: "avg_wage_per_hour", label: "Avg wage / hour ($)", step: "0.01" },
-  { key: "machine_count", label: "Machine count" },
   { key: "throughput_per_shift", label: "Throughput / shift (units)" },
   { key: "oee_pct", label: "OEE (%)", step: "0.1" },
   { key: "demand_units_per_day", label: "Demand (units/day)" },
@@ -105,6 +102,13 @@ function deltaColor(key: string, direction: string) {
   return positive ? "text-emerald-400" : "text-rose-400";
 }
 
+function resultToReportText(result: SimResult): string {
+  const lines = Object.keys(METRIC_LABELS)
+    .filter((k) => k in result.baseline)
+    .map((k) => `${METRIC_LABELS[k]}: ${fmtVal(k, result.baseline[k])} → ${fmtVal(k, result.projected[k])}`);
+  return [...lines, "", ...result.insights].join("\n");
+}
+
 interface SimResult {
   scenario_name: string;
   baseline: Record<string, number>;
@@ -161,7 +165,7 @@ export function Simulation() {
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
   const [result, setResult] = useState<SimResult | null>(null);
-  const [downloading, setDownloading] = useState(false);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
 
   const loadBaseline = useMutation({
     mutationFn: async () => {
@@ -229,7 +233,10 @@ export function Simulation() {
   });
 
   const del = useMutation({
-    mutationFn: (id: string) => apiFetch(`/simulation/${id}`, { method: "DELETE" }),
+    mutationFn: async (id: string) => {
+      const res = await apiFetch(`/simulation/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Delete failed");
+    },
     onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ["simulations"] });
       if (id === simulationId) setSimulationId(null);
@@ -257,7 +264,8 @@ export function Simulation() {
   }
 
   async function downloadRun(simId: string, runId: string, fmt: "csv" | "xlsx") {
-    setDownloading(true);
+    const key = `${runId}:${fmt}`;
+    setDownloadingKey(key);
     try {
       const res = await apiFetch(`/simulation/${simId}/runs/${runId}/export?fmt=${fmt}`);
       if (!res.ok) throw new Error("Export failed");
@@ -268,8 +276,14 @@ export function Simulation() {
       a.click();
       URL.revokeObjectURL(url);
     } finally {
-      setDownloading(false);
+      setDownloadingKey((k) => (k === key ? null : k));
     }
+  }
+
+  function toggleExpandedSim(id: string) {
+    setExpandedSimId((cur) => (cur === id ? null : id));
+    setCompareA("");
+    setCompareB("");
   }
 
   function setBaselineField(key: keyof Baseline, value: string) {
@@ -395,6 +409,7 @@ export function Simulation() {
             <CardTitle>{result.scenario_name}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
+            <SendToReportButton spec={{ type: "text", text: resultToReportText(result) }} label={result.scenario_name} />
             <TableWrap>
               <Table>
                 <THead>
@@ -462,7 +477,7 @@ export function Simulation() {
                         <Button size="sm" variant="secondary" onClick={() => loadSimulation(s)}>
                           Load
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setExpandedSimId(expandedSimId === s.id ? null : s.id)}>
+                        <Button size="sm" variant="ghost" onClick={() => toggleExpandedSim(s.id)}>
                           {expandedSimId === s.id ? "Hide runs" : "View runs"}
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => del.mutate(s.id)}>
@@ -487,10 +502,20 @@ export function Simulation() {
                                 <label className="flex items-center gap-1 text-xs text-muted-foreground">
                                   <input type="radio" name="compareB" checked={compareB === r.id} onChange={() => setCompareB(r.id)} /> B
                                 </label>
-                                <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "csv")}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  loading={downloadingKey === `${r.id}:csv`}
+                                  onClick={() => downloadRun(s.id, r.id, "csv")}
+                                >
                                   CSV
                                 </Button>
-                                <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "xlsx")}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  loading={downloadingKey === `${r.id}:xlsx`}
+                                  onClick={() => downloadRun(s.id, r.id, "xlsx")}
+                                >
                                   XLSX
                                 </Button>
                               </div>

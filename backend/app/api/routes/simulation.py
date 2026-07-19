@@ -250,6 +250,8 @@ async def compare_simulations(
 ):
     try:
         delta = await service.compare_simulation_runs(db, current.org_id, req.run_a_id, req.run_b_id)
+    except service.RunsNotComparableError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except ValueError as exc:
         raise _wrap_not_found(exc) from exc
     return SimulationCompareResponse(run_a_id=req.run_a_id, run_b_id=req.run_b_id, delta=delta)

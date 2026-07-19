@@ -73,9 +73,9 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     """Compute projected manufacturing outcomes after applying `changes` to `baseline`.
 
     Baseline parameters (all optional, sensible defaults used): shifts_per_day,
-    shift_hours, workers_per_shift, avg_wage_per_hour, machine_count,
-    throughput_per_shift, oee_pct, demand_units_per_day, defect_rate_pct,
-    scrap_cost_per_unit, raw_material_cost_per_unit, selling_price_per_unit.
+    shift_hours, workers_per_shift, avg_wage_per_hour, throughput_per_shift,
+    oee_pct, demand_units_per_day, defect_rate_pct, scrap_cost_per_unit,
+    raw_material_cost_per_unit, selling_price_per_unit.
 
     Changes accepted (same keys as baseline, plus): demand_change_pct,
     oee_change_pct (percentage points), defect_change_pct (percentage points).
@@ -84,7 +84,6 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     b_shift_hrs = _safe(baseline.get("shift_hours"), 8)
     b_workers = _safe(baseline.get("workers_per_shift"), 25)
     b_wage = _safe(baseline.get("avg_wage_per_hour"), 20)
-    b_machines = _safe(baseline.get("machine_count"), 10)
     b_tput_shift = _safe(baseline.get("throughput_per_shift"), 1000)
     b_oee = _safe(baseline.get("oee_pct"), 75.0)
     b_demand = _safe(baseline.get("demand_units_per_day"), 1800)
@@ -107,7 +106,6 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     p_shift_hrs = _safe(changes.get("shift_hours"), b_shift_hrs)
     p_workers = _safe(changes.get("workers_per_shift"), b_workers)
     p_wage = _safe(changes.get("avg_wage_per_hour"), b_wage)
-    p_machines = _safe(changes.get("machine_count"), b_machines)
     p_tput_shift = _safe(changes.get("throughput_per_shift"), b_tput_shift)
     p_scrap_cost = _safe(changes.get("scrap_cost_per_unit"), b_scrap_cost)
     p_rm_cost = _safe(changes.get("raw_material_cost_per_unit"), b_rm_cost)
@@ -188,12 +186,14 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     if not insights:
         insights.append("No significant changes detected. Adjust parameters to model a different scenario.")
 
-    def _snap(shifts, shift_hrs, workers, machines, tput_shift, oee, demand, defect, labor, capacity, good, scrap_loss, utilisation, revenue, margin):
+    def _snap(
+        *, shifts, shift_hrs, workers, tput_shift, oee, demand, defect,
+        labor, capacity, good, scrap_loss, utilisation, revenue, margin,
+    ):
         return {
             "shifts_per_day": round(shifts, 1),
             "shift_hours": round(shift_hrs, 1),
             "workers_per_shift": round(workers, 1),
-            "machine_count": round(machines, 1),
             "throughput_per_shift": round(tput_shift, 1),
             "daily_capacity": round(capacity, 1),
             "good_units_per_day": round(good, 1),
@@ -208,12 +208,14 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
         }
 
     baseline_snap = _snap(
-        b_shifts, b_shift_hrs, b_workers, b_machines, b_tput_shift, b_oee, b_demand, b_defect,
-        b_labor_day, b_capacity_day, b_good_units, b_scrap_loss, b_utilisation, b_revenue, b_margin,
+        shifts=b_shifts, shift_hrs=b_shift_hrs, workers=b_workers, tput_shift=b_tput_shift,
+        oee=b_oee, demand=b_demand, defect=b_defect, labor=b_labor_day, capacity=b_capacity_day,
+        good=b_good_units, scrap_loss=b_scrap_loss, utilisation=b_utilisation, revenue=b_revenue, margin=b_margin,
     )
     projected_snap = _snap(
-        p_shifts, p_shift_hrs, p_workers, p_machines, p_tput_shift, p_oee, p_demand, p_defect,
-        p_labor_day, p_capacity_day, p_good_units, p_scrap_loss, p_utilisation, p_revenue, p_margin,
+        shifts=p_shifts, shift_hrs=p_shift_hrs, workers=p_workers, tput_shift=p_tput_shift,
+        oee=p_oee, demand=p_demand, defect=p_defect, labor=p_labor_day, capacity=p_capacity_day,
+        good=p_good_units, scrap_loss=p_scrap_loss, utilisation=p_utilisation, revenue=p_revenue, margin=p_margin,
     )
     delta_snap = {k: _delta(baseline_snap[k], projected_snap[k]) for k in baseline_snap}
 
@@ -320,7 +322,6 @@ def derive_baseline_from_rows(
     baseline: dict[str, Any] = {
         "shifts_per_day": round(shifts_per_day, 1),
         "shift_hours": shift_hours,
-        "machine_count": round(machine_count, 0),
         "throughput_per_shift": round(throughput_per_shift, 1),
         "oee_pct": oee_pct,
         "defect_rate_pct": defect_rate_pct,
@@ -340,7 +341,7 @@ def derive_baseline_from_rows(
         assumptions.append("performance (no target-rate column found — OEE assumes 100% performance)")
     assumptions.append("demand_units_per_day (assumed equal to current good output)")
 
-    derived_fields = ["shifts_per_day", "shift_hours", "machine_count", "throughput_per_shift", "oee_pct", "defect_rate_pct"]
+    derived_fields = ["shifts_per_day", "shift_hours", "throughput_per_shift", "oee_pct", "defect_rate_pct"]
 
     provenance = {
         "rows": len(rows),

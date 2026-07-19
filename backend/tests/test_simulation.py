@@ -57,7 +57,6 @@ async def test_simulation_baseline_derivation(client):
     assert body["dataset_id"] == dataset_id
     assert body["baseline"]["shifts_per_day"] == 2.0
     assert body["baseline"]["shift_hours"] == 8.0
-    assert body["baseline"]["machine_count"] == 1.0
     assert body["baseline"]["throughput_per_shift"] == 910.0
     assert body["baseline"]["oee_pct"] == 91.67
     assert body["baseline"]["defect_rate_pct"] == 3.3
@@ -105,6 +104,16 @@ async def test_simulation_crud(client):
 
     listed_after = await client.get("/simulation", headers=_h(token))
     assert listed_after.json() == []
+
+
+async def test_simulation_update_null_baseline_clears_instead_of_crashing(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.put(f"/simulation/{sim['id']}", headers=_h(token), json={"baseline": None, "changes": None})
+    assert res.status_code == 200, res.text
+    assert res.json()["baseline"] == {}
+    assert res.json()["changes"] == {}
 
 
 async def test_simulation_run_persisted_history_and_compare(client):
@@ -206,3 +215,19 @@ async def test_simulation_compare_tenant_isolation(client):
         json={"run_a_id": run_a_id, "run_b_id": run_b_id},
     )
     assert res.status_code == 404
+
+
+async def test_simulation_compare_requires_same_simulation(client):
+    token = await _register_and_login(client)
+    sim_1 = await _create_simulation(client, token, name="Sim 1")
+    sim_2 = await _create_simulation(client, token, name="Sim 2")
+
+    run_1 = await client.post(f"/simulation/{sim_1['id']}/run", headers=_h(token), json={"changes": {}})
+    run_2 = await client.post(f"/simulation/{sim_2['id']}/run", headers=_h(token), json={"changes": {}})
+
+    # same org, but the two runs belong to different simulations - must be rejected
+    res = await client.post(
+        "/simulation/compare", headers=_h(token),
+        json={"run_a_id": run_1.json()["id"], "run_b_id": run_2.json()["id"]},
+    )
+    assert res.status_code == 400

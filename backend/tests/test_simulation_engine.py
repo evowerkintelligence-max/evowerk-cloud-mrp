@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from app.services.simulation_engine import compare_snapshots, run_whatif
+import statistics
+
+import pytest
+
+from app.services.simulation_engine import (
+    DEFAULT_CV,
+    compare_snapshots,
+    derive_variance_from_rows,
+    run_whatif,
+)
 
 
 def test_compare_snapshots_diffs_every_shared_metric():
@@ -31,3 +40,40 @@ def test_compare_snapshots_matches_run_whatif_delta_shape():
     delta = compare_snapshots(run_a["projected"], run_b["projected"])
 
     assert delta["daily_capacity"] == run_a["delta"]["daily_capacity"]
+
+
+def test_derive_variance_from_rows_computes_cv_from_daily_spread():
+    headers = ["date", "shift", "machine", "planned_time", "operating_time", "total_units", "good_units"]
+    rows = [
+        {"date": "2026-01-01", "shift": "A", "machine": "M1", "planned_time": 480, "operating_time": 480, "total_units": 1000, "good_units": 900},
+        {"date": "2026-01-02", "shift": "A", "machine": "M1", "planned_time": 480, "operating_time": 480, "total_units": 1000, "good_units": 800},
+        {"date": "2026-01-03", "shift": "A", "machine": "M1", "planned_time": 480, "operating_time": 480, "total_units": 1200, "good_units": 1200},
+    ]
+
+    variance = derive_variance_from_rows(headers, rows)
+
+    daily_oee = [90.0, 80.0, 100.0]
+    daily_defect = [10.0, 20.0, 0.0]
+    daily_tput = [1000.0, 1000.0, 1200.0]
+    assert variance["oee_pct"] == pytest.approx(statistics.stdev(daily_oee) / statistics.fmean(daily_oee))
+    assert variance["defect_rate_pct"] == pytest.approx(statistics.stdev(daily_defect) / statistics.fmean(daily_defect))
+    assert variance["throughput_per_shift"] == pytest.approx(statistics.stdev(daily_tput) / statistics.fmean(daily_tput))
+    # demand_units_per_day isn't derivable from OEE-shaped rows - always default
+    assert variance["demand_units_per_day"] == DEFAULT_CV["demand_units_per_day"]
+
+
+def test_derive_variance_from_rows_falls_back_below_three_days():
+    headers = ["date", "planned_time", "operating_time", "total_units", "good_units"]
+    rows = [
+        {"date": "2026-01-01", "planned_time": 480, "operating_time": 480, "total_units": 1000, "good_units": 900},
+        {"date": "2026-01-02", "planned_time": 480, "operating_time": 460, "total_units": 1000, "good_units": 850},
+    ]
+
+    assert derive_variance_from_rows(headers, rows) == DEFAULT_CV
+
+
+def test_derive_variance_from_rows_falls_back_without_date_column():
+    headers = ["planned_time", "operating_time", "total_units", "good_units"]
+    rows = [{"planned_time": 480, "operating_time": 480, "total_units": 1000, "good_units": 900}]
+
+    assert derive_variance_from_rows(headers, rows) == DEFAULT_CV

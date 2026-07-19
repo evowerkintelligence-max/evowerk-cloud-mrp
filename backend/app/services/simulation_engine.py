@@ -8,6 +8,7 @@ total/good units) instead of requiring manual data entry.
 from __future__ import annotations
 
 import re
+import statistics
 from typing import Any
 
 _COL_HINTS: dict[str, list[str]] = {
@@ -386,3 +387,72 @@ def derive_baseline_from_rows(
         "mapping": m,
         "derived_fields": derived_fields,
     }
+
+
+DEFAULT_CV: dict[str, float] = {
+    "oee_pct": 0.05,
+    "defect_rate_pct": 0.15,
+    "throughput_per_shift": 0.05,
+    "demand_units_per_day": 0.10,
+}
+
+
+def derive_variance_from_rows(
+    headers: list[str],
+    rows: list[dict[str, Any]],
+    mapping: dict[str, str | None] | None = None,
+) -> dict[str, float]:
+    """Per-metric coefficient of variation (std/mean across calendar days),
+    for run_monte_carlo()'s sampling. Groups rows by day (same _day_key/
+    auto_map_columns as derive_baseline_from_rows) and computes a daily
+    oee_pct/defect_rate_pct/throughput_per_shift series; any metric with
+    fewer than 3 distinct days of history falls back to DEFAULT_CV (too
+    little data for a meaningful spread). Falls back entirely to DEFAULT_CV
+    if the required columns (planned/operating time, total/good units,
+    date) aren't present.
+
+    ponytail: daily OEE here is availability x quality only (no performance
+    factor - that needs a target-rate column not guaranteed to be mapped).
+    This is a variance *estimate*, not the precise OEE baseline value -
+    revisit if bands look too tight/loose against real plant data."""
+    m = mapping or auto_map_columns(headers)
+    c_planned, c_oper = m.get("planned_time"), m.get("operating_time")
+    c_total, c_good, c_date = m.get("total_units"), m.get("good_units"), m.get("date")
+
+    if not (c_planned and c_oper and c_total and c_good and c_date):
+        return dict(DEFAULT_CV)
+
+    by_day: dict[str, dict[str, float]] = {}
+    for row in rows:
+        day = _day_key(row.get(c_date))
+        if not day:
+            continue
+        d = by_day.setdefault(day, {"planned": 0.0, "oper": 0.0, "total": 0.0, "good": 0.0})
+        d["planned"] += _safe(row.get(c_planned))
+        d["oper"] += _safe(row.get(c_oper))
+        d["total"] += _safe(row.get(c_total))
+        d["good"] += _safe(row.get(c_good))
+
+    daily_oee: list[float] = []
+    daily_defect: list[float] = []
+    daily_tput: list[float] = []
+    for d in by_day.values():
+        if d["planned"] <= 0 or d["total"] <= 0:
+            continue
+        availability = min(1.0, d["oper"] / d["planned"])
+        quality = min(1.0, d["good"] / d["total"])
+        daily_oee.append(availability * quality * 100)
+        daily_defect.append((1 - quality) * 100)
+        daily_tput.append(d["total"])
+
+    variance = dict(DEFAULT_CV)
+    for key, series in (
+        ("oee_pct", daily_oee),
+        ("defect_rate_pct", daily_defect),
+        ("throughput_per_shift", daily_tput),
+    ):
+        if len(series) >= 3:
+            mean = statistics.fmean(series)
+            if mean:
+                variance[key] = statistics.stdev(series) / mean
+    return variance

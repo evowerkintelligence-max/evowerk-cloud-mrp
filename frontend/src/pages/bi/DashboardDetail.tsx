@@ -241,6 +241,12 @@ export function DashboardDetail() {
       {deleteDashboard.isError && (
         <Alert variant="destructive">{(deleteDashboard.error as Error).message}</Alert>
       )}
+      {reposition.isError && (
+        <Alert variant="destructive">{(reposition.error as Error).message}</Alert>
+      )}
+      {removeChart.isError && (
+        <Alert variant="destructive">{(removeChart.error as Error).message}</Alert>
+      )}
 
       {charts.length > 0 && (
         <div className="flex flex-wrap items-end gap-3">

@@ -7,6 +7,7 @@ total/good units) instead of requiring manual data entry.
 """
 from __future__ import annotations
 
+import random
 import re
 import statistics
 from typing import Any
@@ -456,3 +457,40 @@ def derive_variance_from_rows(
             if mean:
                 variance[key] = statistics.stdev(series) / mean
     return variance
+
+
+def run_monte_carlo(
+    baseline: dict[str, Any],
+    changes: dict[str, Any],
+    variance: dict[str, float],
+    trials: int = 2000,
+) -> dict[str, dict[str, float]]:
+    """Sample the varying baseline metrics `trials` times from a clipped
+    normal distribution using `variance`'s coefficients of variation, apply
+    `changes` deterministically on top via _project(), and return each
+    projected metric's P10/P50/P90 across the trials. A metric with CV <= 0
+    is held fixed at its baseline value in every trial (this is how
+    zero-variance input collapses the bands to a single deterministic
+    value, with no sampling noise at all)."""
+    baseline_snap = _project(baseline, {})
+    results: dict[str, list[float]] = {k: [] for k in PROJECTED_METRIC_KEYS}
+
+    for _ in range(trials):
+        sampled = dict(baseline)
+        for key, cv in variance.items():
+            if cv <= 0:
+                continue
+            mean = baseline_snap.get(key, 0.0)
+            if mean <= 0:
+                continue
+            value = random.gauss(mean, cv * mean)
+            sampled[key] = max(0.0, min(100.0, value)) if key == "oee_pct" else max(0.0, value)
+        projected = _project(sampled, changes)
+        for k, v in projected.items():
+            results[k].append(v)
+
+    bands: dict[str, dict[str, float]] = {}
+    for key, values in results.items():
+        qs = statistics.quantiles(values, n=100)
+        bands[key] = {"p10": round(qs[9], 1), "p50": round(qs[49], 1), "p90": round(qs[89], 1)}
+    return bands

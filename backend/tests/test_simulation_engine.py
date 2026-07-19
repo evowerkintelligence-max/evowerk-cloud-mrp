@@ -6,8 +6,10 @@ import pytest
 
 from app.services.simulation_engine import (
     DEFAULT_CV,
+    PROJECTED_METRIC_KEYS,
     compare_snapshots,
     derive_variance_from_rows,
+    run_monte_carlo,
     run_whatif,
 )
 
@@ -77,3 +79,29 @@ def test_derive_variance_from_rows_falls_back_without_date_column():
     rows = [{"planned_time": 480, "operating_time": 480, "total_units": 1000, "good_units": 900}]
 
     assert derive_variance_from_rows(headers, rows) == DEFAULT_CV
+
+
+_ENGINE_TEST_BASELINE = {
+    "shifts_per_day": 2, "shift_hours": 8, "workers_per_shift": 25, "avg_wage_per_hour": 20,
+    "throughput_per_shift": 1000, "oee_pct": 75.0, "demand_units_per_day": 1800, "defect_rate_pct": 3.5,
+    "scrap_cost_per_unit": 5.0, "raw_material_cost_per_unit": 15.0, "selling_price_per_unit": 40.0,
+}
+
+
+def test_run_monte_carlo_bands_are_ordered_for_every_metric():
+    bands = run_monte_carlo(_ENGINE_TEST_BASELINE, {"shifts_per_day": 3}, dict(DEFAULT_CV), trials=500)
+
+    assert set(bands.keys()) == PROJECTED_METRIC_KEYS
+    for band in bands.values():
+        assert band["p10"] <= band["p50"] <= band["p90"]
+
+
+def test_run_monte_carlo_zero_variance_collapses_to_deterministic_result():
+    changes = {"shifts_per_day": 3}
+    zero_variance = {k: 0.0 for k in DEFAULT_CV}
+
+    bands = run_monte_carlo(_ENGINE_TEST_BASELINE, changes, zero_variance, trials=50)
+    expected = run_whatif("t", _ENGINE_TEST_BASELINE, changes)["projected"]
+
+    for key, expected_value in expected.items():
+        assert bands[key] == {"p10": expected_value, "p50": expected_value, "p90": expected_value}

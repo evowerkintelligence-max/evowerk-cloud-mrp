@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.simulation import Simulation, SimulationRun
 from app.services import datasets as ds_service
-from app.services.simulation_engine import compare_snapshots, run_whatif
+from app.services.simulation_engine import (
+    DEFAULT_CV,
+    compare_snapshots,
+    derive_variance_from_rows,
+    run_monte_carlo,
+    run_sensitivity,
+    run_whatif,
+)
 
 
 async def get_simulation_or_404(db: AsyncSession, org_id: uuid.UUID, simulation_id: uuid.UUID) -> Simulation:
@@ -65,6 +72,44 @@ async def execute_simulation(
 ) -> SimulationRun:
     merged_changes = {**(simulation.changes or {}), **(changes_override or {})}
     result = run_whatif(scenario_name=simulation.name, baseline=simulation.baseline, changes=merged_changes)
+    run = SimulationRun(
+        org_id=org_id, simulation_id=simulation.id, changes=merged_changes, result=result, created_by=created_by
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+async def execute_simulation_monte_carlo(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    simulation: Simulation,
+    changes_override: dict,
+    target_metric: str,
+    trials: int,
+) -> SimulationRun:
+    merged_changes = {**(simulation.changes or {}), **(changes_override or {})}
+
+    variance = dict(DEFAULT_CV)
+    if simulation.dataset_id is not None:
+        try:
+            dataset = await ds_service.get_dataset_or_404(db, org_id, simulation.dataset_id)
+            df = ds_service.dataframe_for(dataset)
+            variance = derive_variance_from_rows(headers=list(df.columns), rows=df.to_dict("records"))
+        except ValueError:
+            pass  # dataset since deleted/unreadable - fall back to defaults, don't fail the run
+    variance_source = "dataset" if variance != dict(DEFAULT_CV) else "default"
+
+    result = run_whatif(scenario_name=simulation.name, baseline=simulation.baseline, changes=merged_changes)
+    result["bands"] = run_monte_carlo(simulation.baseline, merged_changes, variance, trials=trials)
+    result["sensitivity"] = {
+        "target_metric": target_metric,
+        "ranked": run_sensitivity(simulation.baseline, merged_changes, variance, target_metric=target_metric),
+    }
+    result["variance_source"] = variance_source
+
     run = SimulationRun(
         org_id=org_id, simulation_id=simulation.id, changes=merged_changes, result=result, created_by=created_by
     )

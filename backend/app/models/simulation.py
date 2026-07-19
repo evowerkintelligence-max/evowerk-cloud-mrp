@@ -60,7 +60,9 @@ class SimulationRun(Base):
     # The changes actually used for this run (simulation.changes merged with
     # any override passed to POST /simulation/{id}/run).
     changes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    # Full run_whatif() output: {scenario_name, baseline, projected, delta, insights}.
+    # Full run_whatif() output: {scenario_name, baseline, projected, delta, insights},
+    # plus {bands, sensitivity, variance_source} when produced by
+    # execute_simulation_monte_carlo() instead of execute_simulation().
     result: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

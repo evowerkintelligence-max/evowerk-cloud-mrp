@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.services import datasets as ds_service
 from app.services import simulation as service
 from app.services.reports import Report, Section, render
-from app.services.simulation_engine import derive_baseline_from_rows, run_whatif
+from app.services.simulation_engine import PROJECTED_METRIC_KEYS, derive_baseline_from_rows, run_whatif
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
 
@@ -65,6 +65,12 @@ class SimulationResponse(BaseModel):
 
 class SimulationRunRequest(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SimulationMonteCarloRequest(BaseModel):
+    changes: dict[str, Any] = Field(default_factory=dict)
+    target_metric: str = Field(default="daily_margin")
+    trials: int = Field(default=2000, ge=100, le=10000)
 
 
 class SimulationRunResponse(BaseModel):
@@ -182,6 +188,31 @@ async def run_simulation(
     except ValueError as exc:
         raise _wrap_not_found(exc) from exc
     return await service.execute_simulation(db, current.org_id, current.id, simulation, req.changes)
+
+
+@router.post(
+    "/{simulation_id}/run/monte-carlo", response_model=SimulationRunResponse, status_code=status.HTTP_201_CREATED
+)
+async def run_simulation_monte_carlo(
+    simulation_id: uuid.UUID,
+    req: SimulationMonteCarloRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Same as POST /{simulation_id}/run, but also computes Monte Carlo
+    confidence bands (P10/P50/P90 per metric) and a sensitivity ranking
+    against `target_metric`, sampling the baseline's variability from the
+    linked dataset's history when available (falls back to a default
+    spread otherwise - see result.variance_source)."""
+    if req.target_metric not in PROJECTED_METRIC_KEYS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"target_metric must be one of {sorted(PROJECTED_METRIC_KEYS)}")
+    try:
+        simulation = await service.get_simulation_or_404(db, current.org_id, simulation_id)
+    except ValueError as exc:
+        raise _wrap_not_found(exc) from exc
+    return await service.execute_simulation_monte_carlo(
+        db, current.org_id, current.id, simulation, req.changes, req.target_metric, req.trials
+    )
 
 
 @router.get("/{simulation_id}/runs", response_model=list[SimulationRunResponse])

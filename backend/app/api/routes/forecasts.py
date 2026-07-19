@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -465,6 +465,29 @@ async def run_mrp_plan(
     return MrpPlanResponse(horizon_start=hs, horizon_end=he, lines=lines)
 
 
+async def _lock_org_for_po_generation(db: AsyncSession, org_id: uuid.UUID) -> None:
+    """Serializes concurrent MRP-driven PO generation within one org so two
+    overlapping generate-po/generate-pos/build-plan calls can't each compute
+    the plan (same on_hand/on_order/on_draft snapshot, same shortfall) before
+    either commits its draft PO - on_draft only prevents double-ordering
+    *after* a request commits, not against one racing it. Must be acquired
+    before compute_mrp_plan/compute_build_plan, not just around PO creation,
+    since the snapshot read is exactly what needs to serialize.
+
+    Same org-scoped advisory lock pattern as boms._lock_org_for_activation:
+    O(1) on Postgres, auto-released at transaction end, so unrelated orgs
+    never serialize behind each other. Namespaced ("mrp-po:") so this lock
+    doesn't collide with the BOM-activation lock, which uses the bare org_id
+    as its key. SQLite (the test backend) has no advisory-lock primitive, so
+    it falls back to a row lock on the org's POs - a no-op on an org with no
+    POs yet, which is fine at test-sized scale (same caveat as the BOM lock).
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"mrp-po:{org_id}"})
+    else:
+        await db.execute(select(PurchaseOrder.id).where(PurchaseOrder.org_id == org_id).with_for_update())
+
+
 async def _new_draft_po(
     db: AsyncSession, org_id: uuid.UUID, supplier: Supplier, created_by: uuid.UUID
 ) -> PurchaseOrder:
@@ -569,6 +592,7 @@ async def generate_po(
     if not body.item_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Select at least one item to order")
 
+    await _lock_org_for_po_generation(db, org_id)
     plan_by_item = {line.item_id: line for line in await compute_mrp_plan(db, org_id, hs, he)}
 
     # Validate every requested item up front so a bad one rejects the whole
@@ -735,6 +759,7 @@ async def generate_pos(
     hs, he = resolve_horizon(body.horizon_start, body.horizon_end)
     org_id = current.org_id
 
+    await _lock_org_for_po_generation(db, org_id)
     orderable = [
         line
         for line in await compute_mrp_plan(db, org_id, hs, he)
@@ -783,6 +808,7 @@ async def generate_pos_from_build_plan(
     """
     item_uuid = _parse_item_id(body.item_id)
     await get_or_404(db, Item, current.org_id, item_uuid, "Item not found")
+    await _lock_org_for_po_generation(db, current.org_id)
     lines = await compute_build_plan(
         db, current.org_id, item_uuid, body.build_quantity, body.yield_loss_pct
     )

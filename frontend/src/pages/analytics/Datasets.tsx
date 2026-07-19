@@ -121,6 +121,10 @@ export function Datasets() {
 
       {datasets.isLoading ? (
         <Skeleton className="h-48 w-full" />
+      ) : datasets.isError ? (
+        <Alert variant="destructive">
+          {datasets.error instanceof Error ? datasets.error.message : "Failed to load datasets"}
+        </Alert>
       ) : !datasets.data?.length ? (
         <EmptyState
           icon={<Database />}

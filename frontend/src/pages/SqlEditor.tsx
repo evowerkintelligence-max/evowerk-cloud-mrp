@@ -9,7 +9,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { SqlCodeEditor, type SqlColumn, type SqlColumnDtype } from "@/components/SqlCodeEditor";
-import { SendToReportButton, useDatasets } from "@/pages/analytics/shared";
+import { SendToReportButton, useCurrentUser, useDatasets } from "@/pages/analytics/shared";
 
 interface QueryResult {
   columns: string[];
@@ -34,6 +34,11 @@ const DEFAULT_SQL = "SELECT * FROM dataset LIMIT 100";
 export function SqlEditor() {
   const qc = useQueryClient();
   const datasets = useDatasets();
+  // Query history is org-wide (every member sees everyone's queries), but the
+  // backend restricts deleting/clearing it to owners - hide the controls for
+  // everyone else rather than let them click a button that 403s.
+  const currentUser = useCurrentUser();
+  const isOwner = currentUser.data?.role === "owner";
   const [datasetId, setDatasetId] = useState("");
   const [sql, setSql] = useState(DEFAULT_SQL);
 
@@ -174,7 +179,7 @@ export function SqlEditor() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>History</CardTitle>
-          {sqlHistory.length > 0 && (
+          {sqlHistory.length > 0 && isOwner && (
             <Button variant="ghost" size="sm" onClick={() => clearHistory.mutate()}>
               Clear all
             </Button>
@@ -194,9 +199,11 @@ export function SqlEditor() {
                 <Button variant="secondary" size="sm" onClick={() => rerun(h)}>
                   Rerun
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => deleteEntry.mutate(h.id)}>
-                  Delete
-                </Button>
+                {isOwner && (
+                  <Button variant="ghost" size="sm" onClick={() => deleteEntry.mutate(h.id)}>
+                    Delete
+                  </Button>
+                )}
               </div>
             </div>
           ))}

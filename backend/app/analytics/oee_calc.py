@@ -222,8 +222,15 @@ def oee_grouped(
     con, rel: str, p: str, o: str, t: str, g: str, gcol: str,
     with_count: bool = False,
     ideal_sql: Optional[str] = None,
+    key_expr: Optional[str] = None,
 ) -> list:
+    """Group OEE totals by `gcol`'s raw string value, or by `key_expr` when given
+    (e.g. date_bucket_expr(gcol) for date columns — see its docstring for why a
+    day-bucketed, ISO-normalized key matters: raw grouping fragments timestamped
+    data into one row per instant and sorts non-ISO dates out of order)."""
     gq = qi(gcol)
+    key = key_expr if key_expr is not None else f"CAST({gq} AS VARCHAR)"
+    filt = key_expr if key_expr is not None else f"NULLIF(TRIM(CAST({gq} AS VARCHAR)), '')"
     # Per-group data-quality counts. Without this, a machine/shift/day whose low
     # OEE is actually caused by garbled cells (silently zeroed by val_expr)
     # looks identical to one with a genuine performance problem — misleading
@@ -232,10 +239,10 @@ def oee_grouped(
     blank = f"({blank_expr(p)}+{blank_expr(o)}+{blank_expr(t)}+{blank_expr(g)})"
     extra = ", COUNT(*)" if with_count else ""
     sql = (
-        f"SELECT CAST({gq} AS VARCHAR), SUM({val_expr(p)}), SUM({val_expr(o)}), "  # nosec B608
+        f"SELECT {key}, SUM({val_expr(p)}), SUM({val_expr(o)}), "  # nosec B608
         f"SUM({val_expr(t)}), SUM({val_expr(g)}), SUM({bad}), SUM({blank}), "
         f"SUM({ideal_units_expr(o, t, ideal_sql)}), SUM({unrated_expr(ideal_sql)}){extra} "
-        f"FROM {rel} WHERE NULLIF(TRIM(CAST({gq} AS VARCHAR)), '') IS NOT NULL GROUP BY 1"
+        f"FROM {rel} WHERE {filt} IS NOT NULL GROUP BY 1"
     )
     out = []
     for row in con.execute(sql).fetchall():

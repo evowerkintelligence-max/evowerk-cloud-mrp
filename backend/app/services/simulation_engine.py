@@ -69,17 +69,13 @@ def compare_snapshots(snapshot_a: dict[str, Any], snapshot_b: dict[str, Any]) ->
     return {k: _delta(snapshot_b[k], snapshot_a[k]) for k in sorted(keys)}
 
 
-def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
-    """Compute projected manufacturing outcomes after applying `changes` to `baseline`.
-
-    Baseline parameters (all optional, sensible defaults used): shifts_per_day,
-    shift_hours, workers_per_shift, avg_wage_per_hour, throughput_per_shift,
-    oee_pct, demand_units_per_day, defect_rate_pct, scrap_cost_per_unit,
-    raw_material_cost_per_unit, selling_price_per_unit.
-
-    Changes accepted (same keys as baseline, plus): demand_change_pct,
-    oee_change_pct (percentage points), defect_change_pct (percentage points).
-    """
+def _project(baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, float]:
+    """Apply `changes` on top of `baseline` and return the resulting metric
+    snapshot (shifts_per_day, daily_capacity, ..., daily_margin). Calling this
+    with changes={} computes the baseline snapshot itself - run_whatif() uses
+    both forms so there is one source of truth for the arithmetic, and
+    run_monte_carlo()/run_sensitivity() reuse it directly for repeated
+    evaluation."""
     b_shifts = _safe(baseline.get("shifts_per_day"), 2)
     b_shift_hrs = _safe(baseline.get("shift_hours"), 8)
     b_workers = _safe(baseline.get("workers_per_shift"), 25)
@@ -91,16 +87,6 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     b_scrap_cost = _safe(baseline.get("scrap_cost_per_unit"), 5.0)
     b_rm_cost = _safe(baseline.get("raw_material_cost_per_unit"), 15.0)
     b_sell_price = _safe(baseline.get("selling_price_per_unit"), 40.0)
-
-    b_capacity_day = b_tput_shift * b_shifts
-    b_good_units = b_capacity_day * (1 - b_defect / 100)
-    b_labor_day = b_workers * b_shifts * b_shift_hrs * b_wage
-    b_scrap_units = b_capacity_day * (b_defect / 100)
-    b_scrap_loss = b_scrap_units * b_scrap_cost
-    b_utilisation = (b_demand / b_capacity_day * 100) if b_capacity_day else 0
-    b_revenue = min(b_good_units, b_demand) * b_sell_price
-    b_rm_cost_day = b_capacity_day * b_rm_cost
-    b_margin = b_revenue - b_labor_day - b_rm_cost_day - b_scrap_loss
 
     p_shifts = _safe(changes.get("shifts_per_day"), b_shifts)
     p_shift_hrs = _safe(changes.get("shift_hours"), b_shift_hrs)
@@ -132,6 +118,63 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     p_revenue = min(p_good_units, p_demand) * p_sell_price
     p_rm_cost_day = p_capacity_day * p_rm_cost
     p_margin = p_revenue - p_labor_day - p_rm_cost_day - p_scrap_loss
+
+    return {
+        "shifts_per_day": round(p_shifts, 1),
+        "shift_hours": round(p_shift_hrs, 1),
+        "workers_per_shift": round(p_workers, 1),
+        "throughput_per_shift": round(p_tput_shift, 1),
+        "daily_capacity": round(p_capacity_day, 1),
+        "good_units_per_day": round(p_good_units, 1),
+        "oee_pct": round(p_oee, 2),
+        "demand_units_per_day": round(p_demand, 1),
+        "defect_rate_pct": round(p_defect, 2),
+        "labor_cost_per_day": round(p_labor_day, 2),
+        "scrap_loss_per_day": round(p_scrap_loss, 2),
+        "utilisation_pct": round(p_utilisation, 2),
+        "daily_revenue": round(p_revenue, 2),
+        "daily_margin": round(p_margin, 2),
+    }
+
+
+PROJECTED_METRIC_KEYS = frozenset(
+    {
+        "shifts_per_day", "shift_hours", "workers_per_shift", "throughput_per_shift",
+        "daily_capacity", "good_units_per_day", "oee_pct", "demand_units_per_day",
+        "defect_rate_pct", "labor_cost_per_day", "scrap_loss_per_day", "utilisation_pct",
+        "daily_revenue", "daily_margin",
+    }
+)
+
+
+def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
+    """Compute projected manufacturing outcomes after applying `changes` to `baseline`.
+
+    Baseline parameters (all optional, sensible defaults used): shifts_per_day,
+    shift_hours, workers_per_shift, avg_wage_per_hour, throughput_per_shift,
+    oee_pct, demand_units_per_day, defect_rate_pct, scrap_cost_per_unit,
+    raw_material_cost_per_unit, selling_price_per_unit.
+
+    Changes accepted (same keys as baseline, plus): demand_change_pct,
+    oee_change_pct (percentage points), defect_change_pct (percentage points).
+    """
+    baseline_snap = _project(baseline, {})
+    projected_snap = _project(baseline, changes)
+
+    b_capacity_day = baseline_snap["daily_capacity"]
+    p_capacity_day = projected_snap["daily_capacity"]
+    b_oee = baseline_snap["oee_pct"]
+    p_oee = projected_snap["oee_pct"]
+    b_defect = baseline_snap["defect_rate_pct"]
+    p_defect = projected_snap["defect_rate_pct"]
+    b_scrap_loss = baseline_snap["scrap_loss_per_day"]
+    p_scrap_loss = projected_snap["scrap_loss_per_day"]
+    b_labor_day = baseline_snap["labor_cost_per_day"]
+    p_labor_day = projected_snap["labor_cost_per_day"]
+    b_margin = baseline_snap["daily_margin"]
+    p_margin = projected_snap["daily_margin"]
+    p_demand = projected_snap["demand_units_per_day"]
+    p_utilisation = projected_snap["utilisation_pct"]
     p_capacity_gap = p_capacity_day - p_demand
 
     insights: list[str] = []
@@ -186,37 +229,6 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     if not insights:
         insights.append("No significant changes detected. Adjust parameters to model a different scenario.")
 
-    def _snap(
-        *, shifts, shift_hrs, workers, tput_shift, oee, demand, defect,
-        labor, capacity, good, scrap_loss, utilisation, revenue, margin,
-    ):
-        return {
-            "shifts_per_day": round(shifts, 1),
-            "shift_hours": round(shift_hrs, 1),
-            "workers_per_shift": round(workers, 1),
-            "throughput_per_shift": round(tput_shift, 1),
-            "daily_capacity": round(capacity, 1),
-            "good_units_per_day": round(good, 1),
-            "oee_pct": round(oee, 2),
-            "demand_units_per_day": round(demand, 1),
-            "defect_rate_pct": round(defect, 2),
-            "labor_cost_per_day": round(labor, 2),
-            "scrap_loss_per_day": round(scrap_loss, 2),
-            "utilisation_pct": round(utilisation, 2),
-            "daily_revenue": round(revenue, 2),
-            "daily_margin": round(margin, 2),
-        }
-
-    baseline_snap = _snap(
-        shifts=b_shifts, shift_hrs=b_shift_hrs, workers=b_workers, tput_shift=b_tput_shift,
-        oee=b_oee, demand=b_demand, defect=b_defect, labor=b_labor_day, capacity=b_capacity_day,
-        good=b_good_units, scrap_loss=b_scrap_loss, utilisation=b_utilisation, revenue=b_revenue, margin=b_margin,
-    )
-    projected_snap = _snap(
-        shifts=p_shifts, shift_hrs=p_shift_hrs, workers=p_workers, tput_shift=p_tput_shift,
-        oee=p_oee, demand=p_demand, defect=p_defect, labor=p_labor_day, capacity=p_capacity_day,
-        good=p_good_units, scrap_loss=p_scrap_loss, utilisation=p_utilisation, revenue=p_revenue, margin=p_margin,
-    )
     delta_snap = {k: _delta(baseline_snap[k], projected_snap[k]) for k in baseline_snap}
 
     return {

@@ -97,17 +97,28 @@ def _project(baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, flo
     p_rm_cost = _safe(changes.get("raw_material_cost_per_unit"), b_rm_cost)
     p_sell_price = _safe(changes.get("selling_price_per_unit"), b_sell_price)
 
-    oee_change = _safe(changes.get("oee_change_pct"), 0)
-    p_oee = max(0, min(100, _safe(changes.get("oee_pct"), b_oee) + oee_change))
+    if changes:
+        # A real scenario change - clamp to a physically valid range exactly as
+        # the pre-refactor "projected" pass always did (this matches old
+        # run_whatif() behavior byte-for-byte, including when `changes` doesn't
+        # touch OEE/defect at all - the old code applied this same unconditional
+        # clamp/fallback for any non-empty changes).
+        oee_change = _safe(changes.get("oee_change_pct"), 0)
+        p_oee = max(0, min(100, _safe(changes.get("oee_pct"), b_oee) + oee_change))
+        defect_change_pp = _safe(changes.get("defect_change_pct"), 0)
+        p_defect = max(0, _safe(changes.get("defect_rate_pct"), b_defect) + defect_change_pp)
+    else:
+        # The baseline pass (changes={}) - echo the baseline exactly, unclamped,
+        # matching the pre-refactor code's separate, unscaled baseline computation
+        # (which never applied OEE-factor scaling or defect clamping at all).
+        p_oee = b_oee
+        p_defect = b_defect
 
     oee_factor = (p_oee / b_oee) if b_oee else 1.0
     p_tput_shift = p_tput_shift * oee_factor
 
     demand_change_pct = _safe(changes.get("demand_change_pct"), 0)
     p_demand = _safe(changes.get("demand_units_per_day"), b_demand * (1 + demand_change_pct / 100))
-
-    defect_change_pp = _safe(changes.get("defect_change_pct"), 0)
-    p_defect = max(0, _safe(changes.get("defect_rate_pct"), b_defect) + defect_change_pp)
 
     p_capacity_day = p_tput_shift * p_shifts
     p_good_units = p_capacity_day * (1 - p_defect / 100)

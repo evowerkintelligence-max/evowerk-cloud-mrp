@@ -933,7 +933,7 @@ async def narrate_report(report: Report, style: str = "narrative") -> ReportNarr
     if not report.sections:
         return ReportNarration(executive_summary="This report has no sections to narrate.", sections=[])
     if not llm.is_configured():
-        return _fallback_narration(report)
+        return _fallback_narration(report, error="AI narration is not configured (no GEMINI_API_KEY).")
 
     try:
         parsed = await llm.generate_json(

@@ -477,6 +477,7 @@ def run_monte_carlo(
 
     for _ in range(trials):
         sampled = dict(baseline)
+        trial_changes = dict(changes)
         for key, cv in variance.items():
             if cv <= 0:
                 continue
@@ -484,8 +485,17 @@ def run_monte_carlo(
             if mean <= 0:
                 continue
             value = random.gauss(mean, cv * mean)
-            sampled[key] = max(0.0, min(100.0, value)) if key == "oee_pct" else max(0.0, value)
-        projected = _project(sampled, changes)
+            if key == "oee_pct":
+                # OEE only affects output via _project()'s p_oee/b_oee ratio, which
+                # is a no-op unless `changes` carries an explicit OEE delta - mutating
+                # the baseline dict's oee_pct (like every other sampled metric) would
+                # silently have zero effect. Express the sample as a delta instead.
+                value = max(0.0, min(100.0, value))
+                base_change = _safe(trial_changes.get("oee_change_pct"), 0)
+                trial_changes["oee_change_pct"] = base_change + (value - mean)
+            else:
+                sampled[key] = max(0.0, value)
+        projected = _project(sampled, trial_changes)
         for k, v in projected.items():
             results[k].append(v)
 
@@ -518,12 +528,20 @@ def run_sensitivity(
         if mean <= 0:
             continue
         spread = cv * mean
-        low_input, high_input = dict(baseline), dict(baseline)
-        low_input[key] = max(0.0, mean - spread)
-        high_input[key] = min(100.0, mean + spread) if key == "oee_pct" else mean + spread
 
-        low_proj = _project(low_input, changes)[target_metric]
-        high_proj = _project(high_input, changes)[target_metric]
+        if key == "oee_pct":
+            # Same reason as run_monte_carlo(): OEE only affects output via a
+            # changes-expressed delta, not via the baseline dict directly.
+            base_change = _safe(changes.get("oee_change_pct"), 0)
+            low_proj = _project(baseline, {**changes, "oee_change_pct": base_change - spread})[target_metric]
+            high_proj = _project(baseline, {**changes, "oee_change_pct": base_change + spread})[target_metric]
+        else:
+            low_input, high_input = dict(baseline), dict(baseline)
+            low_input[key] = max(0.0, mean - spread)
+            high_input[key] = mean + spread
+            low_proj = _project(low_input, changes)[target_metric]
+            high_proj = _project(high_input, changes)[target_metric]
+
         ranked.append(
             {
                 "parameter": key,

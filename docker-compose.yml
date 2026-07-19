@@ -1,9 +1,10 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD (do not use the default) before deploying}
       POSTGRES_DB: evowerk_cloud_mrp
     ports:
       - "5432:5432"
@@ -17,6 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
     healthcheck:
@@ -27,6 +29,7 @@ services:
 
   redpanda:
     image: redpandadata/redpanda:v24.2.7
+    restart: unless-stopped
     command:
       - redpanda
       - start
@@ -49,6 +52,7 @@ services:
     build:
       context: ./backend
       dockerfile: streaming/flink.Dockerfile
+    restart: unless-stopped
     command: jobmanager
     environment:
       FLINK_PROPERTIES: "jobmanager.rpc.address: flink-jobmanager"
@@ -62,6 +66,7 @@ services:
     build:
       context: ./backend
       dockerfile: streaming/flink.Dockerfile
+    restart: unless-stopped
     command: taskmanager
     environment:
       FLINK_PROPERTIES: |
@@ -72,14 +77,13 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/evowerk_cloud_mrp
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD (do not use the default) before deploying}@db:5432/evowerk_cloud_mrp
       REDIS_URL: redis://redis:6379/0
       REDPANDA_BROKERS: redpanda:9092
-      JWT_SECRET_KEY: dev-only-secret-change-me
-      # Dev-only placeholder - generate a real key before running this anywhere but
-      # a laptop: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-      MFA_ENCRYPTION_KEY: REPLACE_WITH_GENERATED_FERNET_KEY
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:?Set JWT_SECRET_KEY before deploying, e.g. python -c 'import secrets; print(secrets.token_urlsafe(48))'}"
+      MFA_ENCRYPTION_KEY: "${MFA_ENCRYPTION_KEY:?Set MFA_ENCRYPTION_KEY before deploying, e.g. python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'}"
       CORS_ORIGINS: '["http://localhost:5173"]'
     ports:
       - "8000:8000"
@@ -95,6 +99,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     ports:
       - "5173:5173"
     depends_on:

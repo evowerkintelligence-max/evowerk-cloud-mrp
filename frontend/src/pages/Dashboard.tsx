@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -9,6 +10,7 @@ import {
   Layers,
   LayoutGrid,
   Package,
+  RefreshCw,
   ShieldCheck,
   ShoppingCart,
   Sparkles,
@@ -67,6 +69,15 @@ const REASON_BORDER: Record<string, string> = {
   on_hold: "border-l-amber-500",
   expiring_soon: "border-l-rose-500",
 };
+
+function timeAgo(timestampMs: number): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
 
 function useCount(key: string, path: string) {
   return useQuery<unknown[]>({
@@ -135,6 +146,14 @@ export function Dashboard() {
   });
   const briefEmpty = !brief.data || (brief.data.lines.length === 0 && brief.data.lot_alerts.length === 0);
 
+  // Re-render periodically so the "Updated Xm ago" label keeps advancing on
+  // its own instead of freezing at whatever it read on the last data fetch.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   const stats = [
     { label: "Items", query: items, icon: <Package />, tone: "primary" as const },
     { label: "BOMs", query: boms, icon: <Layers />, tone: "accent" as const },
@@ -201,6 +220,22 @@ export function Dashboard() {
           <div>
             <CardTitle>Morning Brief</CardTitle>
             <CardDescription>Items and lots needing attention, vs. 7 days ago</CardDescription>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {brief.dataUpdatedAt > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Updated {timeAgo(brief.dataUpdatedAt)}
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Refresh Morning Brief"
+              onClick={() => brief.refetch()}
+              disabled={brief.isFetching}
+            >
+              <RefreshCw className={cn("size-4", brief.isFetching && "animate-spin")} />
+            </Button>
           </div>
         </CardHeader>
         <CardContent>

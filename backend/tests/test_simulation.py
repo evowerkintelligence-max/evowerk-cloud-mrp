@@ -116,6 +116,23 @@ async def test_simulation_update_null_baseline_clears_instead_of_crashing(client
     assert res.json()["changes"] == {}
 
 
+async def test_simulation_update_null_name_rejected_instead_of_crashing(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.put(f"/simulation/{sim['id']}", headers=_h(token), json={"name": None})
+    assert res.status_code == 400, res.text
+
+
+async def test_simulation_update_null_description_clears_instead_of_rejecting(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.put(f"/simulation/{sim['id']}", headers=_h(token), json={"description": None})
+    assert res.status_code == 200, res.text
+    assert res.json()["description"] == ""
+
+
 async def test_simulation_run_persisted_history_and_compare(client):
     token = await _register_and_login(client)
     sim = await _create_simulation(client, token)

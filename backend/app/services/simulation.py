@@ -41,13 +41,26 @@ async def create_simulation(
     return simulation
 
 
+# NOT NULL columns patchable via SimulationUpdate that have a sensible
+# "cleared" value - an explicit null in the patch means "clear it", not
+# "store NULL" (which would fail the commit). name has no safe clear value
+# (required non-empty on create), so an explicit null for it is a validation
+# error instead.
+_CLEARABLE_FIELDS = {"baseline": dict, "changes": dict, "description": str}
+
+
+class InvalidPatchError(ValueError):
+    """Raised when a patch value can't be applied to a NOT NULL column."""
+
+
 async def update_simulation(db: AsyncSession, org_id: uuid.UUID, simulation_id: uuid.UUID, patch: dict) -> Simulation:
     simulation = await get_simulation_or_404(db, org_id, simulation_id)
     for key, value in patch.items():
-        # baseline/changes are NOT NULL columns - an explicit null in the patch
-        # means "clear it", not "store NULL" (which would fail the commit).
-        if key in ("baseline", "changes") and value is None:
-            value = {}
+        if value is None:
+            if key in _CLEARABLE_FIELDS:
+                value = _CLEARABLE_FIELDS[key]()
+            else:
+                raise InvalidPatchError(f"{key} cannot be null")
         setattr(simulation, key, value)
     await db.commit()
     await db.refresh(simulation)

@@ -154,6 +154,8 @@ async def update_simulation(
     patch = payload.model_dump(exclude_unset=True)
     try:
         return await service.update_simulation(db, current.org_id, simulation_id, patch)
+    except service.InvalidPatchError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except ValueError as exc:
         raise _wrap_not_found(exc) from exc
 

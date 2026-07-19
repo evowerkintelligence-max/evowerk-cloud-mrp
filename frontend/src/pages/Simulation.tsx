@@ -102,10 +102,14 @@ function deltaColor(key: string, direction: string) {
   return positive ? "text-emerald-400" : "text-rose-400";
 }
 
+function resultMetricKeys(result: SimResult): string[] {
+  return Object.keys(METRIC_LABELS).filter((k) => k in result.baseline);
+}
+
 function resultToReportText(result: SimResult): string {
-  const lines = Object.keys(METRIC_LABELS)
-    .filter((k) => k in result.baseline)
-    .map((k) => `${METRIC_LABELS[k]}: ${fmtVal(k, result.baseline[k])} → ${fmtVal(k, result.projected[k])}`);
+  const lines = resultMetricKeys(result).map(
+    (k) => `${METRIC_LABELS[k]}: ${fmtVal(k, result.baseline[k])} → ${fmtVal(k, result.projected[k])}`,
+  );
   return [...lines, "", ...result.insights].join("\n");
 }
 
@@ -421,8 +425,7 @@ export function Simulation() {
                   </TR>
                 </THead>
                 <TBody>
-                  {Object.keys(METRIC_LABELS)
-                    .filter((k) => k in result.baseline)
+                  {resultMetricKeys(result)
                     .map((k) => {
                       const d = result.delta[k] ?? { absolute: 0, pct: 0, direction: "unchanged" };
                       const arrow = d.direction === "increase" ? "↑" : d.direction === "decrease" ? "↓" : "→";

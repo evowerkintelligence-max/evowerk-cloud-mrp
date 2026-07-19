@@ -10,6 +10,7 @@ from app.services.simulation_engine import (
     compare_snapshots,
     derive_variance_from_rows,
     run_monte_carlo,
+    run_sensitivity,
     run_whatif,
 )
 
@@ -105,3 +106,22 @@ def test_run_monte_carlo_zero_variance_collapses_to_deterministic_result():
 
     for key, expected_value in expected.items():
         assert bands[key] == {"p10": expected_value, "p50": expected_value, "p90": expected_value}
+
+
+def test_run_sensitivity_ranks_by_impact_on_target_metric():
+    variance = {"oee_pct": 0.01, "defect_rate_pct": 0.01, "throughput_per_shift": 0.01, "demand_units_per_day": 0.50}
+
+    ranked = run_sensitivity(_ENGINE_TEST_BASELINE, {}, variance, target_metric="daily_margin")
+
+    assert len(ranked) == 4
+    # demand's CV is 50x the others, so it must dominate daily_margin regardless
+    # of the underlying per-unit sensitivity coefficients.
+    assert ranked[0]["parameter"] == "demand_units_per_day"
+    for i in range(len(ranked) - 1):
+        assert ranked[i]["impact"] >= ranked[i + 1]["impact"]
+
+
+def test_run_sensitivity_skips_zero_variance_parameters():
+    ranked = run_sensitivity(_ENGINE_TEST_BASELINE, {}, {k: 0.0 for k in DEFAULT_CV}, target_metric="daily_margin")
+
+    assert ranked == []

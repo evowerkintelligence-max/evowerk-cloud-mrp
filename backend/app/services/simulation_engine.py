@@ -494,3 +494,45 @@ def run_monte_carlo(
         qs = statistics.quantiles(values, n=100)
         bands[key] = {"p10": round(qs[9], 1), "p50": round(qs[49], 1), "p90": round(qs[89], 1)}
     return bands
+
+
+def run_sensitivity(
+    baseline: dict[str, Any],
+    changes: dict[str, Any],
+    variance: dict[str, float],
+    target_metric: str,
+) -> list[dict[str, Any]]:
+    """Rank baseline parameters by how much swinging them +/-1 standard
+    deviation (using `variance`'s coefficients of variation - the same
+    'plausible range' run_monte_carlo() samples from) moves `target_metric`,
+    holding everything else at baseline and `changes` fixed. Returns the
+    top 8 by impact, descending. A parameter with CV <= 0 never appears -
+    it has no plausible range to sweep."""
+    baseline_snap = _project(baseline, {})
+    ranked: list[dict[str, Any]] = []
+
+    for key, cv in variance.items():
+        if cv <= 0:
+            continue
+        mean = baseline_snap.get(key, 0.0)
+        if mean <= 0:
+            continue
+        spread = cv * mean
+        low_input, high_input = dict(baseline), dict(baseline)
+        low_input[key] = max(0.0, mean - spread)
+        high_input[key] = min(100.0, mean + spread) if key == "oee_pct" else mean + spread
+
+        low_proj = _project(low_input, changes)[target_metric]
+        high_proj = _project(high_input, changes)[target_metric]
+        ranked.append(
+            {
+                "parameter": key,
+                "baseline_value": round(mean, 2),
+                "low_value": low_proj,
+                "high_value": high_proj,
+                "impact": round(abs(high_proj - low_proj), 2),
+            }
+        )
+
+    ranked.sort(key=lambda r: r["impact"], reverse=True)
+    return ranked[:8]

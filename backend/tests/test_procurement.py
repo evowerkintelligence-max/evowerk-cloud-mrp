@@ -124,6 +124,40 @@ async def test_over_receipt_rejected(client):
     assert over.status_code == 409
 
 
+async def test_over_receipt_rejected_across_duplicate_lines_in_one_request(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+
+    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
+    po_id = po.json()["id"]
+    lines = await client.patch(
+        f"/purchase-orders/{po_id}",
+        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    line_id = lines.json()["lines"][0]["id"]
+    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
+
+    # Two receipts against the same line in one request, each individually
+    # within bounds but exceeding quantity_ordered combined.
+    over = await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[
+            {"po_line_id": line_id, "quantity": "6"},
+            {"po_line_id": line_id, "quantity": "6"},
+        ],
+        headers=headers,
+    )
+    assert over.status_code == 409
+
+    # Nothing was applied - the line's quantity_received is untouched.
+    detail = await client.get(f"/purchase-orders/{po_id}", headers=headers)
+    assert detail.json()["lines"][0]["quantity_received"] == "0.0000"
+
+
 async def test_cancel_allowed_before_receiving_blocked_after(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

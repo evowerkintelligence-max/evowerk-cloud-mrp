@@ -4,7 +4,19 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -96,7 +108,25 @@ class ItemUnit(Base):
 
 class Bom(Base):
     __tablename__ = "boms"
-    __table_args__ = (UniqueConstraint("org_id", "item_id", "version", name="uq_boms_org_item_version"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "item_id", "version", name="uq_boms_org_item_version"),
+        # DB-level backstop for the one-active-BOM-per-item invariant. activate_bom
+        # is the only app code path that sets status="active" and already enforces
+        # this (archiving prior actives before flipping the new one, under an
+        # org-scoped lock) - this index guards against the same invariant being
+        # violated by anything that bypasses that route: a bad migration, a direct
+        # DB write, or a future code path. services.mrp trusts "one active BOM per
+        # item" unconditionally when exploding a build, so a silent violation there
+        # would produce a silently wrong plan rather than an error.
+        Index(
+            "uq_boms_org_item_active",
+            "org_id",
+            "item_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
@@ -112,8 +142,11 @@ class Bom(Base):
     # draft | active | archived. One-active-per-item is enforced in the activate
     # route (one transaction), not a DB constraint - see that route for why.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", index=True)
+    # RESTRICT, not the CASCADE every org-scoping FK in this file uses - a BOM
+    # is a record of who authored it; deleting that user should never silently
+    # take the BOM (and its audit trail) with it.
     created_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -147,8 +180,12 @@ class BomLine(Base):
     bom_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("boms.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # RESTRICT, not CASCADE - an item that's still used as a BOM component must
+    # block a delete of that item rather than silently vanishing from the
+    # recipe. There's no delete-item route today (see items.py), but this
+    # keeps the constraint honest for when one is added.
     component_item_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("items.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("items.id", ondelete="RESTRICT"), nullable=False
     )
     # Decimal, not float - this feeds cost rollups later, a float would be a
     # correctness bug waiting to happen. No unit_of_measure column here on

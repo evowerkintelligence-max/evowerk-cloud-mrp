@@ -671,3 +671,125 @@ async def test_revise_bom_survives_version_collision_retry(client, monkeypatch):
     assert revised["lines"][0]["component_sku"] == "REV-RACE-1"
     assert revised["lines"][0]["quantity"] == "4.5000"
     assert revised["lines"][0]["scrap_pct"] == "5.00"
+
+
+async def test_create_bom_survives_version_collision_retry(client, monkeypatch):
+    """Regression test for the same expired-`item` hazard revise_bom already
+    has a test for: create_bom's retry loop also calls db.rollback() on a
+    version collision, which expires the `item` fetched before the loop. The
+    fix is to let _bom_to_response refetch item instead of reusing that
+    (possibly expired) reference.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.bom import Bom
+
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token, sku="CREATE-RACE-1", name="Widget", item_type="finished_good")
+
+    original_flush = AsyncSession.flush
+    state = {"raised": False}
+
+    async def flaky_flush(self, *args, **kwargs):
+        pending_boms = [obj for obj in self.new if isinstance(obj, Bom)]
+        if pending_boms and not state["raised"]:
+            state["raised"] = True
+            raise IntegrityError("INSERT INTO boms ...", {}, Exception("uq_boms_org_item_version"))
+        return await original_flush(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "flush", flaky_flush)
+
+    res = await client.post("/boms", json={"item_id": item["id"]}, headers=headers)
+
+    assert state["raised"], "test setup didn't actually trigger the forced collision"
+    assert res.status_code == 201
+    body = res.json()
+    assert body["item_sku"] == "CREATE-RACE-1"
+    assert body["version"] == 1
+
+
+async def test_update_bom_lines_rejects_oversized_unit_quantity(client):
+    """unit_quantity shares BomLine.quantity's NUMERIC(12,4) column, so it
+    needs the same MAX_LINE_QUANTITY upper-bound guard - otherwise a large
+    unit_quantity paired with a small factor_to_base passes the derived
+    quantity check while overflowing the raw column on insert.
+    """
+    token, _ = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, sku="OVERFLOW-FG", name="Widget", item_type="finished_good")
+    comp = await _create_item(client, token, sku="OVERFLOW-1", name="Wire", item_type="raw_material")
+
+    unit = await client.post(
+        f"/items/{comp['id']}/units",
+        json={"code": "spool", "factor_to_base": "0.000001"},
+        headers=headers,
+    )
+    assert unit.status_code == 201
+    unit_id = unit.json()["id"]
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+
+    res = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {
+                    "component_item_id": comp["id"],
+                    "quantity": "1",
+                    "sequence": 0,
+                    "unit_id": unit_id,
+                    "unit_quantity": "100000000",
+                }
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+
+async def test_db_rejects_two_active_boms_for_same_item(client, test_engine):
+    """uq_boms_org_item_active (app/models/bom.py) is the DB-level backstop
+    for activate_bom's app-level one-active-per-item invariant - it has to
+    hold even for writes that bypass that route entirely (a bad migration, a
+    direct DB write), so it's tested by inserting a second active BOM
+    directly through a session rather than through activate_bom.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.models.bom import Bom
+    from app.models.user import User
+
+    token, org_id = await _register_and_login(client)
+    item = await _create_item(client, token, sku="DIRECT-ACTIVE-1", name="Widget", item_type="finished_good")
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        user_id = (await session.execute(select(User.id).where(User.org_id == uuid.UUID(org_id)))).scalar_one()
+        session.add(
+            Bom(
+                org_id=uuid.UUID(org_id),
+                item_id=uuid.UUID(item["id"]),
+                version=1,
+                status="active",
+                created_by=user_id,
+            )
+        )
+        await session.commit()
+
+        session.add(
+            Bom(
+                org_id=uuid.UUID(org_id),
+                item_id=uuid.UUID(item["id"]),
+                version=2,
+                status="active",
+                created_by=user_id,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()

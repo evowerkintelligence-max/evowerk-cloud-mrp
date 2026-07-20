@@ -107,6 +107,39 @@ async def analyze_shifts(
     return ShiftAnalyzeResponse(**shifts_service.analyze_shifts(dataset, req))
 
 
+class ShiftForecastSourceRequest(ShiftAnalyzeRequest):
+    shift: str = Field(..., min_length=1)
+
+
+class ShiftForecastSourceResponse(BaseModel):
+    dataset_id: str
+    target_column: str
+    time_column: str
+    metric_label: str
+    rows: int
+
+
+@router.post("/shifts/forecast-source", response_model=ShiftForecastSourceResponse)
+async def shift_forecast_source(
+    req: ShiftForecastSourceRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dataset = await ds_service.resolve_dataset(db, current.org_id, req.dataset_id)
+    ds_service.validate_columns(dataset, [req.shift_col, req.machine_col, req.timestamp_col])
+    result = await shifts_service.prepare_forecast_source(
+        db, dataset, req, shift=req.shift, org_id=current.org_id, created_by=current.id
+    )
+    await db.commit()
+    return ShiftForecastSourceResponse(
+        dataset_id=str(result["dataset_id"]),
+        target_column=result["target_column"],
+        time_column=result["time_column"],
+        metric_label=result["metric_label"],
+        rows=result["rows"],
+    )
+
+
 class ShiftScheduleItem(BaseModel):
     shift_label: str = Field(..., min_length=1)
     start_time: str = Field(..., pattern=r"^\d{2}:\d{2}$")

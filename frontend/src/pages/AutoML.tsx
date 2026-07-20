@@ -106,8 +106,8 @@ export function AutoML() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="AutoML"
-        description="Train and compare sklearn models over a dataset — classification, regression, or forecasting."
+        title="AutoML — Advanced / Custom"
+        description="Manually pick any dataset, target column, and algorithms — classification, regression, or forecasting. Prefer a guided setup? Use the AutoML landing page instead."
         actions={
           <div className="flex gap-2">
             {runs.data && runs.data.length > 1 && (
@@ -115,7 +115,7 @@ export function AutoML() {
                 {compareMode ? "Exit compare" : "Compare"}
               </Button>
             )}
-            <Button onClick={() => navigate("/automl/new")}>New run</Button>
+            <Button onClick={() => navigate("/automl/advanced/new")}>New run</Button>
           </div>
         }
       />
@@ -155,7 +155,7 @@ export function AutoML() {
                     </TD>
                   )}
                   <TD className="font-medium">
-                    <Link to={`/automl/${r.id}`} className="hover:underline">
+                    <Link to={`/automl/advanced/${r.id}`} className="hover:underline">
                       {r.name}
                     </Link>
                   </TD>
@@ -170,7 +170,7 @@ export function AutoML() {
                   <TD className="text-muted-foreground">{new Date(r.created_at).toLocaleString()}</TD>
                   <TD className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button variant="secondary" size="sm" onClick={() => navigate(`/automl/${r.id}`)}>
+                      <Button variant="secondary" size="sm" onClick={() => navigate(`/automl/advanced/${r.id}`)}>
                         Open
                       </Button>
                       <Button

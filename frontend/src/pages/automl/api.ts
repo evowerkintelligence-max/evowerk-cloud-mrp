@@ -284,6 +284,50 @@ export interface DriftResult {
   train_sample_rows: number;
 }
 
+// ─── Guided templates (GET /automl/templates, POST /automl/templates/{id}/runs) ───
+
+export interface AutoMLTemplateRole {
+  key: string;
+  label: string;
+  required: boolean;
+}
+
+export interface AutoMLTemplateSummary {
+  id: string;
+  label: string;
+  roles: AutoMLTemplateRole[];
+}
+
+export function useAutoMLTemplates() {
+  return useQuery<AutoMLTemplateSummary[]>({
+    queryKey: ["automl-templates"],
+    queryFn: async () => {
+      const res = await apiFetch("/automl/templates");
+      if (!res.ok) throw new Error("Failed to load AutoML templates");
+      return res.json();
+    },
+  });
+}
+
+export interface TemplateRunRequest {
+  name: string;
+  dataset_id: string;
+  column_map: Record<string, string>;
+  config?: Record<string, unknown>;
+}
+
+export function useCreateTemplateRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ templateId, body }: { templateId: string; body: TemplateRunRequest }) => {
+      const res = await apiFetch(`/automl/templates/${templateId}/runs`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to start run");
+      return res.json() as Promise<AutoMLRunDetail>;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["automl-runs"] }),
+  });
+}
+
 export function useDriftCheck(id: string | undefined) {
   return useMutation({
     mutationFn: async (datasetId: string) => {

@@ -24,6 +24,7 @@ from app.main import app
 from app.models import (  # noqa: F401 - register models
     alert,
     audit,
+    automl_live_binding,
     automl_run,
     bom,
     dashboard,

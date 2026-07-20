@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import type * as echarts from "echarts";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

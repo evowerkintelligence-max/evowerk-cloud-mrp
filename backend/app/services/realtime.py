@@ -1,26 +1,24 @@
-"""Live-polling collector engine, ported from the desktop app's
-realtime/engine.py. A "stream" polls one Integration's connector on an
-interval, rolls results into a bounded in-memory buffer, computes derived
-manufacturing metrics (throughput/scrap/OEE/downtime) over that buffer, and
-persists each tick to a JSONL history file.
+"""Live-polling collector engine. Redpanda+Flink slice: this module now owns
+only the thin poll->publish producer (TickProducer, app/services/
+realtime_producer.py) and the message bus / cache wiring - actual metric
+computation moved to the Flink job (backend/streaming/realtime_metrics_job.py)
+and the RealtimeCache (app/services/realtime_cache.py). See
+docs/superpowers/specs/2026-07-16-realtime-redpanda-flink-design.md.
 
-Kept as an in-process background-thread registry, same as the desktop
-version (the connectors are all blocking sync I/O, so a plain thread is the
-right primitive - matches app.services.integrations' asyncio.to_thread usage
-for the same reason). What's different for a server that can restart:
-RealtimeStream (app.models.realtime) persists each stream's definition and
-`desired_status`; resume_all_streams() is called from app.main's startup
-hook to re-spin any stream still marked "running" after a restart, so a
-redeploy doesn't silently and permanently lose it. The live snapshot/status
-this module tracks is still ephemeral and only reflects this process.
+RealtimeStream (app.models.realtime) still persists each stream's definition
+and desired_status; resume_all_streams() still re-adopts anything marked
+"running" after a restart. TickProducer's connector poll loop is still
+per-process, same as StreamRunner was - what changed is that snapshot state
+(RealtimeCache) is now fed by Redpanda, so any replica consuming
+realtime.metrics has it, not just the one running a given stream's producer.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock, Thread
 from typing import Any
 
 from kafka import KafkaProducer
@@ -30,17 +28,11 @@ from app.core.config import get_settings
 from app.db import session as db_session
 from app.models.integration import Integration
 from app.models.realtime import RealtimeStream
-from app.services.connectors import get_connector
 from app.services.integrations import decrypt_config
 from streaming.schemas import TICKS_TOPIC, Tick
 
 
-def _safe_float(v: Any, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
-
+# ── History (unchanged from before this slice) ──────────────────────────────
 
 def _history_dir() -> Path:
     settings = get_settings()
@@ -52,14 +44,10 @@ def _history_dir() -> Path:
 
 
 def history_path(stream_id: str) -> Path:
-    # stream_id is a RealtimeStream UUID - safe as a bare filename.
     return _history_dir() / f"{stream_id}.jsonl"
 
 
 def read_history(stream_id: str, max_points: int = 2000) -> list[dict[str, Any]]:
-    """Bounded read of a stream's persisted tick history — survives a backend
-    restart, unlike the in-memory deque. Returns the most recent `max_points`
-    ticks (oldest first)."""
     path = history_path(stream_id)
     if not path.exists():
         return []
@@ -191,16 +179,52 @@ class TickProducer:
             self._producer.close(timeout=5)
 
 
-# ── Global registry (this process only - see module docstring) ──────────────
+# ── Bus / cache wiring ───────────────────────────────────────────────────────
 
 _runners: dict[str, TickProducer] = {}
 _registry_lock = Lock()
 
 
+async def start_cache(group_id: str) -> None:
+    """Called once from app.main's startup hook. group_id MUST be unique per
+    backend replica - see RealtimeCache's docstring."""
+    global _cache
+    _cache = RealtimeCache(get_bus(), group_id=group_id, on_update=_append_history)
+    await _cache.start()
+
+
+async def stop_cache() -> None:
+    global _cache
+    if _cache is not None:
+        await _cache.stop()
+        _cache = None
+
+
+def get_snapshot(stream_id: uuid.UUID) -> dict[str, Any] | None:
+    if _cache is None:
+        return None
+    return _cache.get_snapshot(str(stream_id))
+
+
+def _publish_sync(topic: str, msg) -> None:
+    """Bridges TickProducer's background poll thread into the async bus.
+    start_runner() below always captures the loop while running inside a
+    live event loop (it's called synchronously from async route handlers),
+    so this can safely hop back onto it from any producer's thread."""
+    if _loop is None:
+        return
+    asyncio.run_coroutine_threadsafe(
+        get_bus().publish(topic, msg.stream_id, msg.to_json()), _loop
+    ).result(timeout=5)
+
+
+# ── Producer registry (replaces the old StreamRunner registry) ──────────────
+
 def start_runner(
     *,
     stream_id: uuid.UUID,
     name: str,
+    org_id: uuid.UUID,
     integration_type: str,
     integration_config: dict[str, Any],
     column_map: dict[str, str],
@@ -213,23 +237,23 @@ def start_runner(
     resume_all_streams() re-adopting a stream_id that never actually died in
     the registry (defensive; shouldn't happen in practice)."""
     sid = str(stream_id)
-    with _registry_lock:
-        existing = _runners.pop(sid, None)
+    existing = _producers.pop(sid, None)
     if existing is not None:
         existing.stop()
 
     runner = TickProducer(
         stream_id=sid,
+        org_id=str(org_id),
         name=name,
         integration_type=integration_type,
         integration_config=integration_config,
         column_map=column_map,
         interval_seconds=interval_seconds,
         accumulate=accumulate,
+        publish=_publish_sync,
     )
-    with _registry_lock:
-        _runners[sid] = runner
-    return runner
+    _producers[sid] = producer
+    return producer
 
 
 def get_runner(stream_id: uuid.UUID) -> TickProducer | None:
@@ -238,30 +262,21 @@ def get_runner(stream_id: uuid.UUID) -> TickProducer | None:
 
 def stop_runner(stream_id: uuid.UUID) -> bool:
     sid = str(stream_id)
-    with _registry_lock:
-        runner = _runners.pop(sid, None)
-    if runner is None:
+    producer = _producers.pop(sid, None)
+    if producer is None:
         return False
-    runner.stop()
+    producer.stop()
     return True
 
 
 def stop_all_runners() -> None:
-    """Called from app.main's shutdown hook so background threads don't get
-    silently orphaned when the event loop exits."""
-    with _registry_lock:
-        runners = list(_runners.values())
-        _runners.clear()
-    for r in runners:
-        r.stop()
+    producers = list(_producers.values())
+    _producers.clear()
+    for p in producers:
+        p.stop()
 
 
 async def resume_all_streams() -> None:
-    """Called from app.main's startup hook. Re-spins the in-memory collector
-    for every RealtimeStream still marked desired_status="running" across all
-    orgs - a redeploy/restart stops collection, but the definition survives
-    and picks back up here rather than requiring the user to notice and
-    restart it manually."""
     async with db_session.async_session_factory() as db:
         rows = (
             await db.execute(
@@ -276,6 +291,7 @@ async def resume_all_streams() -> None:
             start_runner(
                 stream_id=stream.id,
                 name=stream.name,
+                org_id=stream.org_id,
                 integration_type=integration.type,
                 integration_config=decrypt_config(integration.config),
                 column_map=stream.column_map,

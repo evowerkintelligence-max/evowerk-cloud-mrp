@@ -57,8 +57,14 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
+    import socket
+
     # Re-adopt any realtime stream that was running before this process
-    # started (redeploy/restart/crash) - see app.services.realtime.
+    # started (redeploy/restart/crash) - see app.services.realtime. The cache
+    # consumer group MUST be unique per replica so every replica sees every
+    # stream's updates instead of a shard of them (see RealtimeCache).
+    await realtime_service.start_cache(group_id=f"realtime-cache-{socket.gethostname()}-{os.getpid()}")
     await realtime_service.resume_all_streams()
     # Start this replica's realtime_cache consumer - see its module
     # docstring for why every replica needs its own consumer group.
@@ -70,6 +76,7 @@ async def lifespan(app: FastAPI):
     automl_realtime_service.stop_all_binding_schedulers()
     await realtime_cache.stop_cache_consumer()
     realtime_service.stop_all_runners()
+    await realtime_service.stop_cache()
 
 
 app = FastAPI(

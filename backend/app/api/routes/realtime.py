@@ -61,17 +61,10 @@ def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
     snap = realtime_cache.get_snapshot(stream.id) if stream.desired_status != "stopped" else None
     if snap is None:
         snap = {
-            "ts": None,
-            "stream_id": str(stream.id),
-            "name": stream.name,
-            "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
-            "error": stream.last_error,
-            "rows_in_window": 0,
-            "rows_collected": 0,
-            "duration": None,
-            "duration_s": None,
-            "last_tick_s": None,
-            "metrics": {},
+            "ts": None, "stream_id": str(stream.id), "name": stream.name,
+            "status": "stopped", "error": stream.last_error,
+            "rows_in_window": 0, "rows_collected": 0,
+            "duration": None, "duration_s": None, "last_tick_s": None, "metrics": {},
         }
     else:
         snap = {**snap, "name": stream.name}
@@ -90,6 +83,7 @@ def _start(stream: RealtimeStream, integration: Integration) -> None:
     realtime_service.start_runner(
         stream_id=stream.id,
         name=stream.name,
+        org_id=stream.org_id,
         integration_type=integration.type,
         integration_config=decrypt_config(integration.config),
         column_map=stream.column_map,

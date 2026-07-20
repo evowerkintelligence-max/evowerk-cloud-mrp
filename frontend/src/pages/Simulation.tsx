@@ -53,6 +53,8 @@ const BASELINE_FIELDS: { key: keyof Baseline; label: string; step?: string }[] =
   { key: "selling_price_per_unit", label: "Selling price / unit ($)", step: "0.01" },
 ];
 
+const BASELINE_FIELD_LABELS: Record<string, string> = Object.fromEntries(BASELINE_FIELDS.map((f) => [f.key, f.label]));
+
 type Changes = Record<string, number>;
 
 const PRESETS: { key: string; label: string; apply: (b: Baseline) => Changes }[] = [
@@ -113,12 +115,29 @@ function resultToReportText(result: SimResult): string {
   return [...lines, "", ...result.insights].join("\n");
 }
 
+interface Band {
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+interface SensitivityEntry {
+  parameter: string;
+  baseline_value: number;
+  low_value: number;
+  high_value: number;
+  impact: number;
+}
+
 interface SimResult {
   scenario_name: string;
   baseline: Record<string, number>;
   projected: Record<string, number>;
   delta: Record<string, { absolute: number; pct: number; direction: string }>;
   insights: string[];
+  bands?: Record<string, Band>;
+  sensitivity?: { target_metric: string; ranked: SensitivityEntry[] };
+  variance_source?: "dataset" | "default";
 }
 
 interface BaselineDerivation {
@@ -169,6 +188,7 @@ export function Simulation() {
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
   const [result, setResult] = useState<SimResult | null>(null);
+  const [targetMetric, setTargetMetric] = useState("daily_margin");
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
 
   const loadBaseline = useMutation({
@@ -227,6 +247,28 @@ export function Simulation() {
       );
       return j<SimulationRun>(
         apiFetch(`/simulation/${simulationId}/run`, { method: "POST", body: JSON.stringify({ changes: {} }) }),
+      );
+    },
+    onSuccess: (data) => {
+      setResult(data.result);
+      qc.invalidateQueries({ queryKey: ["simulation-runs", simulationId] });
+      qc.invalidateQueries({ queryKey: ["simulations"] });
+    },
+  });
+
+  const runMonteCarlo = useMutation({
+    mutationFn: async () => {
+      await j(
+        apiFetch(`/simulation/${simulationId}`, {
+          method: "PUT",
+          body: JSON.stringify({ name: scenarioName, baseline, changes }),
+        }),
+      );
+      return j<SimulationRun>(
+        apiFetch(`/simulation/${simulationId}/run/monte-carlo`, {
+          method: "POST",
+          body: JSON.stringify({ changes: {}, target_metric: targetMetric }),
+        }),
       );
     },
     onSuccess: (data) => {
@@ -395,15 +437,28 @@ export function Simulation() {
               {simulationId ? "Save as new" : "Save simulation"}
             </Button>
             {simulationId && (
-              <Button variant="secondary" loading={runAndSave.isPending} onClick={() => runAndSave.mutate()}>
-                Run &amp; save to history
-              </Button>
+              <>
+                <Button variant="secondary" loading={runAndSave.isPending} onClick={() => runAndSave.mutate()}>
+                  Run &amp; save to history
+                </Button>
+                <Select value={targetMetric} onChange={(e) => setTargetMetric(e.target.value)} className="w-56">
+                  {Object.entries(METRIC_LABELS).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+                <Button variant="secondary" loading={runMonteCarlo.isPending} onClick={() => runMonteCarlo.mutate()}>
+                  Run with confidence range
+                </Button>
+              </>
             )}
           </div>
           {!hasChanges && <p className="text-xs text-muted-foreground">Enter at least one change above, or apply a preset.</p>}
           {run.isError && <Alert variant="destructive">{(run.error as Error).message}</Alert>}
           {save.isError && <Alert variant="destructive">{(save.error as Error).message}</Alert>}
           {runAndSave.isError && <Alert variant="destructive">{(runAndSave.error as Error).message}</Alert>}
+          {runMonteCarlo.isError && <Alert variant="destructive">{(runMonteCarlo.error as Error).message}</Alert>}
         </CardContent>
       </Card>
 
@@ -414,6 +469,13 @@ export function Simulation() {
           </CardHeader>
           <CardContent className="space-y-6">
             <SendToReportButton spec={{ type: "text", text: resultToReportText(result) }} label={result.scenario_name} />
+            {result.variance_source && (
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground">
+                {result.variance_source === "dataset"
+                  ? "Confidence range: derived from your data"
+                  : "Confidence range: default estimate (no linked dataset)"}
+              </div>
+            )}
             <TableWrap>
               <Table>
                 <THead>
@@ -421,6 +483,7 @@ export function Simulation() {
                     <TH>Metric</TH>
                     <TH>Baseline</TH>
                     <TH>Projected</TH>
+                    {result.bands && <TH>Range (P10–P90)</TH>}
                     <TH>Δ</TH>
                   </TR>
                 </THead>
@@ -434,6 +497,11 @@ export function Simulation() {
                           <TD className="font-medium">{METRIC_LABELS[k]}</TD>
                           <TD>{fmtVal(k, result.baseline[k])}</TD>
                           <TD className="font-semibold">{fmtVal(k, result.projected[k])}</TD>
+                          {result.bands && (
+                            <TD className="text-muted-foreground">
+                              {result.bands[k] ? `${fmtVal(k, result.bands[k].p10)} – ${fmtVal(k, result.bands[k].p90)}` : "—"}
+                            </TD>
+                          )}
                           <TD className={deltaColor(k, d.direction) + " font-semibold"}>
                             {arrow} {fmtVal(k, d.absolute)} ({d.pct > 0 ? "+" : ""}
                             {d.pct.toFixed(1)}%)
@@ -452,6 +520,29 @@ export function Simulation() {
                 </div>
               ))}
             </div>
+
+            {result.sensitivity && result.sensitivity.ranked.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-medium">
+                  What moves {METRIC_LABELS[result.sensitivity.target_metric] ?? result.sensitivity.target_metric} the most
+                </div>
+                {(() => {
+                  const ranked = result.sensitivity!.ranked;
+                  const maxImpact = Math.max(...ranked.map((r) => r.impact), 1);
+                  return ranked.map((r) => (
+                    <div key={r.parameter} className="flex items-center gap-3 text-sm">
+                      <span className="w-40 shrink-0 text-muted-foreground">{BASELINE_FIELD_LABELS[r.parameter] ?? r.parameter}</span>
+                      <div className="h-3 flex-1 rounded-full bg-muted">
+                        <div className="h-3 rounded-full bg-primary" style={{ width: `${(r.impact / maxImpact) * 100}%` }} />
+                      </div>
+                      <span className="w-24 shrink-0 text-right text-xs text-muted-foreground">
+                        {fmtVal(result.sensitivity!.target_metric, r.impact)}
+                      </span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

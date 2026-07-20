@@ -152,8 +152,19 @@ _instance: SensorConsumer | None = None
 
 async def start_sensor_consumer(brokers: str | None = None) -> None:
     global _instance
-    _instance = SensorConsumer(brokers=brokers)
-    await _instance.start()
+    consumer = SensorConsumer(brokers=brokers)
+    try:
+        await consumer.start()
+    except Exception:
+        # No Kafka/Redpanda reachable (e.g. AWS deploy, which doesn't
+        # provision one) - degrade to "no sensor ingestion" instead of
+        # failing app startup entirely, same as realtime_cache.
+        logger.error(
+            "sensor_consumer failed to start (brokers=%s) - sensor ingestion disabled",
+            consumer.brokers, exc_info=True,
+        )
+        return
+    _instance = consumer
 
 
 async def stop_sensor_consumer() -> None:

@@ -244,6 +244,50 @@ async def test_join_items_on_brings_in_on_hand_lot_tracked(client):
     assert rows[0]["on_hand"] == 12.0
 
 
+async def test_filter_eq_null_matches_null_cells(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token, content=b"sku,qty,region\nA-1,10,east\nA-2,5,\n")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/query",
+        headers=headers,
+        json={
+            "select": [{"column": "sku"}],
+            "filters": [{"column": "region", "op": "eq", "value": None}],
+        },
+    )
+    assert res.status_code == 200
+    assert [r["sku"] for r in res.json()["rows"]] == ["A-2"]
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/query",
+        headers=headers,
+        json={
+            "select": [{"column": "sku"}],
+            "filters": [{"column": "region", "op": "neq", "value": None}],
+        },
+    )
+    assert res.status_code == 200
+    assert [r["sku"] for r in res.json()["rows"]] == ["A-1"]
+
+
+async def test_filter_gt_null_rejected(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post(
+        f"/datasets/{dataset_id}/query",
+        headers=headers,
+        json={
+            "select": [{"column": "sku"}],
+            "filters": [{"column": "qty", "op": "gt", "value": None}],
+        },
+    )
+    assert res.status_code == 400
+
+
 async def test_items_column_rejected_without_join(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

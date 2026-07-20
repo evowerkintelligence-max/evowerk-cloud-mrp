@@ -32,6 +32,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Post-upgrade values are Fernet ciphertext, longer than VARCHAR(64) - shrinking
+    # with real ciphertext present would abort the migration. Those secrets are
+    # meaningless to pre-hardening app code anyway (it never decrypts them), so
+    # clear anything that won't fit before narrowing the column.
+    op.execute("UPDATE users SET mfa_secret = NULL WHERE length(mfa_secret) > 64")
     op.alter_column("users", "mfa_secret", type_=sa.String(64), existing_type=sa.String(255))
     op.drop_column("users", "pending_mfa_secret")
     op.drop_column("users", "locked_until")

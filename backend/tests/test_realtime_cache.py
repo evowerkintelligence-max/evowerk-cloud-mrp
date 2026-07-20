@@ -8,12 +8,28 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
+requires_live_redpanda = pytest.mark.skipif(
     not os.environ.get("REDPANDA_BROKERS"),
     reason="set REDPANDA_BROKERS to run against a live Redpanda",
 )
 
 
+@pytest.mark.asyncio
+async def test_start_cache_consumer_degrades_when_broker_unreachable():
+    """Customer-cloud deployments (AWS/Azure Terraform modules) don't
+    provision Kafka/Redpanda at all - start_cache_consumer() must swallow the
+    connection failure so app.main's lifespan doesn't crash the whole API on
+    every boot. See backend/app/main.py's lifespan and the incident this
+    regression-tests: a customer deploy crash-looped because this raised."""
+    from app.services import realtime_cache
+
+    await realtime_cache.start_cache_consumer(brokers="localhost:1")  # nothing listens here
+
+    assert realtime_cache.get_snapshot(uuid.uuid4()) is None
+    await realtime_cache.stop_cache_consumer()  # must not raise either
+
+
+@requires_live_redpanda
 @pytest.mark.asyncio
 async def test_cache_consumer_reflects_published_metric_snapshot(monkeypatch):
     from app.core.config import get_settings
@@ -54,6 +70,7 @@ async def test_cache_consumer_reflects_published_metric_snapshot(monkeypatch):
         await realtime_cache.stop_cache_consumer()
 
 
+@requires_live_redpanda
 @pytest.mark.asyncio
 async def test_two_consumer_groups_both_see_every_stream():
     """Proves the per-replica-unique-group-id requirement: two independent

@@ -106,8 +106,20 @@ _instance: CacheConsumer | None = None
 
 async def start_cache_consumer(brokers: str | None = None) -> None:
     global _instance
-    _instance = CacheConsumer(brokers=brokers)
-    await _instance.start()
+    consumer = CacheConsumer(brokers=brokers)
+    try:
+        await consumer.start()
+    except Exception:
+        # No Kafka/Redpanda reachable (e.g. AWS deploy, which doesn't
+        # provision one) - degrade to "no live realtime metrics" instead of
+        # failing app startup entirely. get_snapshot() already returns None
+        # when _instance is None.
+        logger.error(
+            "realtime_cache consumer failed to start (brokers=%s) - realtime metrics disabled",
+            consumer.brokers, exc_info=True,
+        )
+        return
+    _instance = consumer
 
 
 async def stop_cache_consumer() -> None:

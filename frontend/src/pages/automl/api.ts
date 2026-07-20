@@ -56,6 +56,8 @@ export interface AutoMLRunSummary {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  auto_retrain: boolean;
+  retrained_from_run_id: string | null;
 }
 
 export interface AutoMLRunDetail extends AutoMLRunSummary {
@@ -93,6 +95,7 @@ export interface TrainRequest {
   forecast_strategy: "direct" | "recursive";
   time_budget_seconds: number | null;
   search_method: "random" | "bayesian";
+  auto_retrain: boolean;
 }
 
 const RUN_STATUS_ACTIVE = (status: string) => status === "queued" || status === "running";

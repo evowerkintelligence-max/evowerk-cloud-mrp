@@ -43,6 +43,7 @@ from app.models import (  # noqa: F401 - register models
     rca_case,
     realtime,
     report_spec,
+    shift_forecast,
     shift_schedule,
     simulation,
     telemetry,

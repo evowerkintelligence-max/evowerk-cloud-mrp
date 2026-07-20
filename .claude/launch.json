@@ -9,7 +9,7 @@
     },
     {
       "name": "backend-dev",
-      "runtimeExecutable": "backend/.venv/Scripts/python.exe",
+      "runtimeExecutable": "python",
       "runtimeArgs": ["backend/dev_server.py"],
       "port": 8010,
       "env": { "PORT": "8010" }
@@ -19,6 +19,7 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 5173,
+      "autoPort": true,
       "env": { "BACKEND_PORT": "8010" }
     }
   ]

@@ -27,6 +27,36 @@ from app.services import automl_engine, automl_explain_nl, automl_storage, autom
 from app.services.datasets import dataframe_for
 
 
+async def create_run(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    dataset_id: uuid.UUID,
+    name: str,
+    task: str,
+    target_column: str,
+    feature_columns: list[str],
+    config: dict,
+    auto_retrain: bool = False,
+    retrained_from_run_id: uuid.UUID | None = None,
+) -> AutoMLRun:
+    """Build + persist a queued AutoMLRun row. Does not commit (the caller
+    does - a route commits once; app.services.automl_retrain commits its own
+    background-task session) and does not schedule training (the caller
+    decides how: a route uses BackgroundTasks.add_task(execute_automl_run,
+    ...); automl_retrain, which has no BackgroundTasks to schedule onto
+    since its triggering request already returned, awaits it directly)."""
+    run = AutoMLRun(
+        org_id=org_id, dataset_id=dataset_id, created_by=created_by, name=name, task=task,
+        target_column=target_column, feature_columns=feature_columns, config=config,
+        auto_retrain=auto_retrain, retrained_from_run_id=retrained_from_run_id, status="queued",
+    )
+    db.add(run)
+    await db.flush()
+    return run
+
+
 async def execute_automl_run(run_id: str, org_id: str) -> None:
     async with db_session.async_session_factory() as db:
         await _execute(db, uuid.UUID(run_id), uuid.UUID(org_id))

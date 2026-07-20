@@ -459,7 +459,7 @@ export function EngineScreen<T>({
   path: string;
   fields: EngineField[];
   runLabel?: string;
-  children: (result: T) => ReactNode;
+  children: (result: T, requestBody: Record<string, unknown>) => ReactNode;
 }) {
   const [datasetId, setDatasetId] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
@@ -689,7 +689,7 @@ export function EngineScreen<T>({
               {isFullscreen ? "Exit TV mode" : "TV mode"}
             </Button>
           </div>
-          {children(result)}
+          {children(result, lastComputeBody.current ?? {})}
           <SendToReportButton
             spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
             label={`${title} — ${new Date().toLocaleString()}`}

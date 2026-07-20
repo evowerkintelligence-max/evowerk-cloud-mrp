@@ -79,7 +79,13 @@ async def _execute(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> No
     for layer in layers:
         runnable = []
         for step in layer:
-            if set(step.depends_on) & (failed_ids | skipped_ids):
+            # "continue" tries every step regardless of an upstream failure - a
+            # step that actually needs the missing output fails on its own
+            # (e.g. StepError from _upstream_rows), it isn't pre-emptively
+            # skipped here. fail_fast never reaches a later layer anyway (it
+            # breaks below before one starts); skip_dependents keeps this
+            # per-layer skip as before.
+            if workflow.failure_policy != "continue" and set(step.depends_on) & (failed_ids | skipped_ids):
                 skipped_ids.add(step.id)
                 await _emit(db, org_id, run_id, "node_skipped", step_id=step.id)
                 continue

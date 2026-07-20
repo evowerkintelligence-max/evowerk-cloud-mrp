@@ -34,10 +34,10 @@ locals {
         rulePriority = 2
         description  = "Keep only the last 5 tagged images - up.sh mints a fresh tag every run"
         selection = {
-          tagStatus     = "tagged"
+          tagStatus      = "tagged"
           tagPatternList = ["*"]
-          countType     = "imageCountMoreThan"
-          countNumber   = 5
+          countType      = "imageCountMoreThan"
+          countNumber    = 5
         }
         action = { type = "expire" }
       },

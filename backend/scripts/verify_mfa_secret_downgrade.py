@@ -24,7 +24,9 @@ async def main() -> None:
 
     async with engine.begin() as conn:
         org_id = (
-            await conn.execute(text("INSERT INTO orgs (id, name) VALUES (gen_random_uuid(), 'ci') RETURNING id"))
+            await conn.execute(
+                text("INSERT INTO orgs (id, name, created_at) VALUES (gen_random_uuid(), 'ci', now()) RETURNING id")
+            )
         ).scalar_one()
         await conn.execute(
             text(

@@ -18,17 +18,30 @@ resource "aws_ecr_repository" "frontend" {
 
 locals {
   ecr_lifecycle_policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Expire untagged images after 14 days"
-      selection = {
-        tagStatus   = "untagged"
-        countType   = "sinceImagePushed"
-        countUnit   = "days"
-        countNumber = 14
-      }
-      action = { type = "expire" }
-    }]
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire untagged images after 14 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 14
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep only the last 5 tagged images - up.sh mints a fresh tag every run"
+        selection = {
+          tagStatus     = "tagged"
+          tagPatternList = ["*"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 5
+        }
+        action = { type = "expire" }
+      },
+    ]
   })
 }
 

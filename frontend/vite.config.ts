@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 
@@ -15,6 +15,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Docker Desktop's Windows bind mount doesn't propagate inotify events,
+    // so chokidar never sees host-side edits without polling.
+    watch: {
+      usePolling: true,
+    },
     proxy: {
       // One regex over every backend router prefix (see app/main.py). The old
       // entry-per-route allowlist silently dropped any router added later:
@@ -22,8 +27,25 @@ export default defineConfig({
       // Planning, Inventory and Ask never reached the API in dev. Same lesson
       // hit again later - computer-vision/data-chat/predictive/rca-cases/
       // scenarios were added to main.py but never added here.
-      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|scenarios|pace)(/|$|\\?)":
-        `http://localhost:${backendPort}`,
+      //
+      // Several of these prefixes are ALSO SPA routes (/rca-cases, /analytics,
+      // /bi, /reports, /workflows, /automl, /alerts, /integrations, /realtime,
+      // /simulation, /predictive - see App.tsx). Client-side nav
+      // never hits this proxy, but a hard refresh or a direct URL open does,
+      // and used to get proxied straight to the backend (a bare JSON 404)
+      // instead of index.html. bypass() tells the difference: a page
+      // navigation's Accept header leads with text/html; apiFetch's fetch()
+      // calls never send that, so only real API calls get proxied.
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace)(/|$|\\?)":
+        {
+          target: `http://localhost:${backendPort}`,
+          bypass(req) {
+            if (req.headers.accept?.includes("text/html")) return req.url;
+          },
+        },
     },
+  },
+  test: {
+    environment: "node",
   },
 });

@@ -274,6 +274,25 @@ export function ReportBuilder() {
     URL.revokeObjectURL(url);
   }
 
+  async function viewReport() {
+    if (!editingId || editingId === "new") return;
+    // Open synchronously, still inside the click's user-gesture window - a tab opened
+    // after the await below would be blocked as a popup by every major browser.
+    const tab = window.open("", "_blank");
+    const res = await apiFetch(`/reports/custom/${editingId}/render?format=html`);
+    if (!res.ok) {
+      tab?.close();
+      setError("Render failed — save the report first.");
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (tab) tab.location.href = url;
+    else window.open(url, "_blank");
+    // The tab needs the URL to still resolve after it opens; revoke once it's had time to load.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   if (editingId === null) {
     return (
       <div className="space-y-6">
@@ -331,6 +350,7 @@ export function ReportBuilder() {
             <Button loading={save.isPending} onClick={() => save.mutate()}>Save</Button>
             {editingId !== "new" && (
               <>
+                <Button variant="secondary" onClick={viewReport}>View</Button>
                 <Button variant="secondary" onClick={() => download("html")}>Export HTML</Button>
                 <Button variant="secondary" onClick={() => download("pdf")}>Export PDF</Button>
                 <Button variant="secondary" onClick={() => download("csv")}>Export CSV</Button>

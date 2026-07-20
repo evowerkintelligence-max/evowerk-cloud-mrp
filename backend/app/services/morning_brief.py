@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import and_, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bom import Item
@@ -31,6 +32,8 @@ _STATUS_PRIORITY = {status: i for i, status in enumerate(ACTIONABLE_STATUSES)}
 # Active lots expiring within this many days are worth flagging even though
 # they're not yet a hard stockout risk.
 LOT_EXPIRY_WARNING_DAYS = 14
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -130,28 +133,40 @@ async def _ensure_todays_snapshot(
         .scalars()
         .all()
     )
-    for line in lines:
-        if line.item_id in already_captured:
-            continue
-        try:
-            async with db.begin_nested():
-                db.add(
-                    InventoryDailySnapshot(
-                        org_id=org_id,
-                        item_id=line.item_id,
-                        snapshot_date=today,
-                        on_hand=line.on_hand,
-                        avg_daily_demand=line.avg_daily_demand,
-                        days_of_supply=line.days_of_supply,
-                        status=line.status,
+    new_lines = [line for line in lines if line.item_id not in already_captured]
+    if not new_lines:
+        # Common case for every request after the first each day - skip the
+        # write path entirely so a normal GET stays a read.
+        return
+
+    # Snapshot capture is best-effort scaffolding for tomorrow's delta, not
+    # something the brief itself depends on - any DB failure anywhere in this
+    # write path (not just the final commit) must never turn a read endpoint
+    # into a 500. The next request retries.
+    try:
+        for line in new_lines:
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        InventoryDailySnapshot(
+                            org_id=org_id,
+                            item_id=line.item_id,
+                            snapshot_date=today,
+                            on_hand=line.on_hand,
+                            avg_daily_demand=line.avg_daily_demand,
+                            days_of_supply=line.days_of_supply,
+                            status=line.status,
+                        )
                     )
-                )
-                await db.flush()
-        except IntegrityError:
-            # A concurrent request captured today's snapshot for this item
-            # first - today's row already exists, nothing to do.
-            continue
-    await db.commit()
+                    await db.flush()
+            except IntegrityError:
+                # A concurrent request captured today's snapshot for this
+                # item first - today's row already exists, nothing to do.
+                continue
+        await db.commit()
+    except SQLAlchemyError:
+        logger.warning("Snapshot capture failed for org %s", org_id, exc_info=True)
+        await db.rollback()
 
 
 async def compute_morning_brief(db: AsyncSession, org_id: uuid.UUID) -> list[BriefLine]:

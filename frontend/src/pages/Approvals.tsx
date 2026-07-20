@@ -9,13 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-
-interface OrgMeResponse {
-  id: string;
-  name: string;
-  role: string;
-  adjust_approval_threshold: string;
-}
+import type { OrgMeResponse } from "./Warehouse";
 
 interface AdjustmentRequest {
   id: string;
@@ -30,21 +24,13 @@ interface AdjustmentRequest {
   requested_at: string;
 }
 
-export function ApprovalsPanel() {
+export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [threshold, setThreshold] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
 
-  const org = useQuery<OrgMeResponse>({
-    queryKey: ["org-me"],
-    queryFn: async () => {
-      const res = await apiFetch("/orgs/me");
-      if (!res.ok) throw new Error("Failed to load organization");
-      return res.json();
-    },
-  });
-  const isOwner = org.data?.role === "owner";
+  const isOwner = org.role === "owner";
 
   const requests = useQuery<AdjustmentRequest[]>({
     queryKey: ["inventory-adjustment-requests"],
@@ -135,7 +121,7 @@ export function ApprovalsPanel() {
               <Field
                 label="Quantity"
                 htmlFor="threshold"
-                hint={`Current: ${org.data?.adjust_approval_threshold ?? "—"}. Manager adjustments/counts above this need approval.`}
+                hint={`Current: ${org.adjust_approval_threshold}. Manager adjustments/counts above this need approval.`}
               >
                 <Input
                   id="threshold"
@@ -144,7 +130,7 @@ export function ApprovalsPanel() {
                   min="0"
                   value={threshold}
                   onChange={(e) => setThreshold(e.target.value)}
-                  placeholder={org.data?.adjust_approval_threshold}
+                  placeholder={org.adjust_approval_threshold}
                 />
               </Field>
               <Button type="submit" loading={updateThreshold.isPending}>
@@ -203,7 +189,7 @@ export function ApprovalsPanel() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          loading={approve.isPending}
+                          loading={approve.isPending && approve.variables === req.id}
                           onClick={() => approve.mutate(req.id)}
                         >
                           Approve
@@ -211,7 +197,7 @@ export function ApprovalsPanel() {
                         <Button
                           size="sm"
                           variant="destructive"
-                          loading={reject.isPending}
+                          loading={reject.isPending && reject.variables === req.id}
                           onClick={() => reject.mutate(req.id)}
                         >
                           Reject

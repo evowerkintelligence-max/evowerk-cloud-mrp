@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import session as db_session
 from app.models.automl_run import AutoMLRun
 from app.models.dataset import Dataset
-from app.services import automl_engine, automl_storage
+from app.services import automl_engine, automl_explain_nl, automl_storage, automl_templates
 from app.services.datasets import dataframe_for
 
 
@@ -56,6 +56,67 @@ async def _execute(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> No
     try:
         df = await asyncio.to_thread(dataframe_for, dataset)
         config = run.config or {}
+
+        if run.template_id:
+            template = automl_templates.get_template(run.template_id)
+            pre = await asyncio.to_thread(template.preprocess, df, config)
+
+            if pre.skip_ml:
+                engine_result = None
+                template_out = await asyncio.to_thread(template.postprocess, None, config, pre.context)
+            else:
+                engine_result = await asyncio.to_thread(
+                    automl_engine.train_automl_baseline,
+                    pre.df, pre.target_col, automl_engine.AutoMLTask(pre.task),
+                    feature_columns=pre.feature_cols, algorithms=pre.algorithms,
+                    thoroughness=config.get("thoroughness", "balanced"),
+                )
+                template_out = await asyncio.to_thread(template.postprocess, engine_result, config, pre.context)
+
+            # Plain-English explanation + recommendation, built on the same
+            # engine_result the template just used - never fails the run,
+            # degrades to explanation_sentence=None/recommendation=None.
+            role_labels = config.get("column_labels") or config.get("friendly_labels") or {}
+            explain_out = automl_explain_nl.explain(engine_result, template, role_labels)
+            template_out["explanation_sentence"] = explain_out.get("explanation_sentence")
+            template_out["recommendation"] = explain_out.get("recommendation")
+
+            if pre.task:
+                run.task = pre.task
+            if pre.target_col:
+                run.target_column = pre.target_col
+            run.status = "success"
+            run.leaderboard = template_out["leaderboard"]
+            run.best_model_name = template_out["best_model_name"]
+            run.metric_name = template_out["metric_name"]
+            run.metric_value = template_out["metric_value"]
+            meta = {k: v for k, v in template_out.items() if k not in ("pipeline", "explain_X", "explain_y", "leaderboard", "best_model_name", "metric_name", "metric_value")}
+            meta["notes"] = pre.notes
+            # Carried from the engine's own meta (not template_out - no template's
+            # postprocess() copies these) so check_data_drift() has something to
+            # compare against for template runs, same as it already does for
+            # generic/Advanced runs. Only meaningful when a real pipeline trained;
+            # the skip_ml/anomaly path has no explain_X sample to drift-check anyway.
+            if engine_result is not None:
+                for key in ("feature_columns", "raw_feature_columns", "schema"):
+                    if key in engine_result["meta"]:
+                        meta[key] = engine_result["meta"][key]
+
+            if template_out["pipeline"] is not None:
+                run_dir = automl_storage.run_dir(org_id, run_id)
+                model_path = run_dir / "model.joblib"
+                joblib.dump(template_out["pipeline"], model_path)
+                template_out["explain_X"].to_csv(run_dir / "explain_X.csv", index=False)
+                pd.DataFrame({"y": template_out["explain_y"]}).to_csv(run_dir / "explain_y.csv", index=False)
+                run.model_path = str(model_path)
+            else:
+                run.model_path = None
+
+            run.meta = meta
+            run.finished_at = datetime.now(timezone.utc)
+            await db.commit()
+            return
+
         result = await asyncio.to_thread(
             automl_engine.train_automl_baseline,
             df,

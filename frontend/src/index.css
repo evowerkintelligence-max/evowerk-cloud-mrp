@@ -9,58 +9,60 @@
 */
 @layer base {
   :root {
-    --background: 210 40% 98%;
-    --foreground: 222 47% 11%;
+    --background: 40 20% 97%;
+    --foreground: 30 15% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 30 15% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 190 90% 38%;
+    --popover-foreground: 30 15% 12%;
+    --primary: 165 45% 32%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 94%;
-    --secondary-foreground: 222 47% 15%;
-    --muted: 210 40% 94%;
-    --muted-foreground: 215 16% 42%;
-    --accent: 258 82% 57%;
+    --secondary: 30 15% 94%;
+    --secondary-foreground: 30 15% 16%;
+    --muted: 30 15% 94%;
+    --muted-foreground: 30 10% 42%;
+    --accent: 258 65% 55%;
     --accent-foreground: 0 0% 100%;
-    --destructive: 0 72% 48%;
+    --destructive: 352 68% 46%;
     --destructive-foreground: 0 0% 100%;
-    --success: 152 58% 34%;
+    --success: 150 60% 32%;
     --success-foreground: 0 0% 100%;
-    --warning: 34 92% 42%;
+    --warning: 40 78% 40%;
     --warning-foreground: 0 0% 100%;
-    --border: 214 32% 88%;
-    --input: 214 32% 84%;
-    --ring: 190 90% 38%;
-    --brand: 201 82% 42%;
+    --border: 30 15% 89%;
+    --input: 30 15% 85%;
+    --ring: 165 45% 32%;
+    --brand: 165 48% 38%;
+    --terracotta: 18 58% 48%;
     --radius: 0.75rem;
   }
 
   .dark {
-    --background: 224 42% 4%;
-    --foreground: 213 31% 93%;
-    --card: 223 36% 7%;
-    --card-foreground: 213 31% 93%;
-    --popover: 224 40% 6%;
-    --popover-foreground: 213 31% 93%;
-    --primary: 189 94% 55%;
-    --primary-foreground: 202 84% 8%;
-    --secondary: 220 28% 13%;
-    --secondary-foreground: 213 31% 93%;
-    --muted: 220 28% 11%;
-    --muted-foreground: 217 15% 58%;
-    --accent: 258 90% 70%;
+    --background: 0 0% 6%;
+    --foreground: 0 0% 92%;
+    --card: 0 0% 9%;
+    --card-foreground: 0 0% 92%;
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 92%;
+    --primary: 166 42% 52%;
+    --primary-foreground: 166 30% 9%;
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 92%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 58%;
+    --accent: 258 70% 68%;
     --accent-foreground: 210 40% 98%;
-    --destructive: 0 72% 55%;
+    --destructive: 352 65% 55%;
     --destructive-foreground: 210 40% 98%;
-    --success: 152 62% 45%;
+    --success: 150 65% 42%;
     --success-foreground: 155 80% 8%;
-    --warning: 38 95% 58%;
-    --warning-foreground: 30 90% 8%;
-    --border: 221 28% 14%;
-    --input: 221 28% 19%;
-    --ring: 189 94% 55%;
-    --brand: 201 88% 56%;
+    --warning: 42 82% 56%;
+    --warning-foreground: 36 85% 9%;
+    --border: 0 0% 16%;
+    --input: 0 0% 20%;
+    --ring: 166 42% 52%;
+    --brand: 166 50% 60%;
+    --terracotta: 18 55% 58%;
     --radius: 0.75rem;
   }
 
@@ -146,21 +148,21 @@
   .brand-gradient {
     background-image: linear-gradient(
       90deg,
-      hsl(189 94% 53%),
-      hsl(212 95% 60%),
-      hsl(262 83% 68%)
+      hsl(166 55% 55%),
+      hsl(190 55% 55%),
+      hsl(258 65% 65%)
     );
   }
 
-  /* Slowly-shifting cyan -> blue -> violet gradient for brand moments: active
+  /* Slowly-shifting teal -> sky -> violet gradient for brand moments: active
      nav indicator, org avatar chip, hero name, hairline card accents. */
   .brand-gradient-animate {
     background-image: linear-gradient(
       90deg,
-      hsl(189 94% 53%),
-      hsl(212 95% 60%),
-      hsl(262 83% 68%),
-      hsl(189 94% 53%)
+      hsl(166 55% 55%),
+      hsl(190 55% 55%),
+      hsl(258 65% 65%),
+      hsl(166 55% 55%)
     );
     background-size: 200% auto;
     animation: brand-gradient-shift 8s linear infinite;
@@ -199,5 +201,25 @@
       hsl(var(--accent) / 0.35)
     );
     filter: blur(0.5px);
+  }
+
+  /* Small breathing dot next to "Live"/auto-refresh indicators. */
+  .live-pulse-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: hsl(var(--primary));
+    box-shadow: 0 0 6px hsl(var(--primary) / 0.7);
+    animation: live-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes live-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.4;
+    }
   }
 }

@@ -42,6 +42,45 @@ async def test_patch_edits_name_and_unit_of_measure(client):
     assert res.json()["unit_of_measure"] == "kg"
 
 
+async def test_patch_rejects_unit_of_measure_change_once_used_as_bom_component(client):
+    """BomLine.quantity is a numeric magnitude fixed relative to the
+    component's unit_of_measure at authoring time - changing the unit out
+    from under an existing BOM line would silently reinterpret that stored
+    number, so it must be rejected once the item is referenced.
+    """
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    parent = await _create_item(client, token, "FG-UOM", item_type="finished_good")
+    comp = await _create_item(client, token, "RAW-UOM", unit_of_measure="kg")
+
+    bom = await client.post("/boms", json={"item_id": parent["id"]}, headers=headers)
+    bom_data = bom.json()
+    await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [{"component_item_id": comp["id"], "quantity": "1", "sequence": 0}],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+
+    res = await client.patch(
+        f"/items/{comp['id']}",
+        json={"preferred_supplier_id": None, "unit_of_measure": "g"},
+        headers=headers,
+    )
+    assert res.status_code == 409
+
+    # Unrelated items (no BOM references, no custom units) can still change freely.
+    other = await _create_item(client, token, "RAW-UOM-2", unit_of_measure="kg")
+    res = await client.patch(
+        f"/items/{other['id']}",
+        json={"preferred_supplier_id": None, "unit_of_measure": "g"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+
+
 async def test_patch_rejects_empty_name(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

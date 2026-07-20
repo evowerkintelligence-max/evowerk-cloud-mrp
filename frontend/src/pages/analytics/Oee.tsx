@@ -503,13 +503,14 @@ export function Oee() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
               label="OEE"
-              value={
-                <span style={{ color: oeeColor(r.oee) }}>
-                  {r.oee}%{r.performance_estimated ? "*" : ""}
-                </span>
-              }
+              size="hero"
+              value={null}
+              heroValue={r.oee}
+              heroFormat={(n) => `${n.toFixed(1)}%${r.performance_estimated ? "*" : ""}`}
+              heroColor={oeeColor(r.oee)}
               tone="primary"
               title={METRIC_HELP.OEE}
+              className="lg:col-span-2"
             />
             <StatCard label="Availability" value={pct(r.availability)} tone="accent" title={METRIC_HELP.Availability} />
             <StatCard label="Performance" value={pct(r.performance)} tone="success" title={METRIC_HELP.Performance} />

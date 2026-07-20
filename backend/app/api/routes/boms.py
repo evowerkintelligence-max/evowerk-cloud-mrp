@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -108,11 +108,20 @@ async def _flush_checking_version(db: AsyncSession) -> None:
     common case with a clear message; row_version (the Bom model's
     version_id_col) is the real guard for the narrow window between that
     check and this flush - convert its StaleDataError into the same 409
-    instead of a raw 500.
+    instead of a raw 500. Also converts a hit on uq_boms_org_item_active (the
+    DB-level one-active-BOM-per-item backstop - see app/models/bom.py) the
+    same way, since that's reachable from activate_bom's app-level checks
+    ever getting out of sync with the DB the same way a version conflict is.
     """
     try:
         await db.flush()
     except StaleDataError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This BOM was changed elsewhere since you loaded it - refresh and try again",
+        ) from None
+    except IntegrityError:
+        await db.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "This BOM was changed elsewhere since you loaded it - refresh and try again",
@@ -177,7 +186,7 @@ async def create_bom(
         item_id = uuid.UUID(body.item_id)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid item_id") from None
-    item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
+    await get_or_404(db, Item, current.org_id, item_id, "Item not found")
 
     for attempt in range(MAX_VERSION_ATTEMPTS):
         max_version = await db.scalar(
@@ -210,7 +219,10 @@ async def create_bom(
         metadata={"item_id": str(item_id), "version": bom.version},
     )
     await db.commit()
-    return await _bom_to_response(db, bom, item)
+    # Not `item` here: a version collision above rolls back and expires every
+    # ORM instance in the session (see revise_bom's identical hazard), so a
+    # retried `item` can't be trusted - let _bom_to_response fetch it fresh.
+    return await _bom_to_response(db, bom)
 
 
 @router.get("", response_model=list[BomResponse])
@@ -254,7 +266,11 @@ async def get_bom(
             sequence=line.sequence,
             scrap_pct=line.scrap_pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
             unit_id=str(line.unit_id) if line.unit_id else None,
-            unit_quantity=line.unit_quantity.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP) if line.unit_quantity else None,
+            unit_quantity=(
+                line.unit_quantity.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+                if line.unit_quantity is not None
+                else None
+            ),
             unit_code=unit.code if unit else None,
         )
         for line, component, unit in lines_result.all()
@@ -302,6 +318,10 @@ async def update_bom_lines(
             if line_in.unit_quantity is None or line_in.unit_quantity <= 0:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST, "unit_quantity must be positive when unit_id is set"
+                )
+            if line_in.unit_quantity > MAX_LINE_QUANTITY:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, f"unit_quantity must not exceed {MAX_LINE_QUANTITY}"
                 )
             try:
                 unit_uuid = uuid.UUID(line_in.unit_id)
@@ -388,6 +408,30 @@ async def update_bom_lines(
     return await get_bom(bom_id, current, db)
 
 
+async def _lock_org_for_activation(db: AsyncSession, org_id: uuid.UUID) -> None:
+    """Serializes concurrent activate() calls within one org so two
+    mutually-referencing drafts can't each walk the (active-BOM-only) cycle
+    check before either commits - e.g. drafts A and B could otherwise each
+    see the other as still-draft (invisible to that active-only walk) and
+    both pass, creating a real cycle once both commit.
+
+    On Postgres this is a single org-scoped advisory lock (auto-released at
+    transaction end, acquired in O(1) regardless of catalog size) rather than
+    a row lock on every Bom in the org - unrelated activations in a large BOM
+    catalog no longer serialize behind a full-table lock acquisition, though
+    activations *within* the same org still serialize against each other
+    (narrowing further would mean locking exactly the reachable subgraph,
+    which needs the cycle walk itself to know - a bigger change than this
+    lock's cost justifies). SQLite (the test backend) has no advisory-lock
+    primitive, so it falls back to the original row lock, which is fine at
+    test-sized scale.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": str(org_id)})
+    else:
+        await db.execute(select(Bom.id).where(Bom.org_id == org_id).with_for_update())
+
+
 @router.post("/{bom_id}/activate", response_model=BomResponse)
 async def activate_bom(
     bom_id: uuid.UUID,
@@ -398,13 +442,7 @@ async def activate_bom(
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be activated")
 
-    # Lock every BOM row in the org for the rest of this transaction so two
-    # concurrent activations can't both walk the cycle check before either
-    # commits - e.g. mutually-referencing drafts A and B could otherwise each
-    # see the other as still-draft (invisible to the active-only walk) and
-    # both pass, creating a real cycle once both commit. A second activate()
-    # in this org now blocks here until the first one commits or rolls back.
-    await db.execute(select(Bom.id).where(Bom.org_id == current.org_id).with_for_update())
+    await _lock_org_for_activation(db, current.org_id)
 
     lines_result = await db.execute(select(BomLine.component_item_id).where(BomLine.bom_id == bom.id))
     component_ids = {row[0] for row in lines_result.all()}
@@ -418,6 +456,13 @@ async def activate_bom(
     )
     for other in previously_active.scalars().all():
         other.status = "archived"
+    # Flushed separately from the activate below: uq_boms_org_item_active (the
+    # DB-level one-active-per-item backstop) is checked per-statement, not
+    # deferred, so the old actives must actually be archived in the DB before
+    # this bom flips to active - otherwise two active rows for this item_id
+    # briefly coexist mid-flush and the legitimate activation trips its own
+    # backstop.
+    await _flush_checking_version(db)
 
     bom.status = "active"
     await _flush_checking_version(db)
@@ -524,16 +569,14 @@ async def delete_bom(
     if bom.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft BOMs can be deleted")
 
-    # Guarded DELETE, not delete-by-id: a concurrent activate() could flip this
-    # BOM to active between the check above and here. Re-check status='draft'
-    # as part of the DELETE itself so that race loses cleanly instead of
-    # silently deleting a BOM another request just made active.
-    result = await db.execute(Bom.__table__.delete().where(Bom.id == bom.id, Bom.status == "draft"))
-    if result.rowcount == 0:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This BOM was changed elsewhere since you loaded it - refresh and try again",
-        )
+    # row_version (via _flush_checking_version) catches ANY change since this
+    # BOM was loaded - a status flip to active *or* a concurrent
+    # update_bom_lines edit (which bumps row_version without changing status,
+    # see update_bom_lines) - unlike a hand-rolled `WHERE status='draft'` guard,
+    # which would miss the latter and silently delete lines another request
+    # just committed.
+    await db.delete(bom)
+    await _flush_checking_version(db)
     await log_event(
         db,
         action="bom.deleted",

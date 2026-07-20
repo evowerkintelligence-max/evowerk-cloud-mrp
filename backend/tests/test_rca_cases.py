@@ -149,6 +149,60 @@ async def test_node_crud_and_root_cause_marking(client):
     assert delete.status_code == 204
 
 
+async def test_case_status_auto_advances_with_investigation(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    case = await _create_case(client, token, dataset_id)
+    assert case["status"] == "open"
+
+    node = await client.post(
+        f"/rca-cases/cases/{case['id']}/nodes",
+        headers=_h(token),
+        json={"text": "M2 hydraulic leak", "node_type": "cause"},
+    )
+    assert node.status_code == 201
+
+    after_node = await client.get(f"/rca-cases/cases/{case['id']}", headers=_h(token))
+    assert after_node.json()["status"] == "investigating"
+
+    action = await client.post(
+        f"/rca-cases/cases/{case['id']}/actions", headers=_h(token), json={"description": "Replace seal"}
+    )
+    assert action.status_code == 201
+
+    after_action = await client.get(f"/rca-cases/cases/{case['id']}", headers=_h(token))
+    assert after_action.json()["status"] == "actions_open"
+
+    events = await client.get(f"/rca-cases/cases/{case['id']}/events", headers=_h(token))
+    summaries = [e["summary"] for e in events.json()]
+    assert "Status changed to investigating" in summaries
+    assert "Status changed to actions_open" in summaries
+
+
+async def test_case_status_auto_advance_respects_manual_override(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    case = await _create_case(client, token, dataset_id)
+
+    closed = await client.patch(
+        f"/rca-cases/cases/{case['id']}", headers=_h(token), json={"status": "closed"}
+    )
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
+
+    # A case a human already closed shouldn't get silently reopened by adding a
+    # late cause node - auto-advance only fires from "open".
+    node = await client.post(
+        f"/rca-cases/cases/{case['id']}/nodes",
+        headers=_h(token),
+        json={"text": "Late-added cause", "node_type": "cause"},
+    )
+    assert node.status_code == 201
+
+    after = await client.get(f"/rca-cases/cases/{case['id']}", headers=_h(token))
+    assert after.json()["status"] == "closed"
+
+
 async def test_action_verify_reports_before_after_oee(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

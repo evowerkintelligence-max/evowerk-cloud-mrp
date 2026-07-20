@@ -17,7 +17,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     if (!q) return ALL_NAV_ITEMS;
     return ALL_NAV_ITEMS.filter(
       (item) =>
-        item.label.toLowerCase().includes(q) || item.section.toLowerCase().includes(q),
+        item.label.toLowerCase().includes(q) ||
+        item.section.toLowerCase().includes(q) ||
+        item.keywords?.some((k) => k.toLowerCase().includes(q)),
     );
   }, [query]);
 

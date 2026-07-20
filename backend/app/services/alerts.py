@@ -339,6 +339,96 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     )
 
 
+async def _eval_automl_risk(
+    db: AsyncSession, org_id: uuid.UUID, rule: AlertRule, dataset: Dataset,
+) -> AlertTrigger:
+    """Scores a dataset against an already-trained AutoML run's persisted
+    pipeline and flags rows above/below a threshold - the batch counterpart
+    to eval_stream_metric's live-stream case. Needs an async AutoMLRun
+    lookup unlike the other dataset evaluators (which are pure/sync), which
+    is why this isn't dispatched through _DATASET_EVALUATORS - see
+    evaluate_rule()."""
+    import joblib
+
+    from app.models.automl_run import AutoMLRun
+
+    cfg = rule.config
+    run_id = str(cfg.get("run_id") or "").strip()
+    threshold = float(cfg.get("threshold", 0.5))
+    comparison = cfg.get("comparison", "gt")
+    offender_col = str(cfg.get("offender_col") or "").strip()
+
+    if not run_id:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, "No AutoML run configured.")
+
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, f"Invalid run_id: {run_id}")
+
+    run = (
+        await db.execute(select(AutoMLRun).where(AutoMLRun.id == run_uuid, AutoMLRun.org_id == org_id))
+    ).scalar_one_or_none()
+    if run is None or run.status != "success" or not run.model_path:
+        return AlertTrigger(
+            str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
+            "AutoML run not found or has no trained model.",
+        )
+
+    if offender_col:
+        col_warn = _missing_columns(dataset, {"offender": offender_col})
+        if col_warn:
+            return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, col_warn)
+
+    try:
+        df = ds_service.dataframe_for(dataset)
+        pipe = joblib.load(run.model_path)
+    except Exception as exc:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, f"Error loading run: {exc}")
+
+    meta = run.meta or {}
+    feat_cols = [c for c in (meta.get("feature_columns") or []) if c in df.columns]
+    if not feat_cols:
+        # Template runs don't populate meta["feature_columns"] - fall back
+        # to "every column except the target", the same fallback
+        # automl_engine.predict_with_model() already uses for this case.
+        target_col = run.target_column
+        if target_col and target_col in df.columns:
+            feat_cols = [c for c in df.columns if c != target_col]
+        else:
+            feat_cols = list(df.columns)
+
+    X = df[feat_cols].copy() if feat_cols else df.copy()
+
+    try:
+        task = str(meta.get("task") or run.task or "").strip().lower()
+        if task == "classification" and hasattr(pipe, "predict_proba"):
+            proba = pipe.predict_proba(X)
+            scores = [float(row[1]) if len(row) == 2 else float(max(row)) for row in proba]
+        else:
+            scores = [float(v) for v in pipe.predict(X)]
+    except Exception as exc:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, f"Error scoring dataset: {exc}")
+
+    is_high = comparison != "lt"
+
+    if offender_col and offender_col in df.columns:
+        offender_values = df[offender_col].astype(str).tolist()
+        offenders = sorted({o for o, s in zip(offender_values, scores) if (s > threshold if is_high else s < threshold)})
+        value = max(scores) if is_high else min(scores)
+    else:
+        value = max(scores) if is_high else min(scores)
+        offenders = ["All"] if (value > threshold if is_high else value < threshold) else []
+
+    triggered = bool(offenders)
+    op_word = "above" if is_high else "below"
+    message = f"Predicted risk {value:.3f} {op_word} threshold {threshold:.3f}" + _offenders_suffix(offenders)
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, triggered, round(value, 4), threshold,
+        message, offenders,
+    )
+
+
 # ─── Andon / relay output ───────────────────────────────────────────────────
 
 async def _fire_webhook(rule: AlertRule, trigger: AlertTrigger) -> None:
@@ -390,6 +480,12 @@ async def evaluate_rule(
 ) -> AlertTrigger:
     if rule.type == "stream_metric":
         return eval_stream_metric(rule)
+    if rule.type == "automl_risk":
+        if rule.dataset_id is None:
+            return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, "No dataset configured.")
+        if dataset is None:
+            dataset = await ds_service.get_dataset_or_404(db, org_id, rule.dataset_id)
+        return await _eval_automl_risk(db, org_id, rule, dataset)
     evaluator = _DATASET_EVALUATORS.get(rule.type)
     if evaluator is None:
         raise ValueError(f"Unknown alert type: {rule.type}")

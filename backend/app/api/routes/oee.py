@@ -18,6 +18,7 @@ from app.db.session import get_db
 from app.services import datasets as ds_service
 from app.analytics.oee_calc import (
     compute_components_ideal,
+    date_bucket_expr,
     duplicate_row_count,
     oee_grouped,
     oee_overall,
@@ -388,7 +389,8 @@ async def oee_compute(
     try:
         ov = oee_overall(con, rel, pc, oc, tc, gc, ideal_sql=rate_sql, extra_sum_cols=split_cols)
         trend_rows = (
-            oee_grouped(con, rel, pc, oc, tc, gc, req.date_col, ideal_sql=rate_sql)
+            oee_grouped(con, rel, pc, oc, tc, gc, req.date_col, ideal_sql=rate_sql,
+                        key_expr=date_bucket_expr(req.date_col))
             if (req.date_col and req.date_col in headers) else []
         )
         machine_rows = (
@@ -589,7 +591,8 @@ async def oee_rca(
             for name, col in active_dims.items()
         }
         trend_rows = (
-            oee_grouped(con, rel, pc, oc, tc, gc, req.date_col, ideal_sql=rate_sql)
+            oee_grouped(con, rel, pc, oc, tc, gc, req.date_col, ideal_sql=rate_sql,
+                        key_expr=date_bucket_expr(req.date_col))
             if (req.date_col and req.date_col in headers) else []
         )
     finally:

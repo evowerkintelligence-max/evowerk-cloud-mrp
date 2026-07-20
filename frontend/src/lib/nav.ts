@@ -10,7 +10,6 @@ import {
   Database,
   Factory,
   FileStack,
-  FileText,
   FlaskConical,
   Gauge,
   History,
@@ -24,7 +23,6 @@ import {
   Search,
   ShoppingCart,
   Sparkles,
-  SplitSquareHorizontal,
   Target,
   Terminal,
   Timer,
@@ -42,6 +40,8 @@ export interface NavItem {
   label: string;
   icon: LucideIcon;
   end?: boolean;
+  /** Synonyms/intent terms so the command palette matches more than the literal label (e.g. "inventory" -> Warehouse, "defect" -> Scrap & Quality). */
+  keywords?: string[];
 }
 
 export interface NavSection {
@@ -58,60 +58,58 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     label: "Operations",
     items: [
-      { to: "/boms", label: "Bills of Materials", icon: Layers },
-      { to: "/procurement", label: "Procurement", icon: ShoppingCart },
-      { to: "/lots", label: "Lots", icon: Boxes },
-      { to: "/warehouse", label: "Warehouse", icon: Warehouse },
-      { to: "/planning", label: "Planning", icon: CalendarRange },
+      { to: "/boms", label: "Bills of Materials", icon: Layers, keywords: ["bom", "recipe", "components"] },
+      { to: "/procurement", label: "Procurement", icon: ShoppingCart, keywords: ["suppliers", "purchase orders", "po", "vendors"] },
+      { to: "/lots", label: "Lots", icon: Boxes, keywords: ["batch", "traceability"] },
+      { to: "/warehouse", label: "Warehouse", icon: Warehouse, keywords: ["inventory", "stock", "on-hand", "on hand"] },
+      { to: "/planning", label: "Planning", icon: CalendarRange, keywords: ["mrp", "forecast", "demand"] },
     ],
   },
   {
     label: "Data & Reports",
     items: [
-      { to: "/datasets", label: "Datasets", icon: Database },
-      { to: "/sql-editor", label: "SQL Editor", icon: Terminal },
-      { to: "/bi", label: "BI Dashboards", icon: LayoutGrid },
-      { to: "/report-builder", label: "Report Builder", icon: FileStack },
-      { to: "/reports", label: "Reports", icon: FileText },
-      { to: "/ask", label: "Ask", icon: Sparkles },
+      { to: "/datasets", label: "Datasets", icon: Database, keywords: ["upload", "csv", "data"] },
+      { to: "/sql-editor", label: "SQL Editor", icon: Terminal, keywords: ["query", "sql"] },
+      { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, keywords: ["charts", "business intelligence"] },
+      { to: "/report-builder", label: "Report Builder", icon: FileStack, keywords: ["reports", "export", "pdf"] },
+      { to: "/ask", label: "Ask", icon: Sparkles, keywords: ["chat", "natural language", "q&a", "assistant"] },
     ],
   },
   {
     label: "Plant Analytics",
     items: [
-      { to: "/analytics/plant-summary", label: "Plant Summary", icon: Factory },
-      { to: "/analytics/oee", label: "OEE", icon: Gauge },
-      { to: "/analytics/pace-tracking", label: "Pace Tracking", icon: Timer },
-      { to: "/analytics/downtime", label: "Downtime", icon: TimerOff },
-      { to: "/analytics/downtime-tracking", label: "Downtime Tracking", icon: AlertTriangle },
-      { to: "/analytics/throughput", label: "Throughput", icon: BarChart3 },
-      { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX },
-      { to: "/analytics/shifts", label: "Shifts", icon: Users },
-      { to: "/analytics/spc", label: "SPC", icon: Activity },
-      { to: "/kpis", label: "KPIs", icon: Target },
-      { to: "/kpis/dashboards", label: "KPI Dashboards", icon: Rows3 },
+      { to: "/analytics/plant-summary", label: "Plant Summary", icon: Factory, keywords: ["overview", "rollup"] },
+      { to: "/analytics/oee", label: "OEE", icon: Gauge, keywords: ["overall equipment effectiveness", "availability", "performance"] },
+      { to: "/analytics/pace-tracking", label: "Pace Tracking", icon: Timer, keywords: ["manual entry", "tap", "operator"] },
+      { to: "/analytics/downtime", label: "Downtime", icon: TimerOff, keywords: ["stoppage", "downtime analysis"] },
+      { to: "/analytics/downtime-tracking", label: "Downtime Tracking", icon: AlertTriangle, keywords: ["live downtime", "andon"] },
+      { to: "/analytics/throughput", label: "Throughput", icon: BarChart3, keywords: ["units per hour", "rate", "production rate"] },
+      { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX, keywords: ["defect", "reject", "quality", "fpq", "first pass"] },
+      { to: "/analytics/shifts", label: "Shifts", icon: Users, keywords: ["shift schedule"] },
+      { to: "/analytics/spc", label: "SPC", icon: Activity, keywords: ["statistical process control", "control chart"] },
+      { to: "/kpis", label: "KPIs", icon: Target, keywords: ["metrics", "targets"] },
+      { to: "/kpis/dashboards", label: "KPI Dashboards", icon: Rows3, keywords: ["kpi wall", "tv mode"] },
     ],
   },
   {
     label: "Intelligence",
     items: [
-      { to: "/automl", label: "AutoML", icon: Brain },
-      { to: "/simulation", label: "Simulation", icon: FlaskConical },
-      { to: "/rca-cases", label: "Root Cause Analysis", icon: Search },
-      { to: "/predictive", label: "Predictive Maintenance", icon: Wrench },
-      { to: "/mfg-forecast", label: "Manufacturing Forecast", icon: TrendingUp },
-      { to: "/scenarios", label: "Scenarios", icon: SplitSquareHorizontal },
-      { to: "/computer-vision", label: "Computer Vision", icon: Camera },
+      { to: "/automl", label: "AutoML", icon: Brain, keywords: ["machine learning", "model training"] },
+      { to: "/simulation", label: "Simulation", icon: FlaskConical, keywords: ["what-if", "scenario"] },
+      { to: "/rca-cases", label: "Root Cause Analysis", icon: Search, keywords: ["rca", "5 why", "fishbone"] },
+      { to: "/predictive", label: "Predictive Maintenance", icon: Wrench, keywords: ["failure prediction", "maintenance"] },
+      { to: "/mfg-forecast", label: "Manufacturing Forecast", icon: TrendingUp, keywords: ["production forecast"] },
+      { to: "/computer-vision", label: "Computer Vision", icon: Camera, keywords: ["image", "defect detection", "camera"] },
     ],
   },
   {
     label: "System",
     items: [
-      { to: "/integrations", label: "Integrations", icon: Plug },
-      { to: "/realtime", label: "Realtime", icon: Radio },
-      { to: "/workflows", label: "Workflows", icon: Workflow },
-      { to: "/runs", label: "Run History", icon: History },
-      { to: "/alerts", label: "Alerts", icon: Bell },
+      { to: "/integrations", label: "Integrations", icon: Plug, keywords: ["erp", "api", "webhook"] },
+      { to: "/realtime", label: "Realtime", icon: Radio, keywords: ["live", "streaming"] },
+      { to: "/workflows", label: "Workflows", icon: Workflow, keywords: ["automation", "triggers"] },
+      { to: "/runs", label: "Run History", icon: History, keywords: ["logs", "execution history"] },
+      { to: "/alerts", label: "Alerts", icon: Bell, keywords: ["notifications"] },
     ],
   },
 ];

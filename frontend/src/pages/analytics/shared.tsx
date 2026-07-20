@@ -274,7 +274,16 @@ export function EChart({
   }, []);
 
   useEffect(() => {
-    chart.current?.setOption({ backgroundColor: "transparent", ...option }, true);
+    chart.current?.setOption(
+      {
+        backgroundColor: "transparent",
+        animation: true,
+        animationDuration: 700,
+        animationEasing: "cubicOut",
+        ...option,
+      },
+      true,
+    );
   }, [option]);
 
   return <div ref={ref} className={className} style={{ height }} />;
@@ -302,7 +311,7 @@ export type EngineField = {
   hints?: RegExp[]; // auto-map dataset columns by naming convention (from desktop)
 };
 
-function autoMapColumns(fields: EngineField[], cols: string[]): Record<string, string> {
+export function autoMapColumns(fields: EngineField[], cols: string[]): Record<string, string> {
   const next: Record<string, string> = {};
   for (const f of fields) {
     if (f.kind && f.kind !== "col") continue;
@@ -673,6 +682,7 @@ export function EngineScreen<T>({
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <Checkbox checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
               Auto-refresh (30s)
+              {autoRefresh && <span aria-hidden className="live-pulse-dot" />}
             </label>
             <Button variant="ghost" size="sm" onClick={toggleFullscreen}>
               {isFullscreen ? <Minimize2 /> : <Maximize2 />}

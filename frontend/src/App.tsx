@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { useAuthStore } from "./store/authStore";
+import { useAuthHydrated, useAuthStore } from "./store/authStore";
 import { AppShell } from "./components/AppShell";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
@@ -25,7 +25,6 @@ import { Scrap } from "./pages/analytics/Scrap";
 import { Shifts } from "./pages/analytics/Shifts";
 import { Spc } from "./pages/analytics/Spc";
 import { Ask } from "./pages/Ask";
-import { Reports } from "./pages/Reports";
 import { Dashboards as BiDashboards } from "./pages/bi/Dashboards";
 import { ChartBuilder } from "./pages/bi/ChartBuilder";
 import { DashboardDetail as BiDashboardDetail } from "./pages/bi/DashboardDetail";
@@ -34,6 +33,8 @@ import { WorkflowBuilder } from "./pages/workflows/WorkflowBuilder";
 import { ReportBuilder } from "./pages/ReportBuilder";
 import { AutoML } from "./pages/AutoML";
 import { AutoMLRun } from "./pages/automl/AutoMLRun";
+import { TemplatesHome } from "./pages/automl/TemplatesHome";
+import { ResultsView as AutoMLTemplateResultsView } from "./pages/automl/templates/ResultsView";
 import { Kpis } from "./pages/Kpis";
 import { KpiDashboards } from "./pages/KpiDashboards";
 import { Integrations } from "./pages/Integrations";
@@ -42,12 +43,13 @@ import { RcaCases } from "./pages/RcaCases";
 import { RunHistory } from "./pages/workflows/RunHistory";
 import { Predictive } from "./pages/Predictive";
 import { MfgForecast } from "./pages/MfgForecast";
-import { Scenarios } from "./pages/Scenarios";
 import { ComputerVision } from "./pages/ComputerVision";
 import { Alerts } from "./pages/Alerts";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const hydrated = useAuthHydrated();
+  if (!hydrated) return null;
   if (!accessToken) return <Navigate to="/login" replace />;
   return children;
 }
@@ -94,7 +96,6 @@ export function App() {
         <Route path="/sql-editor" element={<SqlEditor />} />
         <Route path="/simulation" element={<Simulation />} />
         <Route path="/ask" element={<Ask />} />
-        <Route path="/reports" element={<Reports />} />
         <Route path="/bi" element={<BiDashboards />} />
         <Route path="/bi/new" element={<ChartBuilder />} />
         <Route path="/bi/:id" element={<BiDashboardDetail />} />
@@ -102,8 +103,11 @@ export function App() {
         <Route path="/workflows/:id" element={<WorkflowBuilder />} />
         <Route path="/runs" element={<RunHistory />} />
         <Route path="/report-builder" element={<ReportBuilder />} />
-        <Route path="/automl" element={<AutoML />} />
-        <Route path="/automl/:id" element={<AutoMLRun />} />
+        <Route path="/automl" element={<TemplatesHome />} />
+        <Route path="/automl/runs/:id" element={<AutoMLTemplateResultsView />} />
+        <Route path="/automl/advanced" element={<AutoML />} />
+        <Route path="/automl/advanced/new" element={<AutoMLRun />} />
+        <Route path="/automl/advanced/:id" element={<AutoMLRun />} />
         <Route path="/kpis" element={<Kpis />} />
         <Route path="/kpis/dashboards" element={<KpiDashboards />} />
         <Route path="/integrations" element={<Integrations />} />
@@ -111,7 +115,6 @@ export function App() {
         <Route path="/rca-cases" element={<RcaCases />} />
         <Route path="/predictive" element={<Predictive />} />
         <Route path="/mfg-forecast" element={<MfgForecast />} />
-        <Route path="/scenarios" element={<Scenarios />} />
         <Route path="/computer-vision" element={<ComputerVision />} />
         <Route path="/alerts" element={<Alerts />} />
       </Route>

@@ -38,19 +38,8 @@ class SupplierCreateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class SupplierUpdateRequest(BaseModel):
-    name: str
-    email: str | None = None
-    phone: str | None = None
-    address_line1: str | None = None
-    address_line2: str | None = None
-    city: str | None = None
-    state: str | None = None
-    postal_code: str | None = None
-    country: str | None = None
-    payment_terms_days: int | None = None
-    lead_time_days: int | None = None
-    tags: list[str] = Field(default_factory=list)
+class SupplierUpdateRequest(SupplierCreateRequest):
+    pass
 
 
 class SupplierResponse(BaseModel):

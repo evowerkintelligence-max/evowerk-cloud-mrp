@@ -39,6 +39,7 @@ export default {
           foreground: "hsl(var(--card-foreground))",
         },
         brand: "hsl(var(--brand))",
+        terracotta: "hsl(var(--terracotta))",
         success: {
           DEFAULT: "hsl(var(--success))",
           foreground: "hsl(var(--success-foreground))",

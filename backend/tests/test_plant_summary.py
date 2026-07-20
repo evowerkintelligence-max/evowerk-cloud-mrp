@@ -73,6 +73,50 @@ async def test_plant_summary_combines_oee_and_scrap_tiles(client):
     assert oees == sorted(oees, reverse=True)
 
 
+TIMESTAMPED_CSV = (
+    b"date,machine,planned_min,operating_min,total_units,good_units,scrap_units\n"
+    b"2026-02-01 06:00:00,M1,240,220,440,420,10\n"
+    b"2026-02-01 14:00:00,M1,240,230,460,440,15\n"
+    b"2026-02-02 06:00:00,M1,240,225,450,430,12\n"
+    b"2026-02-02 14:00:00,M1,240,235,470,455,8\n"
+)
+
+
+async def test_plant_summary_buckets_trend_by_day_for_timestamped_dates(client):
+    # A date column with intraday timestamps must still bucket the trend by
+    # calendar day (not one point per distinct timestamp) and the per-point
+    # scrap rate must line up with the OEE point instead of silently dropping.
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    login_headers = {"Authorization": f"Bearer {token}"}
+    res = await client.post(
+        "/datasets", headers=login_headers, files={"file": ("plant.csv", TIMESTAMPED_CSV, "text/csv")}
+    )
+    assert res.status_code == 201
+    dataset_id = res.json()["id"]
+
+    res = await client.post(
+        "/analytics/plant-summary",
+        headers=headers,
+        json={
+            "dataset_id": dataset_id,
+            "planned_time_col": "planned_min",
+            "operating_time_col": "operating_min",
+            "total_units_col": "total_units",
+            "good_units_col": "good_units",
+            "date_col": "date",
+            "scrap_units_col": "scrap_units",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+
+    assert [pt["date"] for pt in body["trend"]] == ["2026-02-01", "2026-02-02"]
+    assert all(pt["scrap_rate_pct"] is not None for pt in body["trend"])
+    assert body["trend"][0]["scrap_rate_pct"] == round((10 + 15) / (440 + 460) * 100, 2)
+    assert body["trend"][1]["scrap_rate_pct"] == round((12 + 8) / (450 + 470) * 100, 2)
+
+
 async def test_plant_summary_without_scrap_columns_omits_those_tiles(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

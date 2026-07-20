@@ -6,21 +6,58 @@
 # silently dropped every router added after /lots (analytics, ai, reports,
 # bi, workflows, automl, kpis, integrations, realtime were all missing, so
 # none of those pages worked once deployed via this nginx image, only in dev
-# through Vite's own proxy). Same lesson hit a third time: simulation, alerts,
-# artifacts, computer-vision, data-chat, predictive, rca-cases, and scenarios
-# were all added to main.py after this list was last synced.
+# through Vite's own proxy). Same lesson hit again: simulation, alerts,
+# computer-vision, data-chat, predictive, and rca-cases were all added to
+# main.py after this list was last synced. And again: pace, downtime-tracking,
+# and kpi-dashboards were added to main.py and to vite.config.ts's proxy but
+# never made it here, so Pace Tracking, Downtime Tracking, and KPI Dashboards
+# all worked in dev but silently 200'd with index.html (instead of reaching
+# the backend) once deployed via this nginx image. artifacts/scenarios
+# removed - those routers no longer exist.
 #
 # proxy_buffering off + a long proxy_read_timeout apply here too: harmless for
 # ordinary JSON responses, but required for /realtime/streams/{id}/events
 # (Server-Sent Events) - nginx buffers responses by default, which would
 # delay every tick until the buffer filled, and its 60s default read timeout
 # would silently cut a stream whose interval_seconds is set above that.
+#
+# Several of these prefixes are ALSO SPA routes (/analytics, /bi, /reports,
+# /workflows, /automl, /alerts, /integrations, /realtime, /simulation,
+# /predictive, /rca-cases - see App.tsx). Client-side nav never hits this
+# proxy, but a hard refresh or a direct URL open does: that's a full-page GET
+# whose Accept header leads with text/html, vs apiFetch()'s fetch() calls
+# which never send that. Without the map/try_files pair below, a refresh on
+# e.g. /analytics/oee got proxied straight to the backend and hit a bare
+# JSON 404 (no HTML route matches "/analytics/oee" there) instead of
+# index.html - same fix vite.config.ts's dev proxy already has via its
+# bypass() callback. (`if` + `rewrite ... last` inside a regex location is a
+# known nginx footgun - it internal-redirects back into the same regex
+# location and loops - so this uses map + try_files instead.)
+map $http_accept $spa_fallback {
+    default "";
+    "~*text/html" "/index.html";
+}
 
 server {
     listen 80;
 
     root /usr/share/nginx/html;
     index index.html;
+
+    # Matches backend Settings.max_upload_mb (see app/core/config.py) - nginx's
+    # own default (1m) silently 413'd dataset uploads before they ever reached
+    # the backend, and the frontend tried to JSON.parse the HTML error body.
+    client_max_body_size 100m;
+
+    # A literal hostname in proxy_pass (as BACKEND_UPSTREAM was used directly)
+    # is resolved ONCE at nginx startup and cached for the container's whole
+    # lifetime - replacing the backend task (ECS Cloud Map, new ENI/IP) then
+    # leaves this frontend silently proxying to a dead IP until the frontend
+    # container itself restarts, hanging every request until TCP timeout.
+    # Routing proxy_pass through a variable forces per-request resolution via
+    # this resolver instead (DNS_RESOLVER is the VPC's Amazon-provided DNS -
+    # see ecs.tf). valid=10s caps how stale that lookup can get.
+    resolver ${DNS_RESOLVER} valid=10s;
 
     gzip on;
     gzip_types text/css application/javascript application/json;
@@ -30,8 +67,13 @@ server {
         add_header Content-Type text/plain;
     }
 
-    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|integrations|realtime|simulation|health|alerts|artifacts|computer-vision|data-chat|predictive|rca-cases|scenarios)(/|$) {
-        proxy_pass http://${BACKEND_UPSTREAM};
+    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace)(/|$) {
+        try_files $spa_fallback @api;
+    }
+
+    location @api {
+        set $backend_upstream ${BACKEND_UPSTREAM};
+        proxy_pass http://$backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

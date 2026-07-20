@@ -14,7 +14,7 @@ from app.services import alerts as service
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
-_ALERT_TYPES = ("machine_downtime", "quality", "scrap", "inventory", "production_target", "stream_metric")
+_ALERT_TYPES = ("machine_downtime", "quality", "scrap", "inventory", "production_target", "stream_metric", "automl_risk")
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────────

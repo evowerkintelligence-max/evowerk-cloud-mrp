@@ -260,5 +260,10 @@ async def answer_question(
     if not llm.is_configured():
         return _heuristic_answer(question, data_ctx, datasets_used)
 
-    raw = await llm.generate_text(_build_prompt(question, history, data_ctx), system=_SYSTEM, max_output_tokens=1500)
+    try:
+        raw = await llm.generate_text(
+            _build_prompt(question, history, data_ctx), system=_SYSTEM, max_output_tokens=1500
+        )
+    except Exception:  # transient LLM error - fall back to the deterministic path instead of a 500
+        return _heuristic_answer(question, data_ctx, datasets_used)
     return _parse_ai_response(raw, datasets_used)

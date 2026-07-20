@@ -24,6 +24,7 @@ from app.main import app
 from app.models import (  # noqa: F401 - register models
     alert,
     audit,
+    automl_live_binding,
     automl_run,
     bom,
     dashboard,
@@ -42,9 +43,9 @@ from app.models import (  # noqa: F401 - register models
     rca_case,
     realtime,
     report_spec,
-    scenario,
     shift_forecast,
     shift_schedule,
+    simulation,
     telemetry,
     tenant,
     user,

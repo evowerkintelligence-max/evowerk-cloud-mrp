@@ -17,7 +17,8 @@ locals {
 }
 
 resource "aws_secretsmanager_secret" "jwt_secret" {
-  name = "${local.name_prefix}/jwt-secret-key"
+  name                    = "${local.name_prefix}/jwt-secret-key"
+  recovery_window_in_days = 0 # throwaway test env - allow immediate re-deploy after down.sh
 }
 
 resource "aws_secretsmanager_secret_version" "jwt_secret" {
@@ -26,7 +27,8 @@ resource "aws_secretsmanager_secret_version" "jwt_secret" {
 }
 
 resource "aws_secretsmanager_secret" "mfa_key" {
-  name = "${local.name_prefix}/mfa-encryption-key"
+  name                    = "${local.name_prefix}/mfa-encryption-key"
+  recovery_window_in_days = 0 # throwaway test env - allow immediate re-deploy after down.sh
 }
 
 resource "aws_secretsmanager_secret_version" "mfa_key" {
@@ -35,7 +37,8 @@ resource "aws_secretsmanager_secret_version" "mfa_key" {
 }
 
 resource "aws_secretsmanager_secret" "database_url" {
-  name = "${local.name_prefix}/database-url"
+  name                    = "${local.name_prefix}/database-url"
+  recovery_window_in_days = 0 # throwaway test env - allow immediate re-deploy after down.sh
 }
 
 resource "aws_secretsmanager_secret_version" "database_url" {

@@ -108,7 +108,8 @@ async def plant_summary(
     try:
         ov = oee_overall(con, rel, pc, oc, tc, gc, ideal_sql=rate_sql, extra_sum_cols=extra_cols)
         trend_rows = (
-            oee_grouped(con, rel, pc, oc, tc, gc, req.date_col, ideal_sql=rate_sql)
+            oee_grouped(con, rel, pc, oc, tc, gc, req.date_col, ideal_sql=rate_sql,
+                        key_expr=date_bucket_expr(req.date_col))
             if (req.date_col and req.date_col in headers) else []
         )
         machine_rows = (

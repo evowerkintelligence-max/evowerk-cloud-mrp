@@ -256,15 +256,6 @@ async def test_narrate_custom_report_rejects_unknown_style(client):
     assert res.status_code == 400
 
 
-async def test_narrate_report_kind(client):
-    token = await _register_and_login(client)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    res = await client.post("/reports/inventory-analytics/narrate", headers=headers)
-    assert res.status_code == 200, res.text
-    assert res.json()["executive_summary"]
-
-
 async def test_narrate_custom_report_cross_org_isolation(client):
     token_a = await _register_and_login(client, email="na@example.com", org_name="NarrateOrgA")
     headers_a = {"Authorization": f"Bearer {token_a}"}

@@ -175,6 +175,39 @@ async def test_cross_org_isolation_on_dashboard_and_chart(client):
     assert (await client.delete(f"/bi/dashboards/{dashboard_id}", headers=headers_b)).status_code == 404
 
 
+async def test_moving_chart_to_new_dashboard_appends_at_end(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    dash_a = (await client.post("/bi/dashboards", headers=headers, json={"name": "A"})).json()
+    dash_b = (await client.post("/bi/dashboards", headers=headers, json={"name": "B"})).json()
+
+    # Two charts already on B, at positions 0 and 1.
+    for name in ("B1", "B2"):
+        await client.post(
+            "/bi/charts",
+            headers=headers,
+            json={**_chart_body(dataset_id), "name": name, "dashboard_id": dash_b["id"]},
+        )
+
+    # A chart from A, saved at position 0 there, gets moved onto B.
+    chart = (
+        await client.post(
+            "/bi/charts",
+            headers=headers,
+            json={**_chart_body(dataset_id), "name": "Moved", "dashboard_id": dash_a["id"]},
+        )
+    ).json()
+    assert chart["position"] == 0
+
+    moved = await client.patch(
+        f"/bi/charts/{chart['id']}", headers=headers, json={"dashboard_id": dash_b["id"]}
+    )
+    assert moved.status_code == 200
+    assert moved.json()["position"] == 2  # appended after B1 (0) and B2 (1), not left at 0
+
+
 async def test_deleting_dataset_cascades_its_charts(client):
     token = await _register_and_login(client)
     dataset_id = await _upload(client, token)

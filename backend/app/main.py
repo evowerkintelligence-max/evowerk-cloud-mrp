@@ -44,11 +44,11 @@ from app.api.routes import (
     spc,
     suppliers,
     throughput,
-    what_if_scenarios,
     workflows,
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
+from app.services import automl_realtime as automl_realtime_service
 from app.services import realtime as realtime_service
 from app.services import realtime_cache
 
@@ -63,7 +63,11 @@ async def lifespan(app: FastAPI):
     # Start this replica's realtime_cache consumer - see its module
     # docstring for why every replica needs its own consumer group.
     await realtime_cache.start_cache_consumer()
+    # Same re-adoption for live AutoML scoring/drift bindings - see
+    # app.services.automl_realtime.
+    await automl_realtime_service.resume_all_bindings()
     yield
+    automl_realtime_service.stop_all_binding_schedulers()
     await realtime_cache.stop_cache_consumer()
     realtime_service.stop_all_runners()
 
@@ -122,10 +126,8 @@ app.include_router(kpi_dashboards.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
 app.include_router(rca_cases.router)
-app.include_router(predictive.analyze_router)
 app.include_router(predictive.router)
 app.include_router(mfg_forecast.router)
-app.include_router(what_if_scenarios.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
 app.include_router(alerts.router)

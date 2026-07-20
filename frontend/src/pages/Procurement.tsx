@@ -32,15 +32,17 @@ export function Procurement() {
         description="Vendors and the purchase orders you place with them."
         actions={<PageTabs tabs={[...TABS]} active={tab} onChange={setTab} />}
       />
-      {tab === "purchase-orders" && <PurchaseOrdersPanel />}
-      {tab === "suppliers" && <SuppliersPanel />}
-      {tab === "generate" && (
-        <GeneratePosPanel
-          initialHorizonStart={searchParams.get("horizonStart")}
-          initialHorizonEnd={searchParams.get("horizonEnd")}
-        />
-      )}
-      {tab === "build-calculator" && <BuildCalculatorPanel />}
+      <div key={tab} className="animate-fade-in">
+        {tab === "purchase-orders" && <PurchaseOrdersPanel />}
+        {tab === "suppliers" && <SuppliersPanel />}
+        {tab === "generate" && (
+          <GeneratePosPanel
+            initialHorizonStart={searchParams.get("horizonStart")}
+            initialHorizonEnd={searchParams.get("horizonEnd")}
+          />
+        )}
+        {tab === "build-calculator" && <BuildCalculatorPanel />}
+      </div>
     </div>
   );
 }

@@ -17,7 +17,7 @@ import uuid
 from collections import defaultdict
 from typing import Any, Optional
 
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -304,6 +304,7 @@ async def prepare_forecast_source(
     shift: str,
     org_id: uuid.UUID,
     created_by: uuid.UUID,
+    background_tasks: "BackgroundTasks | None" = None,
 ) -> dict:
     """Materialize one shift's day-bucketed trend (the same series the "Shift
     trend" chart already renders) into a small two-column Dataset an AutoML
@@ -355,7 +356,9 @@ async def prepare_forecast_source(
         dataset_id = forecast_dataset.id
     else:
         forecast_dataset = await ds_service.resolve_dataset(db, org_id, str(mapping.dataset_id))
-        await ds_service.overwrite_dataset_file(db, forecast_dataset, data=csv_bytes)
+        await ds_service.overwrite_dataset_file(
+            db, forecast_dataset, data=csv_bytes, background_tasks=background_tasks
+        )
         dataset_id = forecast_dataset.id
 
     return {

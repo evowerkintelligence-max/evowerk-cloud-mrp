@@ -1,9 +1,13 @@
-"""Predictive maintenance: per-machine failure probability (ML with a
-statistical fallback), remaining-useful-life projection, and maintenance
-recommendations - computed over an uploaded Dataset. Ported near-verbatim
-from the desktop app's predictive.py (the math is dataset-agnostic pandas/
-numpy/sklearn, unrelated to the desktop's file-based dataset store).
-"""
+"""Maintenance schedule CRUD - the recommendation/action queue used by both
+the CBM fleet dashboard (app.services.cbm) and the AutoML predictive-
+maintenance template. Kept generic: it doesn't care how a recommendation's
+priority/action was computed.
+
+The OEE-based risk-scoring helpers below (_build_daily, _stat_analyze,
+_rul_days, _top_driver, ...) are no longer exposed through a routes/
+predictive.py endpoint directly, but are still imported as `legacy` by
+app.services.automl_templates.predictive_maintenance, which reuses them as
+building blocks for its preprocess()/postprocess() - do not delete."""
 from __future__ import annotations
 
 import math

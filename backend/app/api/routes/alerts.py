@@ -14,7 +14,10 @@ from app.services import alerts as service
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
-_ALERT_TYPES = ("machine_downtime", "quality", "scrap", "inventory", "production_target", "stream_metric", "automl_risk")
+_ALERT_TYPES = (
+    "machine_downtime", "quality", "scrap", "inventory", "production_target",
+    "stream_metric", "automl_risk", "cbm_anomaly", "cbm_rul",
+)
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────────
@@ -83,7 +86,7 @@ async def create_rule(
 ):
     if payload.type not in _ALERT_TYPES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown alert type: {payload.type}")
-    if payload.type != "stream_metric" and payload.dataset_id is None:
+    if payload.type not in ("stream_metric", "cbm_anomaly", "cbm_rul") and payload.dataset_id is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "dataset_id is required for this alert type")
     return await service.create_rule(
         db, org_id=current.org_id, created_by=current.id, name=payload.name, type=payload.type,

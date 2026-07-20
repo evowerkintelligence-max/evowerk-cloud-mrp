@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,13 +122,15 @@ class ShiftForecastSourceResponse(BaseModel):
 @router.post("/shifts/forecast-source", response_model=ShiftForecastSourceResponse)
 async def shift_forecast_source(
     req: ShiftForecastSourceRequest,
+    background_tasks: BackgroundTasks,
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     dataset = await ds_service.resolve_dataset(db, current.org_id, req.dataset_id)
     ds_service.validate_columns(dataset, [req.shift_col, req.machine_col, req.timestamp_col])
     result = await shifts_service.prepare_forecast_source(
-        db, dataset, req, shift=req.shift, org_id=current.org_id, created_by=current.id
+        db, dataset, req, shift=req.shift, org_id=current.org_id, created_by=current.id,
+        background_tasks=background_tasks,
     )
     await db.commit()
     return ShiftForecastSourceResponse(

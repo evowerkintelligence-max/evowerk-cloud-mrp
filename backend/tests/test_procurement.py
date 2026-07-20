@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -397,7 +397,7 @@ async def test_create_po_defaults_expected_delivery_date_from_supplier_lead_time
 
     po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
     assert po.status_code == 201
-    expected = (date.today() + timedelta(days=14)).isoformat()
+    expected = (datetime.now(timezone.utc).date() + timedelta(days=14)).isoformat()
     assert po.json()["expected_delivery_date"] == expected
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -110,7 +110,7 @@ async def create_purchase_order(
 
     expected_delivery_date = body.expected_delivery_date
     if expected_delivery_date is None and supplier.lead_time_days is not None:
-        expected_delivery_date = date.today() + timedelta(days=supplier.lead_time_days)
+        expected_delivery_date = datetime.now(timezone.utc).date() + timedelta(days=supplier.lead_time_days)
 
     for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
         max_number = await db.scalar(

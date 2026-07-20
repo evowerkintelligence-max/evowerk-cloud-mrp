@@ -37,12 +37,14 @@ from app.models import (  # noqa: F401 - register models
     kpi,
     location,
     lot,
+    machine,
     maintenance_schedule,
     pace_tracking,
     procurement,
     rca_case,
     realtime,
     report_spec,
+    routing,
     sensor,
     shift_forecast,
     shift_schedule,
@@ -50,6 +52,7 @@ from app.models import (  # noqa: F401 - register models
     telemetry,
     tenant,
     user,
+    work_center,
     workflow,
 )
 

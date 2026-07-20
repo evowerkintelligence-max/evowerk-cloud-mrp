@@ -132,6 +132,8 @@ jobs:
         run: alembic upgrade head
       - name: Verify audit_logs is append-only
         run: python scripts/verify_audit_log_immutable.py
+      - name: Verify auth_hardening downgrade handles real mfa_secret ciphertext
+        run: python scripts/verify_mfa_secret_downgrade.py
 
   concurrency:
     # The main `backend` job runs on single-connection in-memory SQLite, which

@@ -27,6 +27,7 @@ from app.api.routes import (
     kpis,
     locations,
     lots,
+    machines,
     mfg_forecast,
     oee,
     orgs,
@@ -39,12 +40,14 @@ from app.api.routes import (
     rca_cases,
     realtime,
     reports,
+    routings,
     scrap,
     shifts,
     simulation,
     spc,
     suppliers,
     throughput,
+    work_centers,
     workflows,
 )
 from app.core.config import get_settings
@@ -100,6 +103,7 @@ app.include_router(suppliers.router)
 app.include_router(purchase_orders.router)
 app.include_router(lots.router)
 app.include_router(locations.router)
+app.include_router(machines.router)
 # Must be registered before inventory.router: /inventory/analytics is a
 # static path that would otherwise be shadowed by inventory.router's
 # /inventory/{item_id} (Starlette matches path shape before UUID validation).
@@ -122,6 +126,7 @@ app.include_router(quality.router)
 app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
 app.include_router(reports.router)
+app.include_router(routings.router)
 app.include_router(bi.router)
 app.include_router(workflows.router)
 app.include_router(automl.router)
@@ -132,6 +137,7 @@ app.include_router(realtime.router)
 app.include_router(rca_cases.router)
 app.include_router(predictive.router)
 app.include_router(mfg_forecast.router)
+app.include_router(work_centers.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
 app.include_router(alerts.router)

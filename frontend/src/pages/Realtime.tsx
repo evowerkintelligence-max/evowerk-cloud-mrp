@@ -56,8 +56,10 @@ function emptyForm() {
   return {
     integration_id: "",
     name: "",
+    machine: "",
     interval_seconds: 5,
     columnMap: Object.fromEntries(COLUMN_MAP_FIELDS.map((f) => [f.key, ""])) as Record<string, string>,
+    sensorMap: [] as { name: string; field: string }[],
   };
 }
 
@@ -132,13 +134,18 @@ export function Realtime() {
   const create = useMutation({
     mutationFn: async () => {
       const column_map = Object.fromEntries(Object.entries(form.columnMap).filter(([, v]) => v.trim()));
+      const sensor_map = Object.fromEntries(
+        form.sensorMap.filter((s) => s.name.trim() && s.field.trim()).map((s) => [s.name.trim(), s.field.trim()]),
+      );
       const res = await apiFetch("/realtime/streams", {
         method: "POST",
         body: JSON.stringify({
           integration_id: form.integration_id,
           name: form.name,
+          machine: form.machine.trim() || null,
           interval_seconds: form.interval_seconds,
           column_map,
+          sensor_map,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create stream");
@@ -292,6 +299,54 @@ export function Realtime() {
               ))}
             </div>
           </Field>
+          <Field label="Machine (for CBM, optional)" hint="Set this to feed live sensor data from this stream into Predictive Maintenance's condition-based monitoring.">
+            <Input value={form.machine} onChange={(e) => setForm((f) => ({ ...f, machine: e.target.value }))} />
+          </Field>
+          {form.machine && (
+            <Field
+              label="Sensor map"
+              hint="Sensor name → field to read from each polled row. For an OPC-UA stream (one node per stream), map a single sensor name to the field 'value'."
+            >
+              <div className="space-y-2">
+                {form.sensorMap.map((s, i) => (
+                  <div key={i} className="flex gap-2">
+                    <Input
+                      placeholder="Sensor name (e.g. vib_x)"
+                      value={s.name}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          sensorMap: f.sensorMap.map((row, j) => (j === i ? { ...row, name: e.target.value } : row)),
+                        }))
+                      }
+                    />
+                    <Input
+                      placeholder="Source field name"
+                      value={s.field}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          sensorMap: f.sensorMap.map((row, j) => (j === i ? { ...row, field: e.target.value } : row)),
+                        }))
+                      }
+                    />
+                    <Button
+                      type="button" variant="secondary" size="sm"
+                      onClick={() => setForm((f) => ({ ...f, sensorMap: f.sensorMap.filter((_, j) => j !== i) }))}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button" variant="secondary" size="sm"
+                  onClick={() => setForm((f) => ({ ...f, sensorMap: [...f.sensorMap, { name: "", field: "" }] }))}
+                >
+                  Add sensor
+                </Button>
+              </div>
+            </Field>
+          )}
           {formError && <p className="text-sm text-destructive">{formError}</p>}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={() => setFormOpen(false)}>Cancel</Button>

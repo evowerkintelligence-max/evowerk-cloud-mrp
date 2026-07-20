@@ -18,6 +18,7 @@ pytest-asyncio>=0.23.6
 aiosqlite>=0.20.0
 ruff>=0.4.0
 scipy>=1.11.0
+lifelines>=0.28.0  # Weibull survival analysis for CBM RUL (backend/app/services/rul.py)
 
 # Analytics (dataset layer + engines ported from the desktop app, ad-hoc query/BI)
 duckdb>=1.0.0

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, field_validator
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -137,7 +138,7 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
     user = User(
         org_id=org.id,
         email=body.email,
-        password_hash=hash_password(body.password),
+        password_hash=await run_in_threadpool(hash_password, body.password),
         role="owner",
     )
     db.add(user)
@@ -180,7 +181,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     if user is None:
         # Always pay the argon2 cost, even with no real hash to check, so this path
         # can't be timed against the "wrong password" path to enumerate emails.
-        verify_password_timing_safe(body.password, None)
+        await run_in_threadpool(verify_password_timing_safe, body.password, None)
         await log_event(db, action="user.login_failed", target=body.email, ip_address=_client_ip(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
@@ -196,7 +197,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         await db.commit()
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try again later")
 
-    if not verify_password_timing_safe(body.password, user.password_hash):
+    if not await run_in_threadpool(verify_password_timing_safe, body.password, user.password_hash):
         _register_failed_attempt(user)
         await log_event(
             db,
@@ -258,7 +259,7 @@ async def mfa_enroll(
     user = result.scalar_one()
 
     if user.mfa_enabled:
-        if not body.password or not verify_password(body.password, user.password_hash):
+        if not body.password or not await run_in_threadpool(verify_password, body.password, user.password_hash):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Password confirmation required")
 
     secret = generate_totp_secret()

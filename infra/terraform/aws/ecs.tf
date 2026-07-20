@@ -127,8 +127,15 @@ resource "aws_ecs_task_definition" "frontend" {
 
       # Overrides Dockerfile.prod's local-dev default (backend:8000, the
       # docker-compose service name) with this deployment's Cloud Map name.
+      # DNS_RESOLVER (the VPC's Amazon-provided DNS server, base CIDR + 2) is
+      # required so nginx re-resolves backend.internal per request instead of
+      # caching whatever IP it got at container startup forever - otherwise
+      # replacing the backend task (new ENI/IP) leaves the frontend silently
+      # proxying to a dead address until the frontend container itself
+      # restarts. See nginx.conf.template's `resolver` + `set $backend_upstream`.
       environment = [
         { name = "BACKEND_UPSTREAM", value = "backend.internal:8000" },
+        { name = "DNS_RESOLVER", value = cidrhost(var.vpc_cidr, 2) },
       ]
 
       logConfiguration = {

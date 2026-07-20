@@ -44,6 +44,21 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Matches backend Settings.max_upload_mb (see app/core/config.py) - nginx's
+    # own default (1m) silently 413'd dataset uploads before they ever reached
+    # the backend, and the frontend tried to JSON.parse the HTML error body.
+    client_max_body_size 100m;
+
+    # A literal hostname in proxy_pass (as BACKEND_UPSTREAM was used directly)
+    # is resolved ONCE at nginx startup and cached for the container's whole
+    # lifetime - replacing the backend task (ECS Cloud Map, new ENI/IP) then
+    # leaves this frontend silently proxying to a dead IP until the frontend
+    # container itself restarts, hanging every request until TCP timeout.
+    # Routing proxy_pass through a variable forces per-request resolution via
+    # this resolver instead (DNS_RESOLVER is the VPC's Amazon-provided DNS -
+    # see ecs.tf). valid=10s caps how stale that lookup can get.
+    resolver ${DNS_RESOLVER} valid=10s;
+
     gzip on;
     gzip_types text/css application/javascript application/json;
 
@@ -57,7 +72,8 @@ server {
     }
 
     location @api {
-        proxy_pass http://${BACKEND_UPSTREAM};
+        set $backend_upstream ${BACKEND_UPSTREAM};
+        proxy_pass http://$backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

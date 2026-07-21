@@ -6,8 +6,8 @@ sqlalchemy>=2.0.29
 asyncpg>=0.29.0
 alembic>=1.13.1
 passlib[argon2]>=1.7.4
-pyjwt>=2.8.0
-fastapi-users[sqlalchemy]>=13.0.0,<14.0.0
+pyjwt>=2.13.0
+fastapi-users[sqlalchemy]>=15.0.2,<16.0.0
 httpx-oauth>=0.15.0,<1.0.0
 boto3>=1.34.0
 pyotp>=2.9.0
@@ -27,7 +27,7 @@ lifelines>=0.28.0  # Weibull survival analysis for CBM RUL (backend/app/services
 duckdb>=1.0.0
 pandas>=2.2.0
 openpyxl>=3.1.0
-python-multipart>=0.0.9
+python-multipart>=0.0.22
 
 # Quality analytics: KMeans clustering of defect-driving process parameters
 scikit-learn>=1.4.0

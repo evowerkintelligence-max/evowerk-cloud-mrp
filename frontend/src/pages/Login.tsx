@@ -72,7 +72,17 @@ export function Login() {
             required
           />
         </Field>
-        <Field label="Password" htmlFor="password">
+        <Field
+          label={
+            <div className="flex items-center justify-between">
+              <span>Password</span>
+              <Link to="/forgot-password" className="text-xs font-medium text-primary hover:underline">
+                Forgot password?
+              </Link>
+            </div>
+          }
+          htmlFor="password"
+        >
           <Input
             id="password"
             type="password"

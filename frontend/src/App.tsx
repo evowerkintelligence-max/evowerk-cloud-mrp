@@ -3,6 +3,8 @@ import { useAuthHydrated, useAuthStore } from "./store/authStore";
 import { AppShell } from "./components/AppShell";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { ForgotPassword } from "./pages/ForgotPassword";
+import { ResetPassword } from "./pages/ResetPassword";
 import { MfaChallenge } from "./pages/MfaChallenge";
 import { Dashboard } from "./pages/Dashboard";
 import { Items } from "./pages/Items";
@@ -59,6 +61,8 @@ export function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route
         path="/mfa"
         element={

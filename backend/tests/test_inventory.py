@@ -86,7 +86,7 @@ async def _add_user_with_role(test_engine, org_id: str, email: str, role: str) -
             User(
                 org_id=uuid_module.UUID(org_id),
                 email=email,
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role=role,
                 is_active=True,
             )
@@ -543,7 +543,7 @@ async def test_rbac_blocks_non_owner_from_inventory_mutations(client, test_engin
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="member2@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { C, ColumnChecklist, EChart, QueryBuilderFields, SendToReportButton, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { computeReadiness } from "./readiness";
 import { controlChart } from "./Spc";
 import { StatCard } from "@/components/StatCard";
 
@@ -52,7 +53,7 @@ interface Health {
   warnings: string[];
 }
 
-const TABS = ["overview", "schema", "preview", "health", "query", "sql", "clean", "transform", "quality", "process"] as const;
+const TABS = ["overview", "readiness", "schema", "preview", "health", "query", "sql", "clean", "transform", "quality", "process"] as const;
 type Tab = (typeof TABS)[number];
 
 interface QueryResult {
@@ -169,6 +170,66 @@ function Overview({ d }: { d: DatasetDetail }) {
             </div>
           ))}
         </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReadinessPanel({ d, onOpenTab }: { d: DatasetDetail; onOpenTab: (tab: Tab) => void }) {
+  const navigate = useNavigate();
+  const health = useQuery<Health>({
+    queryKey: ["dataset-health", d.id],
+    queryFn: async () => {
+      const res = await apiFetch(`/datasets/${d.id}/health`);
+      if (!res.ok) throw new Error("Failed to compute health");
+      return res.json();
+    },
+  });
+
+  if (health.isLoading) return <Skeleton className="h-64 w-full" />;
+  if (!health.data) return <Alert variant="destructive">Failed to compute health.</Alert>;
+
+  const results = computeReadiness(health.data.columns);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Feature readiness</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Feature</TH>
+                <TH>Status</TH>
+                <TH>Why</TH>
+                <TH />
+              </TR>
+            </THead>
+            <TBody>
+              {results.map((r) => (
+                <TR key={r.key}>
+                  <TD className="font-medium">{r.label}</TD>
+                  <TD>
+                    <Badge variant={r.ready ? "success" : "neutral"}>{r.ready ? "Ready" : "Not ready"}</Badge>
+                  </TD>
+                  <TD className="text-xs text-muted-foreground">{r.missing.join("; ") || "—"}</TD>
+                  <TD>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={!r.ready}
+                      onClick={() => (r.isTab ? onOpenTab(r.key as Tab) : navigate(r.to))}
+                    >
+                      Open
+                    </Button>
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
       </CardContent>
     </Card>
   );
@@ -1247,6 +1308,7 @@ export function DatasetDetail() {
       </div>
 
       {tab === "overview" && <Overview d={d} />}
+      {tab === "readiness" && <ReadinessPanel d={d} onOpenTab={setTab} />}
       {tab === "schema" && <Schema d={d} />}
       {tab === "preview" && <Preview d={d} />}
       {tab === "health" && <HealthPanel id={d.id} />}

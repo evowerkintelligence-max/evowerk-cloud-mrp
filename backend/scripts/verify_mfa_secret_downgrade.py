@@ -30,8 +30,8 @@ async def main() -> None:
         ).scalar_one()
         await conn.execute(
             text(
-                "INSERT INTO users (id, org_id, email, password_hash, mfa_secret, created_at) "
-                "VALUES (gen_random_uuid(), :org_id, 'mfa-downgrade-ci@example.com', 'x', :secret, now())"
+                "INSERT INTO users (id, org_id, email, password_hash, mfa_secret, is_superuser, is_verified, created_at) "
+                "VALUES (gen_random_uuid(), :org_id, 'mfa-downgrade-ci@example.com', 'x', :secret, false, true, now())"
             ),
             {"org_id": org_id, "secret": LONG_CIPHERTEXT},
         )

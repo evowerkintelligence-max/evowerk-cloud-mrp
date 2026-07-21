@@ -296,7 +296,7 @@ async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="rbmember@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )
@@ -568,7 +568,7 @@ async def test_inbox_delete_allowed_for_creator_not_other_members(client, test_e
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="ibmember@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )
@@ -606,7 +606,7 @@ async def test_inbox_delete_allowed_for_owner_deleting_someone_elses_item(client
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="ib2member@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

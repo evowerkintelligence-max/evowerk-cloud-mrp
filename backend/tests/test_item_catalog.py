@@ -244,7 +244,7 @@ async def test_import_from_dataset_requires_owner(client, test_engine):
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="member2@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

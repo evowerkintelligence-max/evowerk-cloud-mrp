@@ -75,6 +75,19 @@ async def test_list_preview_health_and_delete(client):
     assert (await client.get(f"/datasets/{dataset_id}", headers=headers)).status_code == 404
 
 
+async def test_health_treats_zero_padded_ids_as_text_not_numeric(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    zips = b"zip,price\n02134,19.99\n01234,24.50\n09021,9.75\n00501,5.00\n02138,12.25\n"
+    dataset_id = (await _upload(client, token, filename="zips.csv", content=zips)).json()["id"]
+
+    health = await client.get(f"/datasets/{dataset_id}/health", headers=headers)
+    assert health.status_code == 200
+    columns = {c["name"]: c for c in health.json()["columns"]}
+    assert columns["zip"]["inferred_dtype"] == "text"
+    assert columns["price"]["inferred_dtype"] == "numeric"
+
+
 async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -95,7 +108,7 @@ async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="member2@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

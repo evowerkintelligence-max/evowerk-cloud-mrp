@@ -86,6 +86,38 @@ variable "route53_zone_id" {
   default     = ""
 }
 
+variable "ses_from_email" {
+  description = "Sender address for password-reset/verification emails (e.g. no-reply@mrp.customer.com) - must be on a domain you can add DNS records for, since SES requires domain verification."
+  type        = string
+  default     = ""
+}
+
+variable "google_oauth_client_id" {
+  description = "Google OAuth 2.0 client ID (leave empty to disable Google login)"
+  type        = string
+  default     = ""
+}
+
+variable "google_oauth_client_secret" {
+  description = "Google OAuth 2.0 client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "microsoft_oauth_client_id" {
+  description = "Microsoft OAuth 2.0 (Azure AD app registration) client ID (leave empty to disable Microsoft login)"
+  type        = string
+  default     = ""
+}
+
+variable "microsoft_oauth_client_secret" {
+  description = "Microsoft OAuth 2.0 client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "jwt_secret_key" {
   description = "JWT signing secret. Leave empty to auto-generate a random one (stored in Secrets Manager, never in state as anything other than the encrypted value Terraform already protects state values with)."
   type        = string

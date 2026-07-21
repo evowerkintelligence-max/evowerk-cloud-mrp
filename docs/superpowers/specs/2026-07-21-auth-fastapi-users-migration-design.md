@@ -41,9 +41,16 @@ In scope:
 - Password reset and email verification flows (`fastapi-users` built-in),
   sending mail through a new `send_email(to, subject, body)` interface
   backed by AWS SES for AWS deployments.
-- Google + Microsoft OAuth2 login via `httpx-oauth`'s `get_oauth_router`,
-  auto-linking to an existing account only when the provider's token
-  asserts `email_verified=true`.
+- Google + Microsoft OAuth2 **login for existing accounts only** via custom
+  callback routes, auto-linking to an existing account only when the
+  provider's token asserts `email_verified=true`. This app's access model is
+  admin-provisioned (a company's admin creates accounts for their
+  employees via `/register`/a future invite flow) rather than public
+  self-service signup, so OAuth must never create a new account or org for
+  an email it doesn't already recognize - a stranger authenticating with
+  their own Google account must not be able to mint themselves an org.
+  Google/Microsoft login is a convenience for people who already have a
+  provisioned account, not a second signup path.
 - Two new `users` columns (`is_superuser`, `is_verified`) and a new
   `oauth_accounts` table, via Alembic migration.
 - SES resources added to `infra/terraform/aws` (verified domain identity +
@@ -94,11 +101,14 @@ than replacing it:
   verification, same as today's `_is_locked`/`_register_failed_attempt`).
 - **TOTP MFA**: unchanged logic (`generate_totp_secret`, `verify_totp`,
   `totp_provisioning_uri`, the `/mfa/enroll` and `/mfa/verify` endpoints
-  stay as custom routes outside `fastapi-users`), but the point where it
-  fires moves into a custom `JWTStrategy` wrapper: after `fastapi-users`
-  confirms the password is correct, check `user.mfa_enabled` and either
-  return the normal token pair or the existing `mfa_required: true`
-  response shape.
+  stay as custom routes outside `fastapi-users`). `/auth/login` itself
+  stays a fully custom route (not `fastapi-users`' router, no `JWTStrategy`
+  wrapper) that checks `user.mfa_enabled` inline before issuing tokens,
+  returning the existing `mfa_required: true` response shape when a TOTP
+  code is required. OAuth logins to MFA-enabled accounts get an analogous
+  pending-token step (`create_mfa_pending_token` + `/auth/oauth/mfa-verify`)
+  rather than the inline JSON re-submission password login uses, since
+  OAuth has no password to resubmit.
 - **Refresh tokens**: the existing `/auth/refresh` and `/auth/logout`
   routes and `RefreshToken` model stay as-is, mounted alongside
   `fastapi-users`' router. `_issue_tokens` becomes the bridge called from
@@ -107,8 +117,17 @@ than replacing it:
   attached to `fastapi-users`' login/register/forgot-password/reset-password
   routes the same way it's attached today.
 - **OAuth**: `httpx-oauth.GoogleOAuth2` and `.MicrosoftGraphOAuth2` clients,
-  each wired via `fastapi_users.get_oauth_router(..., associate_by_email=True,
-  is_verified_by_default=<provider's email_verified claim>)`.
+  wired via custom (not auto-generated) authorize/callback routes rather
+  than `fastapi_users.get_oauth_router()`, so the callback can look up
+  whether a matching account already exists *before* deciding anything:
+  no existing account for that email -> reject (this app has no
+  self-service OAuth signup, see Scope); existing account and the
+  provider asserts the email is verified -> call
+  `UserManager.oauth_callback(..., associate_by_email=True,
+  is_verified_by_default=True)` to link/log in; existing account but the
+  provider does not assert verification -> reject, without ever calling
+  `oauth_callback()`. Tokens are then issued via the same `_issue_tokens()`
+  the password-login path uses, so the response shape matches everywhere.
 
 ## Data model changes
 
@@ -168,7 +187,8 @@ new router rather than rewritten.
 
 New tests: password reset request/confirm (including that a reset request
 for a non-existent email doesn't reveal that, same enumeration-safety
-principle as today's login), email verification request/confirm, OAuth
-login success (mocked provider token response) for both providers, and
-OAuth auto-link rejection when the provider's token asserts
-`email_verified=false`.
+principle as today's login), email verification request/confirm, Google
+OAuth login success (mocked provider token response), and OAuth auto-link
+rejection when the provider's token asserts `email_verified=false`.
+Microsoft OAuth shares the same callback code path
+(`app/api/routes/oauth.py`) but isn't separately exercised by a test yet.

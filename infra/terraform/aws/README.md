@@ -95,6 +95,20 @@ cert is issued. Workflow:
 5. Point `domain_name` at the `alb_dns_name` output (a CNAME, since this
    isn't a Route53 ALIAS record)
 
+## Email (password reset / verification)
+
+Leave `ses_from_email` empty to skip - password-reset and verification links
+are logged instead of emailed (see `backend/app/core/email.py`), fine for a
+test deploy. To send real email:
+
+1. Set `ses_from_email` in `terraform.tfvars` (e.g. `no-reply@mrp.customer.com`).
+2. After `terraform apply`, read the `ses_domain_verification_record` output
+   and add it as a TXT record (`_amazonses.<domain>`) at your DNS provider.
+3. Wait for AWS to detect verification (Console: SES > Verified identities).
+4. SES accounts start in sandbox mode (can only send to verified addresses) -
+   request production access in the SES console before relying on this for
+   real users.
+
 ## State
 
 No backend is configured in `versions.tf` - it defaults to local state,

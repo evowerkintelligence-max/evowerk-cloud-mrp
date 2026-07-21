@@ -173,7 +173,7 @@ async def test_discard_allowed_for_creator_not_other_members(client, test_engine
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="dtdiscardmember@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )
@@ -209,7 +209,7 @@ async def test_discard_allowed_for_owner_deleting_someone_elses_incident(client,
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="dt2member@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

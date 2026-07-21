@@ -25,7 +25,7 @@ from app.core.security import (
     verify_password,
     verify_totp,
 )
-from app.core.users import UserCreate, UserManager, UserRead, get_user_manager
+from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.middleware.rate_limit import rate_limit
@@ -78,6 +78,10 @@ async def register(
         org_id=created_user.org_id,
         user_id=created_user.id,
     )
+
+
+router.include_router(fastapi_users.get_reset_password_router())
+router.include_router(fastapi_users.get_verify_router(UserRead))
 
 
 class LoginRequest(BaseModel):

@@ -188,8 +188,9 @@ in-memory fake Redis (via `fakeredis`), not real Postgres/Redis, so no
 external services are required. Coverage: register → login → MFA enroll →
 login-with-MFA → refresh (rotates, old token revoked) → logout (revokes
 token), account lockout, password policy, the MFA-disable-bypass regression,
-cross-tenant isolation, and per-IP rate limiting (both that it trips, and that
-it doesn't get in the way of many legitimate concurrent users).
+cross-tenant isolation, per-IP rate limiting, password reset request/confirm,
+email verification request/confirm, and Google/Microsoft OAuth login
+(including the verified-email auto-link gate).
 
 ## Deployment IaC
 

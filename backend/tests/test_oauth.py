@@ -25,6 +25,16 @@ async def _register_with_mfa(client, email):
     return secret
 
 
+async def _google_state(client) -> str:
+    """Drives the real /authorize route (with google_client mocked) so the
+    resulting state value matches the httponly cookie already sitting in the
+    client's cookie jar - callback tests need both to pass _verify_state()."""
+    with patch("app.api.routes.oauth.google_client") as mock_client:
+        mock_client.get_authorization_url = AsyncMock(return_value="https://accounts.google.com/o/oauth2/auth")
+        await client.get("/auth/google/authorize", follow_redirects=False)
+        return mock_client.get_authorization_url.call_args.kwargs["state"]
+
+
 async def test_google_authorize_redirects_to_google(client):
     with patch("app.api.routes.oauth.google_client") as mock_client:
         mock_client.get_authorization_url = AsyncMock(return_value="https://accounts.google.com/o/oauth2/auth?...")
@@ -38,6 +48,7 @@ async def test_google_callback_logs_in_existing_account_when_email_verified(clie
         "/auth/register",
         json={"org_name": "Acme", "email": "provisioned@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
     )
+    state = await _google_state(client)
 
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
@@ -46,7 +57,7 @@ async def test_google_callback_logs_in_existing_account_when_email_verified(clie
         mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
         mock_client.get_id_email = AsyncMock(return_value=("google-account-id-1", "provisioned@example.com"))
 
-        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+        res = await client.get(f"/auth/google/callback?code=fake-code&state={state}", follow_redirects=False)
 
     assert res.status_code in (302, 307)
     location = res.headers["location"]
@@ -54,8 +65,27 @@ async def test_google_callback_logs_in_existing_account_when_email_verified(clie
     assert "refresh_token=" in location
 
 
+async def test_google_callback_rejects_mismatched_state(client):
+    from fastapi import status
+
+    await _google_state(client)  # sets a real state cookie, then we ignore it
+
+    with (
+        patch("app.api.routes.oauth.google_client") as mock_client,
+        patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
+    ):
+        mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-csrf", "provisioned@example.com"))
+
+        res = await client.get("/auth/google/callback?code=fake-code&state=attacker-supplied-state", follow_redirects=False)
+
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+
 async def test_google_callback_rejects_unknown_email(client):
     from fastapi import status
+
+    state = await _google_state(client)
 
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
@@ -64,7 +94,7 @@ async def test_google_callback_rejects_unknown_email(client):
         mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
         mock_client.get_id_email = AsyncMock(return_value=("google-account-id-unknown", "nobody@example.com"))
 
-        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+        res = await client.get(f"/auth/google/callback?code=fake-code&state={state}", follow_redirects=False)
 
     assert res.status_code == status.HTTP_403_FORBIDDEN
 
@@ -76,6 +106,7 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
         "/auth/register",
         json={"org_name": "Acme", "email": "existing@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
     )
+    state = await _google_state(client)
 
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
@@ -84,7 +115,7 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
         mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
         mock_client.get_id_email = AsyncMock(return_value=("google-account-id-2", "existing@example.com"))
 
-        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+        res = await client.get(f"/auth/google/callback?code=fake-code&state={state}", follow_redirects=False)
 
     # Must NOT silently log in as the existing password account. Because
     # `email` is a unique column, "don't auto-link" can't mean "create a
@@ -102,6 +133,7 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
 
 async def test_google_callback_for_mfa_enabled_account_issues_pending_token_not_tokens(client):
     await _register_with_mfa(client, "mfa-oauth@example.com")
+    state = await _google_state(client)
 
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
@@ -110,7 +142,7 @@ async def test_google_callback_for_mfa_enabled_account_issues_pending_token_not_
         mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
         mock_client.get_id_email = AsyncMock(return_value=("google-account-id-mfa", "mfa-oauth@example.com"))
 
-        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+        res = await client.get(f"/auth/google/callback?code=fake-code&state={state}", follow_redirects=False)
 
     assert res.status_code in (302, 307)
     location = res.headers["location"]
@@ -120,6 +152,7 @@ async def test_google_callback_for_mfa_enabled_account_issues_pending_token_not_
 
 async def test_oauth_mfa_verify_with_correct_code_issues_tokens(client):
     secret = await _register_with_mfa(client, "mfa-oauth-verify@example.com")
+    state = await _google_state(client)
 
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
@@ -129,7 +162,7 @@ async def test_oauth_mfa_verify_with_correct_code_issues_tokens(client):
         mock_client.get_id_email = AsyncMock(return_value=("google-account-id-mfa-2", "mfa-oauth-verify@example.com"))
 
         callback_res = await client.get(
-            "/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False
+            f"/auth/google/callback?code=fake-code&state={state}", follow_redirects=False
         )
 
     location = callback_res.headers["location"]
@@ -145,6 +178,7 @@ async def test_oauth_mfa_verify_with_correct_code_issues_tokens(client):
 
 async def test_oauth_mfa_verify_with_wrong_code_rejected(client):
     await _register_with_mfa(client, "mfa-oauth-wrong@example.com")
+    state = await _google_state(client)
 
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
@@ -154,7 +188,7 @@ async def test_oauth_mfa_verify_with_wrong_code_rejected(client):
         mock_client.get_id_email = AsyncMock(return_value=("google-account-id-mfa-3", "mfa-oauth-wrong@example.com"))
 
         callback_res = await client.get(
-            "/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False
+            f"/auth/google/callback?code=fake-code&state={state}", follow_redirects=False
         )
 
     location = callback_res.headers["location"]

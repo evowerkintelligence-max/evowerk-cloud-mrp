@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
 
+from app.core import users as users_module
 from app.core.config import get_settings
 
 pytestmark = pytest.mark.asyncio
 
 PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+
+
+async def _drain_background_tasks() -> None:
+    """The email send in on_after_forgot_password/on_after_request_verify is
+    now fire-and-forget (see users_module._fire_and_forget) so the response
+    doesn't block on it - tests asserting the email was sent need to wait for
+    it explicitly instead of relying on it having finished by request-return."""
+    await asyncio.gather(*users_module._background_tasks)
 
 
 async def test_forgot_password_always_returns_202_even_for_unknown_email(client):
@@ -25,6 +35,7 @@ async def test_forgot_password_then_reset_changes_password(client):
 
     with patch("app.core.email.send_email") as mock_send:
         res = await client.post("/auth/forgot-password", json={"email": "reset@example.com"})
+        await _drain_background_tasks()
     assert res.status_code == 202
     mock_send.assert_awaited_once()
     reset_link_body = mock_send.await_args.args[2]
@@ -52,6 +63,7 @@ async def test_request_verify_then_verify_marks_user_verified(client):
 
     with patch("app.core.email.send_email") as mock_send:
         res = await client.post("/auth/request-verify-token", json={"email": "verify@example.com"})
+        await _drain_background_tasks()
     assert res.status_code == 202
     verify_link_body = mock_send.await_args.args[2]
     token = verify_link_body.split("token=")[1].split()[0].strip()

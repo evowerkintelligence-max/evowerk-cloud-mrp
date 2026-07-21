@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from urllib.parse import urlencode
 
@@ -56,6 +57,32 @@ def _redirect_with_tokens(tokens: TokenResponse) -> RedirectResponse:
     return RedirectResponse(url=f"{settings.frontend_base_url}/oauth/callback#{query}")
 
 
+_STATE_COOKIE = "oauth_state"
+
+
+def _start_authorize(state: str, auth_url: str) -> RedirectResponse:
+    # Double-submit-cookie CSRF defense: the state value is echoed back to us
+    # both as the `state` query param (round-tripped by the IdP) and as this
+    # httponly cookie. An attacker can trigger a callback request but can't
+    # read or set this cookie cross-site, so they can't forge a matching pair.
+    response = RedirectResponse(url=auth_url)
+    response.set_cookie(
+        _STATE_COOKIE,
+        state,
+        max_age=300,
+        httponly=True,
+        samesite="lax",
+        secure=settings.env == "production",
+    )
+    return response
+
+
+def _verify_state(request: Request, state: str) -> None:
+    cookie_state = request.cookies.get(_STATE_COOKIE)
+    if not cookie_state or not secrets.compare_digest(cookie_state, state):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired OAuth state")
+
+
 async def _handle_callback(
     *,
     oauth_name: str,
@@ -104,13 +131,16 @@ async def _handle_callback(
         # being silently downgraded to a misleading 400.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not sign in with this account") from None
 
+    # Check is_active before mfa_enabled, matching /auth/login's ordering - a
+    # disabled account gets the same immediate rejection regardless of which
+    # login path it went through, instead of leaking "MFA required" first.
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account disabled")
+
     if user.mfa_enabled:
         pending_token = create_mfa_pending_token(str(user.id))
         query = urlencode({"mfa_pending_token": pending_token})
         return RedirectResponse(url=f"{settings.frontend_base_url}/oauth/callback#{query}")
-
-    if not user.is_active:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account disabled")
 
     tokens = await _issue_tokens(db, user)
     await log_event(
@@ -124,20 +154,34 @@ async def _handle_callback(
     return _redirect_with_tokens(tokens)
 
 
+def _require_configured(client_id: str, provider: str) -> None:
+    # main.py only mounts this router when *some* provider is configured, so
+    # configuring just one still leaves the other's routes reachable here.
+    if not client_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{provider} sign-in is not configured")
+
+
 @router.get("/google/authorize")
 async def google_authorize(request: Request) -> RedirectResponse:
+    _require_configured(settings.google_oauth_client_id, "Google")
     redirect_uri = str(request.url_for("google_callback"))
-    auth_url = await google_client.get_authorization_url(redirect_uri, scope=["openid", "email", "profile"])
-    return RedirectResponse(url=auth_url)
+    state = secrets.token_urlsafe(24)
+    auth_url = await google_client.get_authorization_url(
+        redirect_uri, state=state, scope=["openid", "email", "profile"]
+    )
+    return _start_authorize(state, auth_url)
 
 
 @router.get("/google/callback", name="google_callback")
 async def google_callback(
     request: Request,
     code: str,
+    state: str,
     db: AsyncSession = Depends(get_db),
     user_manager: UserManager = Depends(get_user_manager),
 ) -> RedirectResponse:
+    _require_configured(settings.google_oauth_client_id, "Google")
+    _verify_state(request, state)
     return await _handle_callback(
         oauth_name="google",
         code=code,
@@ -151,18 +195,25 @@ async def google_callback(
 
 @router.get("/microsoft/authorize")
 async def microsoft_authorize(request: Request) -> RedirectResponse:
+    _require_configured(settings.microsoft_oauth_client_id, "Microsoft")
     redirect_uri = str(request.url_for("microsoft_callback"))
-    auth_url = await microsoft_client.get_authorization_url(redirect_uri, scope=["openid", "email", "profile"])
-    return RedirectResponse(url=auth_url)
+    state = secrets.token_urlsafe(24)
+    auth_url = await microsoft_client.get_authorization_url(
+        redirect_uri, state=state, scope=["openid", "email", "profile"]
+    )
+    return _start_authorize(state, auth_url)
 
 
 @router.get("/microsoft/callback", name="microsoft_callback")
 async def microsoft_callback(
     request: Request,
     code: str,
+    state: str,
     db: AsyncSession = Depends(get_db),
     user_manager: UserManager = Depends(get_user_manager),
 ) -> RedirectResponse:
+    _require_configured(settings.microsoft_oauth_client_id, "Microsoft")
+    _verify_state(request, state)
     return await _handle_callback(
         oauth_name="microsoft",
         code=code,

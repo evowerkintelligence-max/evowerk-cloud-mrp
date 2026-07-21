@@ -13,7 +13,10 @@
 # never made it here, so Pace Tracking, Downtime Tracking, and KPI Dashboards
 # all worked in dev but silently 200'd with index.html (instead of reaching
 # the backend) once deployed via this nginx image. artifacts/scenarios
-# removed - those routers no longer exist.
+# removed - those routers no longer exist. And again: machines, work-centers,
+# routings, and cbm were missing here AND from vite.config.ts's dev proxy -
+# cbm backs the Predictive Maintenance fleet/machine-detail views, so that
+# page was silently broken in both dev and every deployment of this image.
 #
 # proxy_buffering off + a long proxy_read_timeout apply here too: harmless for
 # ordinary JSON responses, but required for /realtime/streams/{id}/events
@@ -67,7 +70,7 @@ server {
         add_header Content-Type text/plain;
     }
 
-    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace)(/|$) {
+    location ~ ^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm)(/|$) {
         try_files $spa_fallback @api;
     }
 

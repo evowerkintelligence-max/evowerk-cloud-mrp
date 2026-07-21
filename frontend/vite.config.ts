@@ -26,7 +26,10 @@ export default defineConfig({
       // /forecasts, /mrp, /inventory, /locations and /ai were all missing, so
       // Planning, Inventory and Ask never reached the API in dev. Same lesson
       // hit again later - computer-vision/data-chat/predictive/rca-cases/
-      // scenarios were added to main.py but never added here.
+      // scenarios were added to main.py but never added here. And again:
+      // machines/work-centers/routings/cbm were missing here AND from
+      // nginx.conf.template - cbm backs the Predictive Maintenance
+      // fleet/machine-detail views, so that page was silently broken.
       //
       // Several of these prefixes are ALSO SPA routes (/rca-cases, /analytics,
       // /bi, /reports, /workflows, /automl, /alerts, /integrations, /realtime,
@@ -36,7 +39,7 @@ export default defineConfig({
       // instead of index.html. bypass() tells the difference: a page
       // navigation's Accept header leads with text/html; apiFetch's fetch()
       // calls never send that, so only real API calls get proxied.
-      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace)(/|$|\\?)":
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm)(/|$|\\?)":
         {
           target: `http://localhost:${backendPort}`,
           bypass(req) {

@@ -137,14 +137,15 @@ or any TOTP/lockout columns on `users`.
 async def send_email(to: str, subject: str, body: str) -> None: ...
 ```
 
-AWS implementation sends via SES's SMTP interface (so the function itself
-has no AWS SDK dependency - just a standard SMTP client pointed at
-SES-provided credentials from Settings). `fastapi-users`' `on_after_
-forgot_password` and `on_after_request_verify` hooks call this with the
-reset/verification token embedded in a link back to the frontend. SES
-requires a verified sending domain - the Terraform module creates the
-identity and outputs the DNS records the customer must add (same pattern
-already used for ACM certificate validation).
+AWS implementation calls SES's `SendEmail` API via `boto3`, authenticated
+through the ECS task's existing IAM role (`aws_iam_role.ecs_task` - the
+same role future AWS-calling features attach policies to) rather than
+managing SMTP credentials as a static secret. `fastapi-users`'
+`on_after_forgot_password` and `on_after_request_verify` hooks call
+`send_email()` with the reset/verification token embedded in a link back
+to the frontend. SES requires a verified sending domain - the Terraform
+module creates the identity and outputs the DNS records the customer must
+add (same pattern already used for ACM certificate validation).
 
 ## Frontend
 

@@ -158,13 +158,13 @@ variable "rate_limit_mfa_verify_per_5min" {
 variable "backend_cpu" {
   description = "Fargate task CPU units for the backend service (256 = 0.25 vCPU)"
   type        = number
-  default     = 256
+  default     = 1024
 }
 
 variable "backend_memory" {
-  description = "Fargate task memory (MB) for the backend service"
+  description = "Fargate task memory (MB) for the backend service - the Fargate minimum (512) OOM-kills under real traffic: this app loads xgboost/lightgbm/shap/scipy/pandas/duckdb, which don't leave enough headroom once a few requests overlap."
   type        = number
-  default     = 512
+  default     = 2048
 }
 
 variable "frontend_cpu" {

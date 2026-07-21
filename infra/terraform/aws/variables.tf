@@ -131,6 +131,30 @@ variable "mfa_encryption_key" {
   sensitive   = true
 }
 
+variable "rate_limit_login_per_5min" {
+  description = "Login attempts allowed per IP per 5 minutes - matches the app's own default (see backend/app/core/config.py); raise only for a test env with an automated tester hitting this a lot."
+  type        = number
+  default     = 60
+}
+
+variable "rate_limit_refresh_per_5min" {
+  description = "Token refresh calls allowed per IP per 5 minutes - matches the app's own default."
+  type        = number
+  default     = 120
+}
+
+variable "rate_limit_register_per_hour" {
+  description = "Registrations allowed per IP per hour - matches the app's own default."
+  type        = number
+  default     = 20
+}
+
+variable "rate_limit_mfa_verify_per_5min" {
+  description = "MFA verification attempts allowed per IP per 5 minutes - matches the app's own default."
+  type        = number
+  default     = 30
+}
+
 variable "backend_cpu" {
   description = "Fargate task CPU units for the backend service (256 = 0.25 vCPU)"
   type        = number

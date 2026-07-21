@@ -91,6 +91,10 @@ resource "aws_ecs_task_definition" "backend" {
         { name = "FRONTEND_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
         { name = "GOOGLE_OAUTH_CLIENT_ID", value = var.google_oauth_client_id },
         { name = "MICROSOFT_OAUTH_CLIENT_ID", value = var.microsoft_oauth_client_id },
+        { name = "RATE_LIMIT_LOGIN_PER_5MIN", value = tostring(var.rate_limit_login_per_5min) },
+        { name = "RATE_LIMIT_REFRESH_PER_5MIN", value = tostring(var.rate_limit_refresh_per_5min) },
+        { name = "RATE_LIMIT_REGISTER_PER_HOUR", value = tostring(var.rate_limit_register_per_hour) },
+        { name = "RATE_LIMIT_MFA_VERIFY_PER_5MIN", value = tostring(var.rate_limit_mfa_verify_per_5min) },
       ]
 
       secrets = [

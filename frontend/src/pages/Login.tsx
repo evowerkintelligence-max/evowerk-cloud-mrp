@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import { AuthLayout } from "@/components/AuthLayout";
@@ -15,8 +15,16 @@ export function Login() {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [providers, setProviders] = useState({ google: false, microsoft: false });
   const setTokens = useAuthStore((s) => s.setTokens);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch("/auth/providers")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => data && setProviders(data))
+      .catch(() => {});
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -107,26 +115,32 @@ export function Login() {
           {mfaRequired ? "Verify" : "Log in"}
         </Button>
       </form>
-      <div className="mt-6 space-y-2">
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-border" />
+      {(providers.google || providers.microsoft) && (
+        <div className="mt-6 space-y-2">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
+            </div>
           </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
-          </div>
+          {providers.google && (
+            <a href="/auth/google/authorize" className="block">
+              <Button type="button" variant="outline" className="w-full">
+                Continue with Google
+              </Button>
+            </a>
+          )}
+          {providers.microsoft && (
+            <a href="/auth/microsoft/authorize" className="block">
+              <Button type="button" variant="outline" className="w-full">
+                Continue with Microsoft
+              </Button>
+            </a>
+          )}
         </div>
-        <a href="/auth/google/authorize" className="block">
-          <Button type="button" variant="outline" className="w-full">
-            Continue with Google
-          </Button>
-        </a>
-        <a href="/auth/microsoft/authorize" className="block">
-          <Button type="button" variant="outline" className="w-full">
-            Continue with Microsoft
-          </Button>
-        </a>
-      </div>
+      )}
     </AuthLayout>
   );
 }

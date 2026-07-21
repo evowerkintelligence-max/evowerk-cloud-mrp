@@ -14,6 +14,12 @@ locals {
   jwt_secret_value = var.jwt_secret_key != "" ? var.jwt_secret_key : random_password.jwt_secret.result
 
   database_url = "postgresql+asyncpg://${var.db_username}:${random_password.db_password.result}@${aws_db_instance.postgres.endpoint}/${var.db_name}"
+
+  # Secrets Manager rejects an empty SecretString, but these are optional -
+  # login via that provider is disabled anyway when its client_id is empty
+  # (see the app's own settings), so the value here goes unused either way.
+  google_oauth_secret_value    = var.google_oauth_client_secret != "" ? var.google_oauth_client_secret : "unused"
+  microsoft_oauth_secret_value = var.microsoft_oauth_client_secret != "" ? var.microsoft_oauth_client_secret : "unused"
 }
 
 resource "aws_secretsmanager_secret" "jwt_secret" {
@@ -53,7 +59,7 @@ resource "aws_secretsmanager_secret" "google_oauth_secret" {
 
 resource "aws_secretsmanager_secret_version" "google_oauth_secret" {
   secret_id     = aws_secretsmanager_secret.google_oauth_secret.id
-  secret_string = var.google_oauth_client_secret
+  secret_string = local.google_oauth_secret_value
 }
 
 resource "aws_secretsmanager_secret" "microsoft_oauth_secret" {
@@ -63,5 +69,5 @@ resource "aws_secretsmanager_secret" "microsoft_oauth_secret" {
 
 resource "aws_secretsmanager_secret_version" "microsoft_oauth_secret" {
   secret_id     = aws_secretsmanager_secret.microsoft_oauth_secret.id
-  secret_string = var.microsoft_oauth_client_secret
+  secret_string = local.microsoft_oauth_secret_value
 }

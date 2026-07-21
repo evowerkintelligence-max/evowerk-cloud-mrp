@@ -95,7 +95,7 @@ export function RunHistory() {
             return (
               <div key={r.id} className="rounded-md border border-border">
                 <button
-                  className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-left text-sm"
+                  className="flex w-full flex-wrap items-center justify-between gap-3 rounded-md px-4 py-2.5 text-left text-sm transition-colors hover:bg-secondary/20"
                   onClick={() => setExpandedRun(isOpen ? null : { workflowId: r.workflow_id, runId: r.id })}
                 >
                   <span className="flex items-center gap-3">
@@ -129,7 +129,7 @@ export function RunHistory() {
                           </Badge>
                         )}
                         {typeof e.payload.error === "string" && (
-                          <span className="truncate text-rose-300">{e.payload.error}</span>
+                          <span className="truncate text-destructive">{e.payload.error}</span>
                         )}
                       </div>
                     ))}

@@ -269,7 +269,7 @@ export function PaceTracking() {
       <div className="grid grid-cols-2 gap-4">
         <Button
           size="lg"
-          className="h-24 text-xl"
+          className="h-24 text-xl font-bold"
           disabled={s.status !== "active"}
           loading={tap.isPending}
           onClick={() => tap.mutate({ kind: "good" })}
@@ -279,7 +279,7 @@ export function PaceTracking() {
         <Button
           size="lg"
           variant="destructive"
-          className="h-24 text-xl"
+          className="h-24 text-xl font-bold"
           disabled={s.status !== "active"}
           onClick={() => setShowRejectPicker((v) => !v)}
         >

@@ -357,7 +357,7 @@ function ScanResults({ scan }: { scan: ScanResponse | null }) {
             key={r.rule_id}
             className={cn(
               "rounded-md border px-4 py-3 text-sm",
-              r.triggered ? "border-amber-500/30 bg-amber-500/10" : "border-border bg-secondary/30",
+              r.triggered ? "border-warning/30 bg-warning/10" : "border-border bg-secondary/30",
             )}
           >
             <div className="flex flex-wrap items-center gap-2">

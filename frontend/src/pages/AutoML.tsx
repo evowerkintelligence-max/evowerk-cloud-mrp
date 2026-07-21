@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { useDatasets } from "./analytics/shared";
 import { useAutoMLRuns, useAutoMLRunsDetail, useDeleteAutoMLRun } from "./automl/api";
@@ -146,8 +147,7 @@ export function AutoML() {
                 <TR key={r.id}>
                   {compareMode && (
                     <TD>
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={compareIds.has(r.id)}
                         onChange={() => toggleCompareId(r.id)}
                         disabled={r.status !== "success"}

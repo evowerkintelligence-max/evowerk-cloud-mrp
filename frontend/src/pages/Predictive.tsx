@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
+import { AlertTriangle, DollarSign, TrendingUp } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { STAT_TONES, StatCard } from "@/components/StatCard";
 import { Field } from "@/components/Field";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -280,18 +282,13 @@ export function Predictive() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-3">
-                <div className="rounded-md border border-border p-3">
-                  <div className="text-xs text-muted-foreground">Net savings</div>
-                  <div className="text-xl font-semibold">${analyze.data.cost_summary.net_savings.toLocaleString()}</div>
-                </div>
-                <div className="rounded-md border border-border p-3">
-                  <div className="text-xs text-muted-foreground">ROI</div>
-                  <div className="text-xl font-semibold">{analyze.data.cost_summary.roi_pct}%</div>
-                </div>
-                <div className="rounded-md border border-border p-3">
-                  <div className="text-xs text-muted-foreground">Machines at risk</div>
-                  <div className="text-xl font-semibold">{analyze.data.cost_summary.machines_at_risk}</div>
-                </div>
+                {[
+                  { label: "Net savings", value: `$${analyze.data.cost_summary.net_savings.toLocaleString()}`, icon: <DollarSign /> },
+                  { label: "ROI", value: `${analyze.data.cost_summary.roi_pct}%`, icon: <TrendingUp /> },
+                  { label: "Machines at risk", value: analyze.data.cost_summary.machines_at_risk, icon: <AlertTriangle /> },
+                ].map((s, i) => (
+                  <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} tone={STAT_TONES[i % STAT_TONES.length]} />
+                ))}
               </div>
               <TableWrap>
                 <Table>

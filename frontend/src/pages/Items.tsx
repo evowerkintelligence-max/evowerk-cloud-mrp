@@ -1,9 +1,10 @@
 import { Fragment, FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
-import { Package } from "lucide-react";
+import { Boxes, Layers, Package, PackageCheck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { StatCard, STAT_TONES } from "@/components/StatCard";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -403,6 +404,37 @@ export function Items() {
     <div>
       <PageHeader title="Items" description="Raw materials, components, and finished goods in your catalog." />
 
+      {items.data && items.data.length > 0 && (
+        <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {[
+            { label: "Total items", value: items.data.length, icon: <Package /> },
+            {
+              label: "Raw materials",
+              value: items.data.filter((i) => i.item_type === "raw_material").length,
+              icon: <Boxes />,
+            },
+            {
+              label: "Components",
+              value: items.data.filter((i) => i.item_type === "component").length,
+              icon: <Layers />,
+            },
+            {
+              label: "Finished goods",
+              value: items.data.filter((i) => i.item_type === "finished_good").length,
+              icon: <PackageCheck />,
+            },
+          ].map((s, i) => (
+            <StatCard
+              key={s.label}
+              label={s.label}
+              value={s.value}
+              icon={s.icon}
+              tone={STAT_TONES[i % STAT_TONES.length]}
+            />
+          ))}
+        </div>
+      )}
+
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}
@@ -509,7 +541,7 @@ export function Items() {
         />
       ) : (
         <>
-          <div className="mb-4 flex flex-wrap items-center gap-4">
+          <Card className="mb-4 flex flex-wrap items-center gap-4 p-4">
             <Input
               placeholder="Search by SKU or name..."
               value={search}
@@ -562,7 +594,7 @@ export function Items() {
                   </span>
                 ))}
             </div>
-          </div>
+          </Card>
 
           {importResult && (
             <Alert className="mb-4">

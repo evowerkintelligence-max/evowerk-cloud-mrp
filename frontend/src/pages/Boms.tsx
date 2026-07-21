@@ -1,8 +1,19 @@
 import { FormEvent, useState } from "react";
-import { ChevronDown, ChevronRight, ChevronUp, GripVertical, Layers, Trash2 } from "lucide-react";
+import {
+  Archive,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  FilePen,
+  GripVertical,
+  Layers,
+  Trash2,
+} from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { StatCard } from "@/components/StatCard";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -592,6 +603,34 @@ export function Boms() {
         title="Bills of Materials"
         description="Define the components that go into a manufactured item, then activate a version to use it in planning."
       />
+
+      {boms.data && boms.data.length > 0 && (
+        <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {[
+            { label: "Total BOMs", value: boms.data.length, icon: <Layers />, tone: "primary" as const },
+            {
+              label: "Active",
+              value: boms.data.filter((b) => b.status === "active").length,
+              icon: <CheckCircle2 />,
+              tone: "success" as const,
+            },
+            {
+              label: "Draft",
+              value: boms.data.filter((b) => b.status === "draft").length,
+              icon: <FilePen />,
+              tone: "warning" as const,
+            },
+            {
+              label: "Archived",
+              value: boms.data.filter((b) => b.status === "archived").length,
+              icon: <Archive />,
+              tone: "terracotta" as const,
+            },
+          ].map((s) => (
+            <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} tone={s.tone} />
+          ))}
+        </div>
+      )}
 
       {error && (
         <Alert variant="destructive" className="mb-6">

@@ -10,12 +10,20 @@ import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 interface Dashboard {
   id: string;
   name: string;
   created_at: string;
 }
+
+/** Cycled per card so the dashboard grid reads as multi-color, not monochrome. */
+const CARD_TONES = [
+  { icon: "bg-primary/10 text-primary", hover: "hover:border-primary/40" },
+  { icon: "bg-accent/10 text-accent", hover: "hover:border-accent/40" },
+  { icon: "bg-success/10 text-success", hover: "hover:border-success/40" },
+] as const;
 
 export function Dashboards() {
   const navigate = useNavigate();
@@ -75,18 +83,31 @@ export function Dashboards() {
         <Alert>No dashboards yet — create one above, or save a chart to one from the chart builder.</Alert>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {dashboards.data.map((d) => (
-            <Link key={d.id} to={`/bi/${d.id}`} className="group rounded-lg focus-visible:outline-none">
-              <Card className="h-full transition-colors hover:border-primary/40 group-focus-visible:ring-2 group-focus-visible:ring-ring">
-                <CardContent className="flex items-center gap-4 p-5">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary [&_svg]:size-5">
-                    <LayoutGrid />
-                  </div>
-                  <CardTitle className="text-base">{d.name}</CardTitle>
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
+          {dashboards.data.map((d, i) => {
+            const t = CARD_TONES[i % CARD_TONES.length];
+            return (
+              <Link key={d.id} to={`/bi/${d.id}`} className="group rounded-lg focus-visible:outline-none">
+                <Card
+                  className={cn(
+                    "h-full transition-colors group-focus-visible:ring-2 group-focus-visible:ring-ring",
+                    t.hover,
+                  )}
+                >
+                  <CardContent className="flex items-center gap-4 p-5">
+                    <div
+                      className={cn(
+                        "flex size-10 shrink-0 items-center justify-center rounded-lg [&_svg]:size-5",
+                        t.icon,
+                      )}
+                    >
+                      <LayoutGrid />
+                    </div>
+                    <CardTitle className="text-base">{d.name}</CardTitle>
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
         </div>
       )}
     </div>

@@ -102,7 +102,7 @@ function fmtVal(key: string, v: number) {
 function deltaColor(key: string, direction: string) {
   if (direction === "unchanged") return "text-muted-foreground";
   const positive = LOWER_BETTER.has(key) ? direction === "decrease" : direction === "increase";
-  return positive ? "text-emerald-400" : "text-rose-400";
+  return positive ? "text-success" : "text-destructive";
 }
 
 interface SimResult {

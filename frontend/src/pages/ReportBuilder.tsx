@@ -411,7 +411,7 @@ export function ReportBuilder() {
             {narration.error && (
               <Alert variant="warning">AI narration was unavailable — showing a computed fallback summary.</Alert>
             )}
-            <div className="rounded-md border border-border p-3">
+            <div className="rounded-md border border-border bg-secondary/20 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-sm font-semibold">Executive summary</span>
                 <Button variant="ghost" size="sm" onClick={useAsExecSummary}>Use as Exec Summary section</Button>
@@ -419,7 +419,7 @@ export function ReportBuilder() {
               <p className="whitespace-pre-line text-sm text-muted-foreground">{narration.executive_summary}</p>
             </div>
             {narration.sections.map((sn, i) => (
-              <div key={i} className="rounded-md border border-border p-3">
+              <div key={i} className="rounded-md border border-border bg-secondary/20 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="text-sm font-semibold">{sn.title}</span>
                   <Button variant="ghost" size="sm" onClick={() => addNarrativeAsSection(sn)}>Add as text section</Button>

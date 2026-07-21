@@ -1,5 +1,5 @@
 import * as echarts from "echarts";
-import { AXIS_LABEL, AXIS_LINE, C, SPLIT_LINE, TOOLTIP, gradientAreaSeries } from "../analytics/shared";
+import { AXIS_LABEL, AXIS_LINE, C, SPLIT_LINE, TOOLTIP, gradientAreaSeries, token } from "../analytics/shared";
 
 export const CHART_TYPES = ["bar", "line", "pie"] as const;
 export type ChartType = (typeof CHART_TYPES)[number];
@@ -85,8 +85,8 @@ export function lineChartOption(data: CategoryValueRow[], name = "Value", palett
 
 export function pieChartOption(data: CategoryValueRow[], name = "Value", palette?: string[]): echarts.EChartsOption {
   return {
-    tooltip: { trigger: "item", backgroundColor: "#1e293b", borderColor: "#334155", textStyle: { color: "#e2e8f0", fontSize: 12 } },
-    legend: { textStyle: { color: "#64748b", fontSize: 11 }, bottom: 0 },
+    tooltip: { ...TOOLTIP, trigger: "item" as const },
+    legend: { textStyle: { color: token("--muted-foreground"), fontSize: 11 }, bottom: 0 },
     color: palette,
     series: [
       {
@@ -94,8 +94,8 @@ export function pieChartOption(data: CategoryValueRow[], name = "Value", palette
         type: "pie",
         radius: ["40%", "70%"],
         avoidLabelOverlap: true,
-        itemStyle: { borderColor: "#0f172a", borderWidth: 2 },
-        label: { color: "#94a3b8", fontSize: 11 },
+        itemStyle: { borderColor: token("--card"), borderWidth: 2 },
+        label: { color: token("--foreground"), fontSize: 11 },
         data: data.map((d) => ({ name: d.category, value: d.value })),
       },
     ],

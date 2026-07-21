@@ -9,8 +9,9 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { useDatasets, ColumnChecklist, EChart, rankedBarOption, gradientAreaSeries, C, TOOLTIP, AXIS_LABEL, SPLIT_LINE, AXIS_LINE } from "../analytics/shared";
+import { useDatasets, ColumnChecklist, EChart, rankedBarOption, gradientAreaSeries, C, token, TOOLTIP, AXIS_LABEL, SPLIT_LINE, AXIS_LINE } from "../analytics/shared";
 import { cn } from "@/lib/utils";
 import {
   TASKS,
@@ -46,9 +47,8 @@ function confusionMatrixOption(labels: string[], matrix: number[][]): echarts.EC
   );
   return {
     tooltip: {
-      backgroundColor: "#1e293b",
-      borderColor: "#334155",
-      textStyle: { color: "#e2e8f0", fontSize: 12 },
+      ...TOOLTIP,
+      trigger: "item",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' formatter param type
       // (CallbackDataParams) doesn't narrow per series type; heatmap always calls this with
       // `data: [number, number, number]` (see the `data.push([j, i, v])` above).
@@ -60,8 +60,8 @@ function confusionMatrixOption(labels: string[], matrix: number[][]): echarts.EC
     grid: { top: 24, bottom: 64, left: 96, right: 24 },
     xAxis: { type: "category", data: labels, name: "Predicted", nameLocation: "middle", nameGap: 36, axisLabel: AXIS_LABEL },
     yAxis: { type: "category", data: labels, name: "Actual", nameLocation: "middle", nameGap: 64, axisLabel: AXIS_LABEL },
-    visualMap: { min: 0, max: max || 1, calculable: false, show: false, inRange: { color: ["#0f172a", C.blue] } },
-    series: [{ type: "heatmap", data, label: { show: true, color: "#e2e8f0", fontSize: 10 } }],
+    visualMap: { min: 0, max: max || 1, calculable: false, show: false, inRange: { color: [token("--background"), C.blue] } },
+    series: [{ type: "heatmap", data, label: { show: true, color: token("--foreground"), fontSize: 10 } }],
   };
 }
 
@@ -70,7 +70,7 @@ function regressionScatterOption(points: [number, number][]): echarts.EChartsOpt
   const lo = Math.min(...values, 0);
   const hi = Math.max(...values, 1);
   return {
-    tooltip: { trigger: "item", backgroundColor: "#1e293b", borderColor: "#334155", textStyle: { color: "#e2e8f0", fontSize: 12 } },
+    tooltip: { ...TOOLTIP, trigger: "item" },
     grid: { top: 24, bottom: 40, left: 56, right: 24 },
     xAxis: { type: "value", name: "Actual", nameLocation: "middle", nameGap: 28, axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE, axisLine: AXIS_LINE },
     yAxis: { type: "value", name: "Predicted", nameLocation: "middle", nameGap: 44, axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE, axisLine: AXIS_LINE },
@@ -120,7 +120,7 @@ function trajectoryOption(
 
   return {
     tooltip: TOOLTIP,
-    legend: { textStyle: { color: "#64748b", fontSize: 11 }, top: 4 },
+    legend: { textStyle: { color: token("--muted-foreground"), fontSize: 11 }, top: 4 },
     grid: { top: 40, bottom: 56, left: 56, right: 24 },
     xAxis: { type: "category", data: categories, axisLabel: { ...AXIS_LABEL, rotate: 30 }, axisLine: AXIS_LINE },
     yAxis: { type: "value", axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },
@@ -146,15 +146,15 @@ function ContributionBars({ contributions }: { contributions: { feature: string;
         const positive = c.contribution >= 0;
         return (
           <div key={c.feature} className="flex items-center gap-2 text-xs">
-            <div className="w-28 flex-shrink-0 truncate text-foreground" title={c.feature}>{c.feature}</div>
+            <div className="w-28 flex-shrink-0 truncate font-medium text-foreground" title={c.feature}>{c.feature}</div>
             <div className="w-16 flex-shrink-0 truncate text-muted-foreground" title={String(c.value ?? "—")}>= {String(c.value ?? "—")}</div>
-            <div className="h-2 flex-1 overflow-hidden rounded bg-secondary/40">
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary/40 ring-1 ring-inset ring-border/40">
               <div
-                className={positive ? "h-full bg-emerald-500" : "h-full bg-rose-500 ml-auto"}
+                className={positive ? "h-full rounded-full bg-success" : "h-full rounded-full bg-destructive ml-auto"}
                 style={{ width: `${pct}%` }}
               />
             </div>
-            <div className={cn("w-16 flex-shrink-0 text-right", positive ? "text-emerald-500" : "text-rose-500")}>
+            <div className={cn("w-16 flex-shrink-0 text-right font-semibold tabular", positive ? "text-success" : "text-destructive")}>
               {positive ? "+" : ""}{c.contribution.toFixed(4)}
             </div>
           </div>
@@ -366,7 +366,7 @@ export function AutoMLRun() {
               {task === "classification" && (
                 <div className="flex items-end">
                   <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={handleImbalance} onChange={(e) => setHandleImbalance(e.target.checked)} />
+                    <Checkbox checked={handleImbalance} onChange={(e) => setHandleImbalance(e.target.checked)} />
                     Handle class imbalance (class_weight="balanced")
                   </label>
                 </div>
@@ -395,19 +395,19 @@ export function AutoMLRun() {
       {!isNew && isDone && runData && (
         <>
           <div className="grid gap-4 sm:grid-cols-3">
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground">Best model</div>
-              <div className="text-lg font-semibold">{runData.best_model_name}</div>
+            <Card className="p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Best model</div>
+              <div className="mt-2 text-lg font-semibold">{runData.best_model_name}</div>
             </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground">Primary metric</div>
-              <div className="text-lg font-semibold">
+            <Card className="p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Primary metric</div>
+              <div className="mt-2 text-lg font-semibold text-primary">
                 {runData.metric_name}={runData.metric_value?.toFixed(4)}
               </div>
             </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground">Task</div>
-              <div className="text-lg font-semibold">{runData.task}</div>
+            <Card className="p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Task</div>
+              <div className="mt-2 text-lg font-semibold capitalize">{runData.task}</div>
             </Card>
           </div>
 
@@ -554,7 +554,7 @@ export function AutoMLRun() {
                   <div className="space-y-4 pt-2">
                     <div>
                       <div className="text-xs text-muted-foreground">Prediction</div>
-                      <div className="text-2xl font-semibold text-cyan-500">{String(explainRow.data.prediction)}</div>
+                      <div className="text-2xl font-semibold text-primary">{String(explainRow.data.prediction)}</div>
                       {explainRow.data.probabilities && (
                         <div className="mt-2 flex flex-wrap gap-2">
                           {Object.entries(explainRow.data.probabilities)
@@ -579,7 +579,7 @@ export function AutoMLRun() {
                     </div>
                     <div>
                       <div className="mb-2 text-xs text-muted-foreground">
-                        What pushed this prediction: <span className="text-emerald-500">green</span> pushes it up, <span className="text-rose-500">red</span> pushes it down
+                        What pushed this prediction: <span className="text-success">green</span> pushes it up, <span className="text-destructive">red</span> pushes it down
                       </div>
                       <ContributionBars contributions={explainRow.data.contributions} />
                     </div>

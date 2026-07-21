@@ -1,9 +1,10 @@
 import { FormEvent, useState } from "react";
-import { Warehouse } from "lucide-react";
+import { PackageCheck, TrendingDown, TrendingUp, Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
+import { StatCard, STAT_TONES } from "@/components/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -118,6 +119,22 @@ export function InventoryPanel() {
     },
   });
   const analyticsByItem = new Map(analytics.data?.map((a) => [a.item_id, a]));
+
+  // Summary counts over the full analytics set (not paginated) — a quick read on stock health.
+  const statusCounts = (analytics.data ?? []).reduce(
+    (acc, a) => {
+      if (a.status === "stockout" || a.status === "low") acc.low += 1;
+      else if (a.status === "excess") acc.excess += 1;
+      else if (a.status === "healthy") acc.healthy += 1;
+      return acc;
+    },
+    { low: 0, excess: 0, healthy: 0 },
+  );
+  const statTiles = [
+    { label: "Low stock", value: statusCounts.low, icon: <TrendingDown /> },
+    { label: "Excess", value: statusCounts.excess, icon: <TrendingUp /> },
+    { label: "Healthy", value: statusCounts.healthy, icon: <PackageCheck /> },
+  ];
 
   const locations = useQuery<LocationResponse[]>({
     queryKey: ["locations"],
@@ -245,6 +262,20 @@ export function InventoryPanel() {
         <Alert variant="info" className="mb-6">
           {pendingNotice}
         </Alert>
+      )}
+
+      {balances.data && balances.data.length > 0 && analytics.data && (
+        <div className="mb-8 grid grid-cols-3 gap-4">
+          {statTiles.map((t, i) => (
+            <StatCard
+              key={t.label}
+              label={t.label}
+              value={t.value}
+              icon={t.icon}
+              tone={STAT_TONES[i % STAT_TONES.length]}
+            />
+          ))}
+        </div>
       )}
 
       {balances.data && balances.data.length === 0 ? (

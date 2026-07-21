@@ -185,7 +185,7 @@ export function SqlEditor() {
             <p className="text-sm text-muted-foreground">Queries you run will show up here for quick rerun.</p>
           )}
           {sqlHistory.map((h) => (
-            <div key={h.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+            <div key={h.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/20 px-3 py-2">
               <div className="min-w-0">
                 <code className="block truncate text-xs">{h.sql}</code>
                 <span className="text-xs text-muted-foreground">{new Date(h.created_at).toLocaleString()}</span>

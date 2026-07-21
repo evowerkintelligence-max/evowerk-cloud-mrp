@@ -3,7 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { StatCard } from "@/components/StatCard";
-import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt, money, oeeColor, pct, rankedBarOption } from "./shared";
+import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt, money, oeeColor, pct, rankedBarOption, token } from "./shared";
 import { cn } from "@/lib/utils";
 
 interface TrendPoint {
@@ -136,19 +136,19 @@ function Gauge({ r }: { r: OeeResult }) {
                     ],
                   },
                 },
-                pointer: { length: "55%", width: 5, offsetCenter: [0, "5%"], itemStyle: { color: "#f1f5f9" } },
+                pointer: { length: "55%", width: 5, offsetCenter: [0, "5%"], itemStyle: { color: token("--foreground") } },
                 axisTick: { show: false },
-                splitLine: { length: 10, lineStyle: { color: "#0f172a", width: 3 } },
+                splitLine: { length: 10, lineStyle: { color: token("--background"), width: 3 } },
                 axisLabel: {
                   distance: 24,
-                  color: "#64748b",
+                  color: token("--muted-foreground"),
                   fontSize: 10,
                   formatter: (v: number) => ([0, 45, 65, 85, 100].includes(v) ? `${v}` : ""),
                 },
                 detail: {
                   valueAnimation: true,
                   formatter: "{value}%",
-                  color: "#f1f5f9",
+                  color: token("--foreground"),
                   fontSize: 26,
                   fontWeight: "bold",
                   offsetCenter: [0, "-28%"],
@@ -225,7 +225,7 @@ function Trend({ trend }: { trend: TrendPoint[] }) {
             tooltip: TOOLTIP,
             legend: {
               data: ["OEE", "Availability", "Performance", "Quality"],
-              textStyle: { color: "#64748b", fontSize: 11 },
+              textStyle: { color: token("--muted-foreground"), fontSize: 11 },
               top: 4,
               icon: "circle",
               itemWidth: 8,

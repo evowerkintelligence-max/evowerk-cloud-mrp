@@ -374,43 +374,45 @@ export function Lots() {
         </CardContent>
       </Card>
 
-      <div className="mb-4 flex flex-wrap items-end gap-4">
-        <Field label="Status" htmlFor="filter-status" className="w-40">
-          <Select
-            id="filter-status"
-            value={statusFilter}
-            onChange={(e) => resetToFirstPage(setStatusFilter)(e.target.value)}
-          >
-            <option value="">All</option>
-            <option value="active">Active</option>
-            <option value="on_hold">On hold</option>
-            <option value="depleted">Depleted</option>
-          </Select>
-        </Field>
-        <Field label="Location" htmlFor="filter-location" className="w-40">
-          <Select
-            id="filter-location"
-            value={locationFilter}
-            onChange={(e) => resetToFirstPage(setLocationFilter)(e.target.value)}
-          >
-            <option value="">All</option>
-            {locations.data?.map((loc) => (
-              <option key={loc.id} value={loc.id}>
-                {loc.code}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <label className="flex items-center gap-2 pb-2 text-sm text-foreground">
-          <input
-            type="checkbox"
-            checked={expiringSoonOnly}
-            onChange={(e) => setExpiringSoonOnly(e.target.checked)}
-            className="size-4 rounded border-input"
-          />
-          Expiring within {EXPIRY_WARNING_DAYS}d only
-        </label>
-      </div>
+      <Card className="mb-4">
+        <CardContent className="flex flex-wrap items-end gap-4 pt-6">
+          <Field label="Status" htmlFor="filter-status" className="w-40">
+            <Select
+              id="filter-status"
+              value={statusFilter}
+              onChange={(e) => resetToFirstPage(setStatusFilter)(e.target.value)}
+            >
+              <option value="">All</option>
+              <option value="active">Active</option>
+              <option value="on_hold">On hold</option>
+              <option value="depleted">Depleted</option>
+            </Select>
+          </Field>
+          <Field label="Location" htmlFor="filter-location" className="w-40">
+            <Select
+              id="filter-location"
+              value={locationFilter}
+              onChange={(e) => resetToFirstPage(setLocationFilter)(e.target.value)}
+            >
+              <option value="">All</option>
+              {locations.data?.map((loc) => (
+                <option key={loc.id} value={loc.id}>
+                  {loc.code}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <label className="flex items-center gap-2 pb-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={expiringSoonOnly}
+              onChange={(e) => setExpiringSoonOnly(e.target.checked)}
+              className="size-4 rounded border-input"
+            />
+            Expiring within {EXPIRY_WARNING_DAYS}d only
+          </label>
+        </CardContent>
+      </Card>
 
       {visibleLots && visibleLots.length === 0 ? (
         <EmptyState

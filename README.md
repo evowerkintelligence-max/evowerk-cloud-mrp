@@ -189,8 +189,10 @@ external services are required. Coverage: register → login → MFA enroll →
 login-with-MFA → refresh (rotates, old token revoked) → logout (revokes
 token), account lockout, password policy, the MFA-disable-bypass regression,
 cross-tenant isolation, per-IP rate limiting, password reset request/confirm,
-email verification request/confirm, and Google/Microsoft OAuth login
-(including the verified-email auto-link gate).
+email verification request/confirm, and Google OAuth login (including the
+verified-email auto-link gate). Microsoft OAuth shares the same callback
+code path (`app/api/routes/oauth.py`) but isn't separately exercised by a
+test yet.
 
 ## Deployment IaC
 

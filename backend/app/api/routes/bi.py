@@ -21,7 +21,7 @@ from app.services import datasets as ds_service
 
 router = APIRouter(prefix="/bi", tags=["bi"])
 
-CHART_TYPES = ("bar", "line", "pie")
+CHART_TYPES = ("bar", "line", "pie", "area", "donut", "horizontal_bar")
 
 
 class ChartPreviewRequest(BaseModel):

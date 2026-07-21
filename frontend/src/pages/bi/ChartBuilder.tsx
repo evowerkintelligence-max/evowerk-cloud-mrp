@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { EChart, QueryBuilderFields, useDatasets, useQueryBuilder, type SelectFieldRow } from "../analytics/shared";
-import { CHART_TYPES, chartOption, toCategoryValueRows, type ChartType } from "./shared";
+import { CHART_TYPE_LABELS, CHART_TYPES, chartOption, toCategoryValueRows, type ChartType } from "./shared";
 
 interface QueryResult {
   columns: string[];
@@ -184,7 +184,7 @@ export function ChartBuilder() {
             <Select value={chartType} onChange={(e) => setChartType(e.target.value as ChartType)}>
               {CHART_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t}
+                  {CHART_TYPE_LABELS[t]}
                 </option>
               ))}
             </Select>

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import uuid
 from urllib.parse import urlencode
 
 import httpx
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi_users import exceptions
 from httpx_oauth.clients.google import GoogleOAuth2
 from httpx_oauth.clients.microsoft import MicrosoftGraphOAuth2
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes.auth import TokenResponse, _issue_tokens
+from app.api.routes.auth import TokenResponse, _issue_tokens, _mfa_verify_rate_limit
 from app.core.config import get_settings
+from app.core.security import create_mfa_pending_token, decode_token, decrypt_secret, verify_totp
 from app.core.users import UserManager, get_user_manager
 from app.db.session import get_db
+from app.middleware.audit import log_event
 
 router = APIRouter(prefix="/auth", tags=["oauth"])
 settings = get_settings()
@@ -99,7 +104,22 @@ async def _handle_callback(
         # being silently downgraded to a misleading 400.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not sign in with this account") from None
 
+    if user.mfa_enabled:
+        pending_token = create_mfa_pending_token(str(user.id))
+        query = urlencode({"mfa_pending_token": pending_token})
+        return RedirectResponse(url=f"{settings.frontend_base_url}/oauth/callback#{query}")
+
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account disabled")
+
     tokens = await _issue_tokens(db, user)
+    await log_event(
+        db,
+        action="user.login",
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        ip_address=request.client.host if request.client else None,
+    )
     await db.commit()
     return _redirect_with_tokens(tokens)
 
@@ -152,3 +172,43 @@ async def microsoft_callback(
         db=db,
         user_manager=user_manager,
     )
+
+
+class OAuthMfaVerifyRequest(BaseModel):
+    pending_token: str
+    code: str
+
+
+@router.post("/oauth/mfa-verify", response_model=TokenResponse, dependencies=[Depends(_mfa_verify_rate_limit)])
+async def oauth_mfa_verify(
+    body: OAuthMfaVerifyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user_manager: UserManager = Depends(get_user_manager),
+) -> TokenResponse:
+    try:
+        payload = decode_token(body.pending_token)
+        if payload.get("type") != "mfa_pending":
+            raise ValueError
+        user_id = uuid.UUID(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired code") from None
+
+    try:
+        user = await user_manager.get(user_id)
+    except exceptions.UserNotExists:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired code") from None
+
+    if not user.mfa_enabled or not verify_totp(decrypt_secret(user.mfa_secret or ""), body.code):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
+
+    tokens = await _issue_tokens(db, user)
+    await log_event(
+        db,
+        action="user.login",
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        ip_address=request.client.host if request.client else None,
+    )
+    await db.commit()
+    return tokens

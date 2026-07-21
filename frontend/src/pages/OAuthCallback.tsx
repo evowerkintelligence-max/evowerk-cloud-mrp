@@ -14,9 +14,12 @@ export function OAuthCallback() {
     const params = new URLSearchParams(window.location.hash.slice(1));
     const accessToken = params.get("access_token");
     const refreshToken = params.get("refresh_token");
+    const mfaPendingToken = params.get("mfa_pending_token");
     if (accessToken && refreshToken) {
       setTokens(accessToken, refreshToken);
       navigate("/", { replace: true });
+    } else if (mfaPendingToken) {
+      navigate(`/oauth/mfa-verify?pending_token=${encodeURIComponent(mfaPendingToken)}`, { replace: true });
     } else {
       navigate("/login", { replace: true });
     }

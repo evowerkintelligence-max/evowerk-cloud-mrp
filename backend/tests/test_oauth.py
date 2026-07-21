@@ -2,9 +2,27 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pyotp
 import pytest
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _register_with_mfa(client, email):
+    await client.post(
+        "/auth/register",
+        json={"org_name": "Acme", "email": email, "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
+    )
+    login = await client.post(
+        "/auth/login", json={"email": email, "password": "correct-horse-battery-staple1"}  # pragma: allowlist secret
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    enroll = await client.post("/auth/mfa/enroll", json={}, headers=headers)
+    secret = enroll.json()["secret"]
+    verify = await client.post("/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()}, headers=headers)
+    assert verify.status_code == 204
+    return secret
 
 
 async def test_google_authorize_redirects_to_google(client):
@@ -80,3 +98,67 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
         "/auth/login", json={"email": "existing@example.com", "password": "correct-horse-battery-staple1"}  # pragma: allowlist secret
     )
     assert login.status_code == 200
+
+
+async def test_google_callback_for_mfa_enabled_account_issues_pending_token_not_tokens(client):
+    await _register_with_mfa(client, "mfa-oauth@example.com")
+
+    with (
+        patch("app.api.routes.oauth.google_client") as mock_client,
+        patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
+    ):
+        mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-mfa", "mfa-oauth@example.com"))
+
+        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+
+    assert res.status_code in (302, 307)
+    location = res.headers["location"]
+    assert "mfa_pending_token=" in location
+    assert "access_token=" not in location
+
+
+async def test_oauth_mfa_verify_with_correct_code_issues_tokens(client):
+    secret = await _register_with_mfa(client, "mfa-oauth-verify@example.com")
+
+    with (
+        patch("app.api.routes.oauth.google_client") as mock_client,
+        patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
+    ):
+        mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-mfa-2", "mfa-oauth-verify@example.com"))
+
+        callback_res = await client.get(
+            "/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False
+        )
+
+    location = callback_res.headers["location"]
+    pending_token = location.split("mfa_pending_token=")[1]
+
+    res = await client.post(
+        "/auth/oauth/mfa-verify", json={"pending_token": pending_token, "code": pyotp.TOTP(secret).now()}
+    )
+    assert res.status_code == 200
+    assert res.json()["access_token"]
+    assert res.json()["refresh_token"]
+
+
+async def test_oauth_mfa_verify_with_wrong_code_rejected(client):
+    await _register_with_mfa(client, "mfa-oauth-wrong@example.com")
+
+    with (
+        patch("app.api.routes.oauth.google_client") as mock_client,
+        patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
+    ):
+        mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-mfa-3", "mfa-oauth-wrong@example.com"))
+
+        callback_res = await client.get(
+            "/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False
+        )
+
+    location = callback_res.headers["location"]
+    pending_token = location.split("mfa_pending_token=")[1]
+
+    res = await client.post("/auth/oauth/mfa-verify", json={"pending_token": pending_token, "code": "000000"})
+    assert res.status_code == 401

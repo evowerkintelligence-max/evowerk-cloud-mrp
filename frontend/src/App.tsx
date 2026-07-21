@@ -7,6 +7,7 @@ import { ForgotPassword } from "./pages/ForgotPassword";
 import { ResetPassword } from "./pages/ResetPassword";
 import { VerifyEmail } from "./pages/VerifyEmail";
 import { OAuthCallback } from "./pages/OAuthCallback";
+import { OAuthMfaVerify } from "./pages/OAuthMfaVerify";
 import { MfaChallenge } from "./pages/MfaChallenge";
 import { Dashboard } from "./pages/Dashboard";
 import { Items } from "./pages/Items";
@@ -67,6 +68,7 @@ export function App() {
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/oauth/callback" element={<OAuthCallback />} />
+      <Route path="/oauth/mfa-verify" element={<OAuthMfaVerify />} />
       <Route
         path="/mfa"
         element={

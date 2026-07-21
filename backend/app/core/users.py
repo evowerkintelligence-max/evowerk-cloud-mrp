@@ -81,6 +81,11 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         # more (see app.services.inventory / app.api.routes.inventory).
         session.add(Location(org_id=org.id, code="MAIN", name="Main", is_default=True))
         user_dict["org_id"] = org.id
+        # The org-founding user must be its owner - require_role("owner") gates
+        # BOM/inventory/dataset/forecast/BI/item-catalog management throughout
+        # the app. Without this, User.role's column default ("member") applies
+        # and the founder is locked out of managing their own org.
+        user_dict["role"] = "owner"
 
         created_user = await self.user_db.create(user_dict)
         await self.on_after_register(created_user, request)

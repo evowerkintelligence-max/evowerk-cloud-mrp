@@ -25,6 +25,10 @@ async def test_user_manager_create_bootstraps_org_and_default_location(db_sessio
 
     assert created.is_verified is False
     assert created.org_id is not None
+    # The org-founding user must own their org - require_role("owner") gates
+    # BOM/inventory/dataset/forecast/BI/item-catalog management throughout the
+    # app, so a wrong default here silently locks new orgs out of themselves.
+    assert created.role == "owner"
 
     org = (await db_session.execute(select(Org).where(Org.id == created.org_id))).scalar_one()
     assert org.name == "Acme"

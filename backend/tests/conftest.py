@@ -6,6 +6,8 @@ import tempfile
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-that-is-long-enough-for-hs256")
+os.environ.setdefault("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+os.environ.setdefault("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")  # pragma: allowlist secret
 os.environ.setdefault("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
 # Dataset uploads hit the real filesystem (only the DB is in-memory sqlite) -
 # without this, every test run leaves orphaned files under ./data.

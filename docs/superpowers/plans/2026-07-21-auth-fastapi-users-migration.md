@@ -1119,6 +1119,20 @@ git commit -m "feat: wire password reset and email verification routes"
 - Consumes: `UserManager`, `get_user_manager` (Task 3); `_issue_tokens`, `TokenResponse` (Task 4, `auth.py`).
 - Produces: `GET /auth/google/authorize`, `GET /auth/google/callback`, `GET /auth/microsoft/authorize`, `GET /auth/microsoft/callback`.
 
+**No self-service OAuth signup.** This app's access model is admin-provisioned:
+a company's admin creates accounts for their employees (via `/register` or a
+future invite flow) - it is not a public app anyone can sign up for. So
+`GET /auth/{provider}/callback` must reject outright when no account already
+exists for the authenticated email, *before* ever touching `UserManager`'s
+user-creation path (`User.org_id` is NOT NULL and only `UserManager.create()`
+- which requires an `org_name` the OAuth flow never collects - creates an
+`Org`; letting `oauth_callback()`'s new-user branch run would either crash on
+that NOT NULL constraint or, if "fixed" by inventing a placeholder org, let a
+stranger who merely owns a matching Google/Microsoft account mint themselves
+a new org, which is exactly what this access model forbids). Google/Microsoft
+login is a convenience for people who already have a provisioned account,
+never a second signup path.
+
 **Before writing code:** `BaseUserManager.oauth_callback()` is the lower-level method `fastapi_users.get_oauth_router()` calls internally, and it accepts `associate_by_email`/`is_verified_by_default` as call-time arguments - that's what makes a per-request verified-email check possible (the auto-generated router bakes these in as fixed config instead). Confirm the exact signature against the installed package before writing the callback body:
 
 Run: `python -c "import inspect, fastapi_users.manager; print(inspect.signature(fastapi_users.manager.BaseUserManager.oauth_callback))"`
@@ -1147,13 +1161,20 @@ async def test_google_authorize_redirects_to_google(client):
     assert "accounts.google.com" in res.headers["location"]
 
 
-async def test_google_callback_creates_account_when_email_verified(client):
+async def test_google_callback_logs_in_existing_account_when_email_verified(client):
+    # No self-service OAuth signup - this account must already exist
+    # (provisioned via /register, standing in here for "an admin created it").
+    await client.post(
+        "/auth/register",
+        json={"org_name": "Acme", "email": "provisioned@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
+    )
+
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
         patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
     ):
         mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
-        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-1", "newuser@example.com"))
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-1", "provisioned@example.com"))
 
         res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
 
@@ -1161,6 +1182,23 @@ async def test_google_callback_creates_account_when_email_verified(client):
     location = res.headers["location"]
     assert "access_token=" in location
     assert "refresh_token=" in location
+
+
+async def test_google_callback_rejects_unknown_email(client):
+    from fastapi import status
+
+    # No account was ever registered for this email - OAuth must not create
+    # one, even though the provider itself vouches the caller owns it.
+    with (
+        patch("app.api.routes.oauth.google_client") as mock_client,
+        patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
+    ):
+        mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-3", "stranger@example.com"))
+
+        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+
+    assert res.status_code == status.HTTP_403_FORBIDDEN
 
 
 async def test_google_callback_rejects_auto_link_when_email_not_verified(client):
@@ -1209,6 +1247,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from fastapi_users import exceptions
 from httpx_oauth.clients.google import GoogleOAuth2
 from httpx_oauth.clients.microsoft import MicrosoftGraphOAuth2
 
@@ -1268,6 +1307,19 @@ async def _handle_callback(
     token_data = await client.get_access_token(code, redirect_uri)
     access_token = token_data["access_token"]
     account_id, account_email = await client.get_id_email(access_token)
+
+    # No self-service OAuth signup: reject before ever reaching
+    # UserManager's user-creation path (see the note at the top of this
+    # task). A stranger who merely controls a matching Google/Microsoft
+    # account must not be able to mint themselves an account/org here.
+    try:
+        await user_manager.get_by_email(account_email)
+    except exceptions.UserNotExists:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "No account found for this email. Contact your organization administrator.",
+        ) from None
+
     verified = await email_verified_check(access_token)
 
     try:

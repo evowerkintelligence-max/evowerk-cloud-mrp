@@ -101,11 +101,14 @@ than replacing it:
   verification, same as today's `_is_locked`/`_register_failed_attempt`).
 - **TOTP MFA**: unchanged logic (`generate_totp_secret`, `verify_totp`,
   `totp_provisioning_uri`, the `/mfa/enroll` and `/mfa/verify` endpoints
-  stay as custom routes outside `fastapi-users`), but the point where it
-  fires moves into a custom `JWTStrategy` wrapper: after `fastapi-users`
-  confirms the password is correct, check `user.mfa_enabled` and either
-  return the normal token pair or the existing `mfa_required: true`
-  response shape.
+  stay as custom routes outside `fastapi-users`). `/auth/login` itself
+  stays a fully custom route (not `fastapi-users`' router, no `JWTStrategy`
+  wrapper) that checks `user.mfa_enabled` inline before issuing tokens,
+  returning the existing `mfa_required: true` response shape when a TOTP
+  code is required. OAuth logins to MFA-enabled accounts get an analogous
+  pending-token step (`create_mfa_pending_token` + `/auth/oauth/mfa-verify`)
+  rather than the inline JSON re-submission password login uses, since
+  OAuth has no password to resubmit.
 - **Refresh tokens**: the existing `/auth/refresh` and `/auth/logout`
   routes and `RefreshToken` model stay as-is, mounted alongside
   `fastapi-users`' router. `_issue_tokens` becomes the bridge called from
@@ -184,7 +187,8 @@ new router rather than rewritten.
 
 New tests: password reset request/confirm (including that a reset request
 for a non-existent email doesn't reveal that, same enumeration-safety
-principle as today's login), email verification request/confirm, OAuth
-login success (mocked provider token response) for both providers, and
-OAuth auto-link rejection when the provider's token asserts
-`email_verified=false`.
+principle as today's login), email verification request/confirm, Google
+OAuth login success (mocked provider token response), and OAuth auto-link
+rejection when the provider's token asserts `email_verified=false`.
+Microsoft OAuth shares the same callback code path
+(`app/api/routes/oauth.py`) but isn't separately exercised by a test yet.

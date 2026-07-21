@@ -56,6 +56,8 @@ export interface AutoMLRunSummary {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  auto_retrain: boolean;
+  retrained_from_run_id: string | null;
 }
 
 export interface AutoMLRunDetail extends AutoMLRunSummary {
@@ -93,6 +95,7 @@ export interface TrainRequest {
   forecast_strategy: "direct" | "recursive";
   time_budget_seconds: number | null;
   search_method: "random" | "bayesian";
+  auto_retrain: boolean;
 }
 
 const RUN_STATUS_ACTIVE = (status: string) => status === "queued" || status === "running";
@@ -282,6 +285,50 @@ export interface DriftResult {
   skipped_features: string[];
   rows_compared: number;
   train_sample_rows: number;
+}
+
+// ─── Guided templates (GET /automl/templates, POST /automl/templates/{id}/runs) ───
+
+export interface AutoMLTemplateRole {
+  key: string;
+  label: string;
+  required: boolean;
+}
+
+export interface AutoMLTemplateSummary {
+  id: string;
+  label: string;
+  roles: AutoMLTemplateRole[];
+}
+
+export function useAutoMLTemplates() {
+  return useQuery<AutoMLTemplateSummary[]>({
+    queryKey: ["automl-templates"],
+    queryFn: async () => {
+      const res = await apiFetch("/automl/templates");
+      if (!res.ok) throw new Error("Failed to load AutoML templates");
+      return res.json();
+    },
+  });
+}
+
+export interface TemplateRunRequest {
+  name: string;
+  dataset_id: string;
+  column_map: Record<string, string>;
+  config?: Record<string, unknown>;
+}
+
+export function useCreateTemplateRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ templateId, body }: { templateId: string; body: TemplateRunRequest }) => {
+      const res = await apiFetch(`/automl/templates/${templateId}/runs`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to start run");
+      return res.json() as Promise<AutoMLRunDetail>;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["automl-runs"] }),
+  });
 }
 
 export function useDriftCheck(id: string | undefined) {

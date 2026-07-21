@@ -21,7 +21,7 @@ from app.services import datasets as ds_service
 
 router = APIRouter(prefix="/bi", tags=["bi"])
 
-CHART_TYPES = ("bar", "line", "pie")
+CHART_TYPES = ("bar", "line", "pie", "area", "donut", "horizontal_bar")
 
 
 class ChartPreviewRequest(BaseModel):
@@ -142,7 +142,11 @@ async def create_chart(
     await ds_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
     position = 0
     if req.dashboard_id is not None:
-        await get_or_404(db, Dashboard, current.org_id, req.dashboard_id, "Dashboard not found")
+        # Locks the dashboard row so two concurrent chart-saves onto it can't
+        # both read the same max(position) and collide on the same slot.
+        await get_or_404(
+            db, Dashboard, current.org_id, req.dashboard_id, "Dashboard not found", for_update=True
+        )
         # Append after the last chart on this dashboard, not always 0 - two
         # charts both at position 0 make the dashboard's move-up/move-down
         # swap a no-op between them.
@@ -197,14 +201,26 @@ async def update_chart(
     # from any dashboard) from the field being omitted entirely (leave as-is) -
     # both would otherwise collapse to the same `None` value.
     dashboard_id_sent = "dashboard_id" in req.model_fields_set
+    moving_dashboards = dashboard_id_sent and req.dashboard_id != chart.dashboard_id
     if dashboard_id_sent and req.dashboard_id is not None:
-        await get_or_404(db, Dashboard, current.org_id, req.dashboard_id, "Dashboard not found")
+        # Locks the dashboard row for the same reason create_chart does: the
+        # max(position) read below must not race another chart landing here.
+        await get_or_404(
+            db, Dashboard, current.org_id, req.dashboard_id, "Dashboard not found", for_update=True
+        )
     if req.name is not None:
         chart.name = req.name
     if dashboard_id_sent:
         chart.dashboard_id = req.dashboard_id
     if req.position is not None:
         chart.position = req.position
+    elif moving_dashboards and req.dashboard_id is not None:
+        # Append at the end of the destination dashboard, matching
+        # create_chart, instead of keeping the position from wherever it was.
+        max_position = await db.scalar(
+            select(func.max(Chart.position)).where(Chart.dashboard_id == req.dashboard_id)
+        )
+        chart.position = (max_position + 1) if max_position is not None else 0
     await db.commit()
     await db.refresh(chart)
     return _chart_to_response(chart)

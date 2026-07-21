@@ -7,7 +7,9 @@ total/good units) instead of requiring manual data entry.
 """
 from __future__ import annotations
 
+import random
 import re
+import statistics
 from typing import Any
 
 _COL_HINTS: dict[str, list[str]] = {
@@ -69,22 +71,17 @@ def compare_snapshots(snapshot_a: dict[str, Any], snapshot_b: dict[str, Any]) ->
     return {k: _delta(snapshot_b[k], snapshot_a[k]) for k in sorted(keys)}
 
 
-def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
-    """Compute projected manufacturing outcomes after applying `changes` to `baseline`.
-
-    Baseline parameters (all optional, sensible defaults used): shifts_per_day,
-    shift_hours, workers_per_shift, avg_wage_per_hour, machine_count,
-    throughput_per_shift, oee_pct, demand_units_per_day, defect_rate_pct,
-    scrap_cost_per_unit, raw_material_cost_per_unit, selling_price_per_unit.
-
-    Changes accepted (same keys as baseline, plus): demand_change_pct,
-    oee_change_pct (percentage points), defect_change_pct (percentage points).
-    """
+def _project(baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, float]:
+    """Apply `changes` on top of `baseline` and return the resulting metric
+    snapshot (shifts_per_day, daily_capacity, ..., daily_margin). Calling this
+    with changes={} computes the baseline snapshot itself - run_whatif() uses
+    both forms so there is one source of truth for the arithmetic, and
+    run_monte_carlo()/run_sensitivity() reuse it directly for repeated
+    evaluation."""
     b_shifts = _safe(baseline.get("shifts_per_day"), 2)
     b_shift_hrs = _safe(baseline.get("shift_hours"), 8)
     b_workers = _safe(baseline.get("workers_per_shift"), 25)
     b_wage = _safe(baseline.get("avg_wage_per_hour"), 20)
-    b_machines = _safe(baseline.get("machine_count"), 10)
     b_tput_shift = _safe(baseline.get("throughput_per_shift"), 1000)
     b_oee = _safe(baseline.get("oee_pct"), 75.0)
     b_demand = _safe(baseline.get("demand_units_per_day"), 1800)
@@ -93,37 +90,37 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     b_rm_cost = _safe(baseline.get("raw_material_cost_per_unit"), 15.0)
     b_sell_price = _safe(baseline.get("selling_price_per_unit"), 40.0)
 
-    b_capacity_day = b_tput_shift * b_shifts
-    b_good_units = b_capacity_day * (1 - b_defect / 100)
-    b_labor_day = b_workers * b_shifts * b_shift_hrs * b_wage
-    b_scrap_units = b_capacity_day * (b_defect / 100)
-    b_scrap_loss = b_scrap_units * b_scrap_cost
-    b_utilisation = (b_demand / b_capacity_day * 100) if b_capacity_day else 0
-    b_revenue = min(b_good_units, b_demand) * b_sell_price
-    b_rm_cost_day = b_capacity_day * b_rm_cost
-    b_margin = b_revenue - b_labor_day - b_rm_cost_day - b_scrap_loss
-
     p_shifts = _safe(changes.get("shifts_per_day"), b_shifts)
     p_shift_hrs = _safe(changes.get("shift_hours"), b_shift_hrs)
     p_workers = _safe(changes.get("workers_per_shift"), b_workers)
     p_wage = _safe(changes.get("avg_wage_per_hour"), b_wage)
-    p_machines = _safe(changes.get("machine_count"), b_machines)
     p_tput_shift = _safe(changes.get("throughput_per_shift"), b_tput_shift)
     p_scrap_cost = _safe(changes.get("scrap_cost_per_unit"), b_scrap_cost)
     p_rm_cost = _safe(changes.get("raw_material_cost_per_unit"), b_rm_cost)
     p_sell_price = _safe(changes.get("selling_price_per_unit"), b_sell_price)
 
-    oee_change = _safe(changes.get("oee_change_pct"), 0)
-    p_oee = max(0, min(100, _safe(changes.get("oee_pct"), b_oee) + oee_change))
+    if changes:
+        # A real scenario change - clamp to a physically valid range exactly as
+        # the pre-refactor "projected" pass always did (this matches old
+        # run_whatif() behavior byte-for-byte, including when `changes` doesn't
+        # touch OEE/defect at all - the old code applied this same unconditional
+        # clamp/fallback for any non-empty changes).
+        oee_change = _safe(changes.get("oee_change_pct"), 0)
+        p_oee = max(0, min(100, _safe(changes.get("oee_pct"), b_oee) + oee_change))
+        defect_change_pp = _safe(changes.get("defect_change_pct"), 0)
+        p_defect = max(0, _safe(changes.get("defect_rate_pct"), b_defect) + defect_change_pp)
+    else:
+        # The baseline pass (changes={}) - echo the baseline exactly, unclamped,
+        # matching the pre-refactor code's separate, unscaled baseline computation
+        # (which never applied OEE-factor scaling or defect clamping at all).
+        p_oee = b_oee
+        p_defect = b_defect
 
     oee_factor = (p_oee / b_oee) if b_oee else 1.0
     p_tput_shift = p_tput_shift * oee_factor
 
     demand_change_pct = _safe(changes.get("demand_change_pct"), 0)
     p_demand = _safe(changes.get("demand_units_per_day"), b_demand * (1 + demand_change_pct / 100))
-
-    defect_change_pp = _safe(changes.get("defect_change_pct"), 0)
-    p_defect = max(0, _safe(changes.get("defect_rate_pct"), b_defect) + defect_change_pp)
 
     p_capacity_day = p_tput_shift * p_shifts
     p_good_units = p_capacity_day * (1 - p_defect / 100)
@@ -134,6 +131,63 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     p_revenue = min(p_good_units, p_demand) * p_sell_price
     p_rm_cost_day = p_capacity_day * p_rm_cost
     p_margin = p_revenue - p_labor_day - p_rm_cost_day - p_scrap_loss
+
+    return {
+        "shifts_per_day": round(p_shifts, 1),
+        "shift_hours": round(p_shift_hrs, 1),
+        "workers_per_shift": round(p_workers, 1),
+        "throughput_per_shift": round(p_tput_shift, 1),
+        "daily_capacity": round(p_capacity_day, 1),
+        "good_units_per_day": round(p_good_units, 1),
+        "oee_pct": round(p_oee, 2),
+        "demand_units_per_day": round(p_demand, 1),
+        "defect_rate_pct": round(p_defect, 2),
+        "labor_cost_per_day": round(p_labor_day, 2),
+        "scrap_loss_per_day": round(p_scrap_loss, 2),
+        "utilisation_pct": round(p_utilisation, 2),
+        "daily_revenue": round(p_revenue, 2),
+        "daily_margin": round(p_margin, 2),
+    }
+
+
+PROJECTED_METRIC_KEYS = frozenset(
+    {
+        "shifts_per_day", "shift_hours", "workers_per_shift", "throughput_per_shift",
+        "daily_capacity", "good_units_per_day", "oee_pct", "demand_units_per_day",
+        "defect_rate_pct", "labor_cost_per_day", "scrap_loss_per_day", "utilisation_pct",
+        "daily_revenue", "daily_margin",
+    }
+)
+
+
+def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
+    """Compute projected manufacturing outcomes after applying `changes` to `baseline`.
+
+    Baseline parameters (all optional, sensible defaults used): shifts_per_day,
+    shift_hours, workers_per_shift, avg_wage_per_hour, throughput_per_shift,
+    oee_pct, demand_units_per_day, defect_rate_pct, scrap_cost_per_unit,
+    raw_material_cost_per_unit, selling_price_per_unit.
+
+    Changes accepted (same keys as baseline, plus): demand_change_pct,
+    oee_change_pct (percentage points), defect_change_pct (percentage points).
+    """
+    baseline_snap = _project(baseline, {})
+    projected_snap = _project(baseline, changes)
+
+    b_capacity_day = baseline_snap["daily_capacity"]
+    p_capacity_day = projected_snap["daily_capacity"]
+    b_oee = baseline_snap["oee_pct"]
+    p_oee = projected_snap["oee_pct"]
+    b_defect = baseline_snap["defect_rate_pct"]
+    p_defect = projected_snap["defect_rate_pct"]
+    b_scrap_loss = baseline_snap["scrap_loss_per_day"]
+    p_scrap_loss = projected_snap["scrap_loss_per_day"]
+    b_labor_day = baseline_snap["labor_cost_per_day"]
+    p_labor_day = projected_snap["labor_cost_per_day"]
+    b_margin = baseline_snap["daily_margin"]
+    p_margin = projected_snap["daily_margin"]
+    p_demand = projected_snap["demand_units_per_day"]
+    p_utilisation = projected_snap["utilisation_pct"]
     p_capacity_gap = p_capacity_day - p_demand
 
     insights: list[str] = []
@@ -188,33 +242,6 @@ def run_whatif(scenario_name: str, baseline: dict[str, Any], changes: dict[str, 
     if not insights:
         insights.append("No significant changes detected. Adjust parameters to model a different scenario.")
 
-    def _snap(shifts, shift_hrs, workers, machines, tput_shift, oee, demand, defect, labor, capacity, good, scrap_loss, utilisation, revenue, margin):
-        return {
-            "shifts_per_day": round(shifts, 1),
-            "shift_hours": round(shift_hrs, 1),
-            "workers_per_shift": round(workers, 1),
-            "machine_count": round(machines, 1),
-            "throughput_per_shift": round(tput_shift, 1),
-            "daily_capacity": round(capacity, 1),
-            "good_units_per_day": round(good, 1),
-            "oee_pct": round(oee, 2),
-            "demand_units_per_day": round(demand, 1),
-            "defect_rate_pct": round(defect, 2),
-            "labor_cost_per_day": round(labor, 2),
-            "scrap_loss_per_day": round(scrap_loss, 2),
-            "utilisation_pct": round(utilisation, 2),
-            "daily_revenue": round(revenue, 2),
-            "daily_margin": round(margin, 2),
-        }
-
-    baseline_snap = _snap(
-        b_shifts, b_shift_hrs, b_workers, b_machines, b_tput_shift, b_oee, b_demand, b_defect,
-        b_labor_day, b_capacity_day, b_good_units, b_scrap_loss, b_utilisation, b_revenue, b_margin,
-    )
-    projected_snap = _snap(
-        p_shifts, p_shift_hrs, p_workers, p_machines, p_tput_shift, p_oee, p_demand, p_defect,
-        p_labor_day, p_capacity_day, p_good_units, p_scrap_loss, p_utilisation, p_revenue, p_margin,
-    )
     delta_snap = {k: _delta(baseline_snap[k], projected_snap[k]) for k in baseline_snap}
 
     return {
@@ -320,7 +347,6 @@ def derive_baseline_from_rows(
     baseline: dict[str, Any] = {
         "shifts_per_day": round(shifts_per_day, 1),
         "shift_hours": shift_hours,
-        "machine_count": round(machine_count, 0),
         "throughput_per_shift": round(throughput_per_shift, 1),
         "oee_pct": oee_pct,
         "defect_rate_pct": defect_rate_pct,
@@ -340,7 +366,7 @@ def derive_baseline_from_rows(
         assumptions.append("performance (no target-rate column found — OEE assumes 100% performance)")
     assumptions.append("demand_units_per_day (assumed equal to current good output)")
 
-    derived_fields = ["shifts_per_day", "shift_hours", "machine_count", "throughput_per_shift", "oee_pct", "defect_rate_pct"]
+    derived_fields = ["shifts_per_day", "shift_hours", "throughput_per_shift", "oee_pct", "defect_rate_pct"]
 
     provenance = {
         "rows": len(rows),
@@ -362,3 +388,169 @@ def derive_baseline_from_rows(
         "mapping": m,
         "derived_fields": derived_fields,
     }
+
+
+DEFAULT_CV: dict[str, float] = {
+    "oee_pct": 0.05,
+    "defect_rate_pct": 0.15,
+    "throughput_per_shift": 0.05,
+    "demand_units_per_day": 0.10,
+}
+
+
+def derive_variance_from_rows(
+    headers: list[str],
+    rows: list[dict[str, Any]],
+    mapping: dict[str, str | None] | None = None,
+) -> dict[str, float]:
+    """Per-metric coefficient of variation (std/mean across calendar days),
+    for run_monte_carlo()'s sampling. Groups rows by day (same _day_key/
+    auto_map_columns as derive_baseline_from_rows) and computes a daily
+    oee_pct/defect_rate_pct/throughput_per_shift series; any metric with
+    fewer than 3 distinct days of history falls back to DEFAULT_CV (too
+    little data for a meaningful spread). Falls back entirely to DEFAULT_CV
+    if the required columns (planned/operating time, total/good units,
+    date) aren't present.
+
+    ponytail: daily OEE here is availability x quality only (no performance
+    factor - that needs a target-rate column not guaranteed to be mapped).
+    This is a variance *estimate*, not the precise OEE baseline value -
+    revisit if bands look too tight/loose against real plant data."""
+    m = mapping or auto_map_columns(headers)
+    c_planned, c_oper = m.get("planned_time"), m.get("operating_time")
+    c_total, c_good, c_date = m.get("total_units"), m.get("good_units"), m.get("date")
+
+    if not (c_planned and c_oper and c_total and c_good and c_date):
+        return dict(DEFAULT_CV)
+
+    by_day: dict[str, dict[str, float]] = {}
+    for row in rows:
+        day = _day_key(row.get(c_date))
+        if not day:
+            continue
+        d = by_day.setdefault(day, {"planned": 0.0, "oper": 0.0, "total": 0.0, "good": 0.0})
+        d["planned"] += _safe(row.get(c_planned))
+        d["oper"] += _safe(row.get(c_oper))
+        d["total"] += _safe(row.get(c_total))
+        d["good"] += _safe(row.get(c_good))
+
+    daily_oee: list[float] = []
+    daily_defect: list[float] = []
+    daily_tput: list[float] = []
+    for d in by_day.values():
+        if d["planned"] <= 0 or d["total"] <= 0:
+            continue
+        availability = min(1.0, d["oper"] / d["planned"])
+        quality = min(1.0, d["good"] / d["total"])
+        daily_oee.append(availability * quality * 100)
+        daily_defect.append((1 - quality) * 100)
+        daily_tput.append(d["total"])
+
+    variance = dict(DEFAULT_CV)
+    for key, series in (
+        ("oee_pct", daily_oee),
+        ("defect_rate_pct", daily_defect),
+        ("throughput_per_shift", daily_tput),
+    ):
+        if len(series) >= 3:
+            mean = statistics.fmean(series)
+            if mean:
+                variance[key] = statistics.stdev(series) / mean
+    return variance
+
+
+def run_monte_carlo(
+    baseline: dict[str, Any],
+    changes: dict[str, Any],
+    variance: dict[str, float],
+    trials: int = 2000,
+) -> dict[str, dict[str, float]]:
+    """Sample the varying baseline metrics `trials` times from a clipped
+    normal distribution using `variance`'s coefficients of variation, apply
+    `changes` deterministically on top via _project(), and return each
+    projected metric's P10/P50/P90 across the trials. A metric with CV <= 0
+    is held fixed at its baseline value in every trial (this is how
+    zero-variance input collapses the bands to a single deterministic
+    value, with no sampling noise at all)."""
+    baseline_snap = _project(baseline, {})
+    results: dict[str, list[float]] = {k: [] for k in PROJECTED_METRIC_KEYS}
+
+    for _ in range(trials):
+        sampled = dict(baseline)
+        trial_changes = dict(changes)
+        for key, cv in variance.items():
+            if cv <= 0:
+                continue
+            mean = baseline_snap.get(key, 0.0)
+            if mean <= 0:
+                continue
+            value = random.gauss(mean, cv * mean)
+            if key == "oee_pct":
+                # OEE only affects output via _project()'s p_oee/b_oee ratio, which
+                # is a no-op unless `changes` carries an explicit OEE delta - mutating
+                # the baseline dict's oee_pct (like every other sampled metric) would
+                # silently have zero effect. Express the sample as a delta instead.
+                value = max(0.0, min(100.0, value))
+                base_change = _safe(trial_changes.get("oee_change_pct"), 0)
+                trial_changes["oee_change_pct"] = base_change + (value - mean)
+            else:
+                sampled[key] = max(0.0, value)
+        projected = _project(sampled, trial_changes)
+        for k, v in projected.items():
+            results[k].append(v)
+
+    bands: dict[str, dict[str, float]] = {}
+    for key, values in results.items():
+        qs = statistics.quantiles(values, n=100)
+        bands[key] = {"p10": round(qs[9], 1), "p50": round(qs[49], 1), "p90": round(qs[89], 1)}
+    return bands
+
+
+def run_sensitivity(
+    baseline: dict[str, Any],
+    changes: dict[str, Any],
+    variance: dict[str, float],
+    target_metric: str,
+) -> list[dict[str, Any]]:
+    """Rank baseline parameters by how much swinging them +/-1 standard
+    deviation (using `variance`'s coefficients of variation - the same
+    'plausible range' run_monte_carlo() samples from) moves `target_metric`,
+    holding everything else at baseline and `changes` fixed. Returns the
+    top 8 by impact, descending. A parameter with CV <= 0 never appears -
+    it has no plausible range to sweep."""
+    baseline_snap = _project(baseline, {})
+    ranked: list[dict[str, Any]] = []
+
+    for key, cv in variance.items():
+        if cv <= 0:
+            continue
+        mean = baseline_snap.get(key, 0.0)
+        if mean <= 0:
+            continue
+        spread = cv * mean
+
+        if key == "oee_pct":
+            # Same reason as run_monte_carlo(): OEE only affects output via a
+            # changes-expressed delta, not via the baseline dict directly.
+            base_change = _safe(changes.get("oee_change_pct"), 0)
+            low_proj = _project(baseline, {**changes, "oee_change_pct": base_change - spread})[target_metric]
+            high_proj = _project(baseline, {**changes, "oee_change_pct": base_change + spread})[target_metric]
+        else:
+            low_input, high_input = dict(baseline), dict(baseline)
+            low_input[key] = max(0.0, mean - spread)
+            high_input[key] = mean + spread
+            low_proj = _project(low_input, changes)[target_metric]
+            high_proj = _project(high_input, changes)[target_metric]
+
+        ranked.append(
+            {
+                "parameter": key,
+                "baseline_value": round(mean, 2),
+                "low_value": low_proj,
+                "high_value": high_proj,
+                "impact": round(abs(high_proj - low_proj), 2),
+            }
+        )
+
+    ranked.sort(key=lambda r: r["impact"], reverse=True)
+    return ranked[:8]

@@ -73,11 +73,15 @@ def detect_intents(question: str) -> list[str]:
 
 
 def _matched_items(lines: list[InventoryAnalyticsLine], q_lower: str) -> list[InventoryAnalyticsLine]:
-    """Items the question names by sku or name.
-    ponytail: substring match against data already in hand, not NER - a very
-    short sku could false-match inside another word; add word-boundary/fuzzy
-    matching if that becomes a real complaint."""
-    return [ln for ln in lines if ln.item_sku.lower() in q_lower or ln.item_name.lower() in q_lower]
+    """Items the question names by sku or name, matched on a word boundary so
+    a shorter sku can't false-match inside a longer one (e.g. WIDGET-1 inside
+    WIDGET-10)."""
+    return [
+        ln
+        for ln in lines
+        if re.search(rf"\b{re.escape(ln.item_sku.lower())}\b", q_lower)
+        or re.search(rf"\b{re.escape(ln.item_name.lower())}\b", q_lower)
+    ]
 
 
 def _filter_lines(lines: list[InventoryAnalyticsLine], q_lower: str) -> list[InventoryAnalyticsLine]:

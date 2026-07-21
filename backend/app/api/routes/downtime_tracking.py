@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,11 +91,14 @@ async def list_open_incidents_route(
 @router.post("/incidents/{incident_id}/end", response_model=IncidentEndResponse)
 async def end_incident_route(
     incident_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     incident = await _get_incident(db, current, incident_id)
-    dataset_id = await dt_service.end_incident(db, incident, org_id=current.org_id, created_by=current.id)
+    dataset_id = await dt_service.end_incident(
+        db, incident, org_id=current.org_id, created_by=current.id, background_tasks=background_tasks
+    )
     await db.commit()
     await db.refresh(incident)
     return IncidentEndResponse(incident=_to_response(incident), live_dataset_id=str(dataset_id))

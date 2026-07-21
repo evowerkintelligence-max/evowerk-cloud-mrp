@@ -9,7 +9,6 @@ import uuid
 from typing import Any
 
 import joblib
-import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -18,8 +17,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
+from app.models.automl_live_binding import AutoMLLiveBinding
 from app.models.automl_run import AutoMLRun
-from app.services import automl_engine, automl_storage, datasets as datasets_service
+from app.models.realtime import RealtimeStream
+from app.services import (
+    automl_engine,
+    automl_realtime,
+    automl_runner,
+    automl_storage,
+    automl_templates,
+    datasets as datasets_service,
+)
 from app.services.automl_runner import execute_automl_run
 
 router = APIRouter(prefix="/automl", tags=["automl"])
@@ -39,6 +47,26 @@ class TrainRequest(BaseModel):
     forecast_strategy: str = "direct"
     time_budget_seconds: int | None = None
     search_method: str = "random"
+    auto_retrain: bool = False
+
+
+class TemplateRoleResponse(BaseModel):
+    key: str
+    label: str
+    required: bool
+
+
+class TemplateSummary(BaseModel):
+    id: str
+    label: str
+    roles: list[TemplateRoleResponse]
+
+
+class TemplateRunRequest(BaseModel):
+    name: str
+    dataset_id: uuid.UUID
+    column_map: dict[str, str]
+    config: dict[str, Any] = {}
 
 
 class RunSummary(BaseModel):
@@ -55,6 +83,8 @@ class RunSummary(BaseModel):
     created_at: str
     started_at: str | None
     finished_at: str | None
+    auto_retrain: bool
+    retrained_from_run_id: str | None
 
 
 class RunDetail(RunSummary):
@@ -72,6 +102,44 @@ class RowExplainRequest(BaseModel):
     row: dict[str, Any]
 
 
+class LiveBindRequest(BaseModel):
+    stream_id: uuid.UUID
+    metric_name: str = "automl_risk_score"
+    drift_severity_trigger: str = "moderate"
+    drift_check_interval_minutes: int = 1440
+    auto_retrain_on_drift: bool = False
+
+
+class LiveBindingResponse(BaseModel):
+    id: str
+    run_id: str
+    stream_id: str
+    metric_name: str
+    drift_severity_trigger: str
+    drift_check_interval_minutes: int
+    auto_retrain_on_drift: bool
+    enabled: bool
+    last_scored_at: str | None
+    last_drift_check_at: str | None
+    last_drift_status: str | None
+
+
+def _binding_response(b: AutoMLLiveBinding) -> LiveBindingResponse:
+    return LiveBindingResponse(
+        id=str(b.id),
+        run_id=str(b.run_id),
+        stream_id=str(b.stream_id),
+        metric_name=b.metric_name,
+        drift_severity_trigger=b.drift_severity_trigger,
+        drift_check_interval_minutes=b.drift_check_interval_minutes,
+        auto_retrain_on_drift=b.auto_retrain_on_drift,
+        enabled=b.enabled,
+        last_scored_at=b.last_scored_at.isoformat() if b.last_scored_at else None,
+        last_drift_check_at=b.last_drift_check_at.isoformat() if b.last_drift_check_at else None,
+        last_drift_status=b.last_drift_status,
+    )
+
+
 def _summary(r: AutoMLRun) -> RunSummary:
     return RunSummary(
         id=str(r.id),
@@ -87,6 +155,8 @@ def _summary(r: AutoMLRun) -> RunSummary:
         created_at=r.created_at.isoformat(),
         started_at=r.started_at.isoformat() if r.started_at else None,
         finished_at=r.finished_at.isoformat() if r.finished_at else None,
+        auto_retrain=r.auto_retrain,
+        retrained_from_run_id=str(r.retrained_from_run_id) if r.retrained_from_run_id else None,
     )
 
 
@@ -111,17 +181,6 @@ def _load_pipeline(run: AutoMLRun):
     return joblib.load(run.model_path)
 
 
-def _load_explain_sample(org_id: uuid.UUID, run_id: uuid.UUID) -> tuple[pd.DataFrame | None, pd.Series | None]:
-    run_dir = automl_storage.run_dir(org_id, run_id)
-    x_path, y_path = run_dir / "explain_X.csv", run_dir / "explain_y.csv"
-    if not x_path.exists() or not y_path.exists():
-        return None, None
-    X = pd.read_csv(x_path)
-    ydf = pd.read_csv(y_path)
-    y = ydf["y"] if "y" in ydf.columns else ydf.iloc[:, 0]
-    return X, y
-
-
 @router.get("/algorithms")
 async def get_algorithms(task: str, current: CurrentUser = Depends(get_current_user)):
     try:
@@ -129,6 +188,54 @@ async def get_algorithms(task: str, current: CurrentUser = Depends(get_current_u
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown task '{task}'") from None
     return automl_engine.algorithm_roster(automl_task)
+
+
+@router.get("/templates", response_model=list[TemplateSummary])
+async def list_templates(current: CurrentUser = Depends(get_current_user)):
+    return [
+        TemplateSummary(
+            id=t.id, label=t.label,
+            roles=[TemplateRoleResponse(key=r.key, label=r.label, required=r.required) for r in t.roles],
+        )
+        for t in automl_templates.list_templates()
+    ]
+
+
+@router.post("/templates/{template_id}/runs", response_model=RunDetail, status_code=status.HTTP_202_ACCEPTED)
+async def create_template_run(
+    template_id: str,
+    req: TemplateRunRequest,
+    background_tasks: BackgroundTasks,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        template = automl_templates.get_template(template_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown AutoML template '{template_id}'") from None
+
+    dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
+
+    run = AutoMLRun(
+        org_id=current.org_id,
+        dataset_id=dataset.id,
+        created_by=current.id,
+        name=req.name,
+        task="classification",  # placeholder until the run finishes - automl_runner._execute()'s
+                                 # template branch (Task 6) overwrites this with pre.task once
+                                 # preprocess() runs; queued/running polls will read this default.
+        target_column="",       # same - overwritten with pre.target_col once preprocess() runs
+        template_id=template.id,
+        config={"column_map": req.column_map, **req.config},
+        status="queued",
+    )
+    db.add(run)
+    await log_event(db, action="automl.template_train", org_id=current.org_id, actor_user_id=current.id, metadata={"name": req.name, "template_id": template.id})
+    await db.commit()
+    await db.refresh(run)
+
+    background_tasks.add_task(execute_automl_run, str(run.id), str(current.org_id))
+    return _detail(run)
 
 
 @router.get("/runs", response_model=list[RunSummary])
@@ -152,10 +259,11 @@ async def create_run(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown task '{req.task}'") from None
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
 
-    run = AutoMLRun(
+    run = await automl_runner.create_run(
+        db,
         org_id=current.org_id,
-        dataset_id=dataset.id,
         created_by=current.id,
+        dataset_id=dataset.id,
         name=req.name,
         task=req.task,
         target_column=req.target_column,
@@ -170,9 +278,8 @@ async def create_run(
             "time_budget_seconds": req.time_budget_seconds,
             "search_method": req.search_method,
         },
-        status="queued",
+        auto_retrain=req.auto_retrain,
     )
-    db.add(run)
     await log_event(db, action="automl.train", org_id=current.org_id, actor_user_id=current.id, metadata={"name": req.name, "task": req.task})
     await db.commit()
     await db.refresh(run)
@@ -220,7 +327,7 @@ async def forecast_trajectory(
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, run.dataset_id)
     pipe = _load_pipeline(run)
     df = datasets_service.dataframe_for(dataset)
-    Xs, ys = _load_explain_sample(current.org_id, run_id)
+    Xs, ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.forecast_trajectory(pipe, run.meta or {}, df, Xs, ys, steps=steps)
     except ValueError as exc:
@@ -232,7 +339,7 @@ async def explain(run_id: uuid.UUID, current: CurrentUser = Depends(get_current_
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
-    Xs, ys = _load_explain_sample(current.org_id, run_id)
+    Xs, ys = automl_storage.load_explain_sample(current.org_id, run_id)
     return automl_engine.explain_model(pipe, run.meta or {}, Xs, ys)
 
 
@@ -243,7 +350,7 @@ async def explain_row(
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
-    Xs, ys = _load_explain_sample(current.org_id, run_id)
+    Xs, ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.explain_row(pipe, run.meta or {}, Xs, ys, req.row)
     except (ValueError, RuntimeError) as exc:
@@ -257,7 +364,7 @@ async def partial_dependence(
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
     pipe = _load_pipeline(run)
-    Xs, _ys = _load_explain_sample(current.org_id, run_id)
+    Xs, _ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.partial_dependence_data(pipe, run.meta or {}, Xs, feature)
     except ValueError as exc:
@@ -272,8 +379,49 @@ async def drift_check(
     _require_success(run)
     dataset = await datasets_service.get_dataset_or_404(db, current.org_id, req.dataset_id)
     df = datasets_service.dataframe_for(dataset)
-    Xs, _ys = _load_explain_sample(current.org_id, run_id)
+    Xs, _ys = automl_storage.load_explain_sample(current.org_id, run_id)
     try:
         return automl_engine.check_data_drift(run.meta or {}, Xs, df)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/live-bind", response_model=LiveBindingResponse, status_code=status.HTTP_201_CREATED)
+async def create_live_binding(
+    run_id: uuid.UUID, req: LiveBindRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
+    _require_success(run)
+    stream = await get_or_404(db, RealtimeStream, current.org_id, req.stream_id, "Stream not found")
+
+    binding = AutoMLLiveBinding(
+        org_id=current.org_id,
+        run_id=run.id,
+        stream_id=stream.id,
+        metric_name=req.metric_name,
+        drift_severity_trigger=req.drift_severity_trigger,
+        drift_check_interval_minutes=req.drift_check_interval_minutes,
+        auto_retrain_on_drift=req.auto_retrain_on_drift,
+    )
+    run.source_stream_id = stream.id
+    db.add(binding)
+    await log_event(
+        db, action="automl.live_bind", org_id=current.org_id, actor_user_id=current.id,
+        metadata={"run_id": str(run.id), "stream_id": str(stream.id), "metric_name": req.metric_name},
+    )
+    await db.commit()
+    await db.refresh(binding)
+
+    automl_realtime.start_binding_scheduler(binding.id, current.org_id)
+    return _binding_response(binding)
+
+
+@router.delete("/live-bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_live_binding(
+    binding_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    binding = await get_or_404(db, AutoMLLiveBinding, current.org_id, binding_id, "Live binding not found")
+    automl_realtime.stop_binding_scheduler(binding.id)
+    await db.delete(binding)
+    await log_event(db, action="automl.live_binding_deleted", org_id=current.org_id, actor_user_id=current.id, target=str(binding_id))
+    await db.commit()

@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -404,6 +404,27 @@ async def update_item(
     if "unit_of_measure" in body.model_fields_set:
         if not body.unit_of_measure:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "unit_of_measure must not be empty")
+        if body.unit_of_measure != item.unit_of_measure:
+            # BomLine.quantity/ItemUnit.factor_to_base are numeric magnitudes
+            # fixed relative to this item's unit_of_measure at authoring time
+            # (bom.py: "always read it from the joined Item... a line can
+            # never disagree with its own component's base unit"). Changing
+            # the unit out from under an existing reference wouldn't touch
+            # those stored numbers, silently reinterpreting their magnitude.
+            referenced = await db.scalar(
+                select(func.count())
+                .select_from(BomLine)
+                .where(BomLine.component_item_id == item.id)
+            )
+            has_units = await db.scalar(
+                select(func.count()).select_from(ItemUnit).where(ItemUnit.item_id == item.id)
+            )
+            if referenced or has_units:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "unit_of_measure can't change once this item is used as a BOM component "
+                    "or has custom units - existing quantities are fixed to the current unit",
+                )
         item.unit_of_measure = body.unit_of_measure
         metadata["unit_of_measure"] = body.unit_of_measure
     if "description" in body.model_fields_set:

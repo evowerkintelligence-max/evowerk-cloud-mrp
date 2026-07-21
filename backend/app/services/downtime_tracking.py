@@ -10,7 +10,7 @@ import io
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,7 +80,9 @@ async def get_live_dataset_id(db: AsyncSession, org_id: uuid.UUID) -> uuid.UUID 
     return live.dataset_id if live else None
 
 
-async def _materialize(db: AsyncSession, *, org_id: uuid.UUID, created_by: uuid.UUID) -> uuid.UUID:
+async def _materialize(
+    db: AsyncSession, *, org_id: uuid.UUID, created_by: uuid.UUID, background_tasks: "BackgroundTasks | None" = None
+) -> uuid.UUID:
     rows = (
         await db.execute(
             select(DowntimeIncident)
@@ -114,18 +116,23 @@ async def _materialize(db: AsyncSession, *, org_id: uuid.UUID, created_by: uuid.
         return dataset.id
 
     dataset = await ds_service.resolve_dataset(db, org_id, str(live.dataset_id))
-    await ds_service.overwrite_dataset_file(db, dataset, data=csv_bytes)
+    await ds_service.overwrite_dataset_file(db, dataset, data=csv_bytes, background_tasks=background_tasks)
     return dataset.id
 
 
 async def end_incident(
-    db: AsyncSession, incident: DowntimeIncident, *, org_id: uuid.UUID, created_by: uuid.UUID
+    db: AsyncSession,
+    incident: DowntimeIncident,
+    *,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    background_tasks: "BackgroundTasks | None" = None,
 ) -> uuid.UUID:
     if incident.ended_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Incident is already ended")
     incident.ended_at = datetime.now(timezone.utc)
     await db.flush()
-    return await _materialize(db, org_id=org_id, created_by=created_by)
+    return await _materialize(db, org_id=org_id, created_by=created_by, background_tasks=background_tasks)
 
 
 async def discard_incident(db: AsyncSession, incident: DowntimeIncident) -> None:

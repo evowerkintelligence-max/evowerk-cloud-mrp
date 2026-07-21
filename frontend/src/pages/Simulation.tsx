@@ -9,14 +9,13 @@ import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { useDatasets } from "@/pages/analytics/shared";
+import { SendToReportButton, useDatasets } from "@/pages/analytics/shared";
 
 interface Baseline {
   shifts_per_day: number;
   shift_hours: number;
   workers_per_shift: number;
   avg_wage_per_hour: number;
-  machine_count: number;
   throughput_per_shift: number;
   oee_pct: number;
   demand_units_per_day: number;
@@ -31,7 +30,6 @@ const DEFAULT_BASELINE: Baseline = {
   shift_hours: 8,
   workers_per_shift: 25,
   avg_wage_per_hour: 20,
-  machine_count: 10,
   throughput_per_shift: 1000,
   oee_pct: 75,
   demand_units_per_day: 1800,
@@ -46,7 +44,6 @@ const BASELINE_FIELDS: { key: keyof Baseline; label: string; step?: string }[] =
   { key: "shift_hours", label: "Shift hours" },
   { key: "workers_per_shift", label: "Workers / shift" },
   { key: "avg_wage_per_hour", label: "Avg wage / hour ($)", step: "0.01" },
-  { key: "machine_count", label: "Machine count" },
   { key: "throughput_per_shift", label: "Throughput / shift (units)" },
   { key: "oee_pct", label: "OEE (%)", step: "0.1" },
   { key: "demand_units_per_day", label: "Demand (units/day)" },
@@ -55,6 +52,8 @@ const BASELINE_FIELDS: { key: keyof Baseline; label: string; step?: string }[] =
   { key: "raw_material_cost_per_unit", label: "Raw material cost / unit ($)", step: "0.01" },
   { key: "selling_price_per_unit", label: "Selling price / unit ($)", step: "0.01" },
 ];
+
+const BASELINE_FIELD_LABELS: Record<string, string> = Object.fromEntries(BASELINE_FIELDS.map((f) => [f.key, f.label]));
 
 type Changes = Record<string, number>;
 
@@ -105,12 +104,40 @@ function deltaColor(key: string, direction: string) {
   return positive ? "text-success" : "text-destructive";
 }
 
+function resultMetricKeys(result: SimResult): string[] {
+  return Object.keys(METRIC_LABELS).filter((k) => k in result.baseline);
+}
+
+function resultToReportText(result: SimResult): string {
+  const lines = resultMetricKeys(result).map(
+    (k) => `${METRIC_LABELS[k]}: ${fmtVal(k, result.baseline[k])} → ${fmtVal(k, result.projected[k])}`,
+  );
+  return [...lines, "", ...result.insights].join("\n");
+}
+
+interface Band {
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+interface SensitivityEntry {
+  parameter: string;
+  baseline_value: number;
+  low_value: number;
+  high_value: number;
+  impact: number;
+}
+
 interface SimResult {
   scenario_name: string;
   baseline: Record<string, number>;
   projected: Record<string, number>;
   delta: Record<string, { absolute: number; pct: number; direction: string }>;
   insights: string[];
+  bands?: Record<string, Band>;
+  sensitivity?: { target_metric: string; ranked: SensitivityEntry[] };
+  variance_source?: "dataset" | "default";
 }
 
 interface BaselineDerivation {
@@ -161,7 +188,8 @@ export function Simulation() {
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
   const [result, setResult] = useState<SimResult | null>(null);
-  const [downloading, setDownloading] = useState(false);
+  const [targetMetric, setTargetMetric] = useState("daily_margin");
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
 
   const loadBaseline = useMutation({
     mutationFn: async () => {
@@ -228,8 +256,33 @@ export function Simulation() {
     },
   });
 
+  const runMonteCarlo = useMutation({
+    mutationFn: async () => {
+      await j(
+        apiFetch(`/simulation/${simulationId}`, {
+          method: "PUT",
+          body: JSON.stringify({ name: scenarioName, baseline, changes }),
+        }),
+      );
+      return j<SimulationRun>(
+        apiFetch(`/simulation/${simulationId}/run/monte-carlo`, {
+          method: "POST",
+          body: JSON.stringify({ changes: {}, target_metric: targetMetric }),
+        }),
+      );
+    },
+    onSuccess: (data) => {
+      setResult(data.result);
+      qc.invalidateQueries({ queryKey: ["simulation-runs", simulationId] });
+      qc.invalidateQueries({ queryKey: ["simulations"] });
+    },
+  });
+
   const del = useMutation({
-    mutationFn: (id: string) => apiFetch(`/simulation/${id}`, { method: "DELETE" }),
+    mutationFn: async (id: string) => {
+      const res = await apiFetch(`/simulation/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Delete failed");
+    },
     onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ["simulations"] });
       if (id === simulationId) setSimulationId(null);
@@ -257,7 +310,8 @@ export function Simulation() {
   }
 
   async function downloadRun(simId: string, runId: string, fmt: "csv" | "xlsx") {
-    setDownloading(true);
+    const key = `${runId}:${fmt}`;
+    setDownloadingKey(key);
     try {
       const res = await apiFetch(`/simulation/${simId}/runs/${runId}/export?fmt=${fmt}`);
       if (!res.ok) throw new Error("Export failed");
@@ -268,8 +322,14 @@ export function Simulation() {
       a.click();
       URL.revokeObjectURL(url);
     } finally {
-      setDownloading(false);
+      setDownloadingKey((k) => (k === key ? null : k));
     }
+  }
+
+  function toggleExpandedSim(id: string) {
+    setExpandedSimId((cur) => (cur === id ? null : id));
+    setCompareA("");
+    setCompareB("");
   }
 
   function setBaselineField(key: keyof Baseline, value: string) {
@@ -377,15 +437,28 @@ export function Simulation() {
               {simulationId ? "Save as new" : "Save simulation"}
             </Button>
             {simulationId && (
-              <Button variant="secondary" loading={runAndSave.isPending} onClick={() => runAndSave.mutate()}>
-                Run &amp; save to history
-              </Button>
+              <>
+                <Button variant="secondary" loading={runAndSave.isPending} onClick={() => runAndSave.mutate()}>
+                  Run &amp; save to history
+                </Button>
+                <Select value={targetMetric} onChange={(e) => setTargetMetric(e.target.value)} className="w-56">
+                  {Object.entries(METRIC_LABELS).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+                <Button variant="secondary" loading={runMonteCarlo.isPending} onClick={() => runMonteCarlo.mutate()}>
+                  Run with confidence range
+                </Button>
+              </>
             )}
           </div>
           {!hasChanges && <p className="text-xs text-muted-foreground">Enter at least one change above, or apply a preset.</p>}
           {run.isError && <Alert variant="destructive">{(run.error as Error).message}</Alert>}
           {save.isError && <Alert variant="destructive">{(save.error as Error).message}</Alert>}
           {runAndSave.isError && <Alert variant="destructive">{(runAndSave.error as Error).message}</Alert>}
+          {runMonteCarlo.isError && <Alert variant="destructive">{(runMonteCarlo.error as Error).message}</Alert>}
         </CardContent>
       </Card>
 
@@ -395,6 +468,14 @@ export function Simulation() {
             <CardTitle>{result.scenario_name}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
+            <SendToReportButton spec={{ type: "text", text: resultToReportText(result) }} label={result.scenario_name} />
+            {result.variance_source && (
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground">
+                {result.variance_source === "dataset"
+                  ? "Confidence range: derived from your data"
+                  : "Confidence range: default estimate (no linked dataset)"}
+              </div>
+            )}
             <TableWrap>
               <Table>
                 <THead>
@@ -402,12 +483,12 @@ export function Simulation() {
                     <TH>Metric</TH>
                     <TH>Baseline</TH>
                     <TH>Projected</TH>
+                    {result.bands && <TH>Range (P10–P90)</TH>}
                     <TH>Δ</TH>
                   </TR>
                 </THead>
                 <TBody>
-                  {Object.keys(METRIC_LABELS)
-                    .filter((k) => k in result.baseline)
+                  {resultMetricKeys(result)
                     .map((k) => {
                       const d = result.delta[k] ?? { absolute: 0, pct: 0, direction: "unchanged" };
                       const arrow = d.direction === "increase" ? "↑" : d.direction === "decrease" ? "↓" : "→";
@@ -416,6 +497,11 @@ export function Simulation() {
                           <TD className="font-medium">{METRIC_LABELS[k]}</TD>
                           <TD>{fmtVal(k, result.baseline[k])}</TD>
                           <TD className="font-semibold">{fmtVal(k, result.projected[k])}</TD>
+                          {result.bands && (
+                            <TD className="text-muted-foreground">
+                              {result.bands[k] ? `${fmtVal(k, result.bands[k].p10)} – ${fmtVal(k, result.bands[k].p90)}` : "—"}
+                            </TD>
+                          )}
                           <TD className={deltaColor(k, d.direction) + " font-semibold"}>
                             {arrow} {fmtVal(k, d.absolute)} ({d.pct > 0 ? "+" : ""}
                             {d.pct.toFixed(1)}%)
@@ -434,6 +520,29 @@ export function Simulation() {
                 </div>
               ))}
             </div>
+
+            {result.sensitivity && result.sensitivity.ranked.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-medium">
+                  What moves {METRIC_LABELS[result.sensitivity.target_metric] ?? result.sensitivity.target_metric} the most
+                </div>
+                {(() => {
+                  const ranked = result.sensitivity!.ranked;
+                  const maxImpact = Math.max(...ranked.map((r) => r.impact), 1);
+                  return ranked.map((r) => (
+                    <div key={r.parameter} className="flex items-center gap-3 text-sm">
+                      <span className="w-40 shrink-0 text-muted-foreground">{BASELINE_FIELD_LABELS[r.parameter] ?? r.parameter}</span>
+                      <div className="h-3 flex-1 rounded-full bg-muted">
+                        <div className="h-3 rounded-full bg-primary" style={{ width: `${(r.impact / maxImpact) * 100}%` }} />
+                      </div>
+                      <span className="w-24 shrink-0 text-right text-xs text-muted-foreground">
+                        {fmtVal(result.sensitivity!.target_metric, r.impact)}
+                      </span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -462,7 +571,7 @@ export function Simulation() {
                         <Button size="sm" variant="secondary" onClick={() => loadSimulation(s)}>
                           Load
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setExpandedSimId(expandedSimId === s.id ? null : s.id)}>
+                        <Button size="sm" variant="ghost" onClick={() => toggleExpandedSim(s.id)}>
                           {expandedSimId === s.id ? "Hide runs" : "View runs"}
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => del.mutate(s.id)}>
@@ -487,10 +596,20 @@ export function Simulation() {
                                 <label className="flex items-center gap-1 text-xs text-muted-foreground">
                                   <input type="radio" name="compareB" checked={compareB === r.id} onChange={() => setCompareB(r.id)} /> B
                                 </label>
-                                <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "csv")}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  loading={downloadingKey === `${r.id}:csv`}
+                                  onClick={() => downloadRun(s.id, r.id, "csv")}
+                                >
                                   CSV
                                 </Button>
-                                <Button size="sm" variant="outline" loading={downloading} onClick={() => downloadRun(s.id, r.id, "xlsx")}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  loading={downloadingKey === `${r.id}:xlsx`}
+                                  onClick={() => downloadRun(s.id, r.id, "xlsx")}
+                                >
                                   XLSX
                                 </Button>
                               </div>

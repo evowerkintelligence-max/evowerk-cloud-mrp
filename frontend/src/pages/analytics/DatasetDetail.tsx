@@ -368,7 +368,9 @@ function CleanPanel({ d, onCreated }: { d: DatasetDetail; onCreated: (id: string
           fill_strategy: fillMissing ? fillStrategy : undefined,
           fill_value: fillMissing && fillStrategy === "custom" ? fillValue : undefined,
           remove_outliers: removeOutliers,
-          outlier_iqr_factor: removeOutliers ? Number(outlierFactor) || 1.5 : undefined,
+          outlier_iqr_factor: removeOutliers
+            ? (outlierFactor.trim() !== "" && Number.isFinite(Number(outlierFactor)) ? Number(outlierFactor) : 1.5)
+            : undefined,
           outlier_strategy: removeOutliers ? outlierStrategy : undefined,
           standardize_numeric: standardize,
           output_name: outputName.trim() || undefined,
@@ -1187,7 +1189,7 @@ export function DatasetDetail() {
     queryKey: ["dataset", id],
     queryFn: async () => {
       const res = await apiFetch(`/datasets/${id}`);
-      if (!res.ok) throw new Error("Dataset not found");
+      if (!res.ok) throw new Error(res.status === 404 ? "Dataset not found" : `Failed to load dataset (${res.status})`);
       return res.json();
     },
     enabled: !!id,
@@ -1206,7 +1208,13 @@ export function DatasetDetail() {
       </div>
     );
   }
-  if (!detail.data) return <Alert variant="destructive">Dataset not found.</Alert>;
+  if (!detail.data) {
+    return (
+      <Alert variant="destructive">
+        {detail.error instanceof Error ? detail.error.message : "Dataset not found."}
+      </Alert>
+    );
+  }
   const d = detail.data;
 
   return (

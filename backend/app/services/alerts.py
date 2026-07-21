@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
@@ -339,6 +339,159 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     )
 
 
+async def _eval_automl_risk(
+    db: AsyncSession, org_id: uuid.UUID, rule: AlertRule, dataset: Dataset,
+) -> AlertTrigger:
+    """Scores a dataset against an already-trained AutoML run's persisted
+    pipeline and flags rows above/below a threshold - the batch counterpart
+    to eval_stream_metric's live-stream case. Needs an async AutoMLRun
+    lookup unlike the other dataset evaluators (which are pure/sync), which
+    is why this isn't dispatched through _DATASET_EVALUATORS - see
+    evaluate_rule()."""
+    import joblib
+
+    from app.models.automl_run import AutoMLRun
+
+    cfg = rule.config
+    run_id = str(cfg.get("run_id") or "").strip()
+    threshold = float(cfg.get("threshold", 0.5))
+    comparison = cfg.get("comparison", "gt")
+    offender_col = str(cfg.get("offender_col") or "").strip()
+
+    if not run_id:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, "No AutoML run configured.")
+
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, f"Invalid run_id: {run_id}")
+
+    run = (
+        await db.execute(select(AutoMLRun).where(AutoMLRun.id == run_uuid, AutoMLRun.org_id == org_id))
+    ).scalar_one_or_none()
+    if run is None or run.status != "success" or not run.model_path:
+        return AlertTrigger(
+            str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
+            "AutoML run not found or has no trained model.",
+        )
+
+    if offender_col:
+        col_warn = _missing_columns(dataset, {"offender": offender_col})
+        if col_warn:
+            return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, col_warn)
+
+    try:
+        df = ds_service.dataframe_for(dataset)
+        pipe = joblib.load(run.model_path)
+    except Exception as exc:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, f"Error loading run: {exc}")
+
+    meta = run.meta or {}
+    feat_cols = [c for c in (meta.get("feature_columns") or []) if c in df.columns]
+    if not feat_cols:
+        # Template runs don't populate meta["feature_columns"] - fall back
+        # to "every column except the target", the same fallback
+        # automl_engine.predict_with_model() already uses for this case.
+        target_col = run.target_column
+        if target_col and target_col in df.columns:
+            feat_cols = [c for c in df.columns if c != target_col]
+        else:
+            feat_cols = list(df.columns)
+
+    X = df[feat_cols].copy() if feat_cols else df.copy()
+
+    try:
+        task = str(meta.get("task") or run.task or "").strip().lower()
+        if task == "classification" and hasattr(pipe, "predict_proba"):
+            proba = pipe.predict_proba(X)
+            scores = [float(row[1]) if len(row) == 2 else float(max(row)) for row in proba]
+        else:
+            scores = [float(v) for v in pipe.predict(X)]
+    except Exception as exc:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, f"Error scoring dataset: {exc}")
+
+    is_high = comparison != "lt"
+
+    if offender_col and offender_col in df.columns:
+        offender_values = df[offender_col].astype(str).tolist()
+        offenders = sorted({o for o, s in zip(offender_values, scores) if (s > threshold if is_high else s < threshold)})
+        value = max(scores) if is_high else min(scores)
+    else:
+        value = max(scores) if is_high else min(scores)
+        offenders = ["All"] if (value > threshold if is_high else value < threshold) else []
+
+    triggered = bool(offenders)
+    op_word = "above" if is_high else "below"
+    message = f"Predicted risk {value:.3f} {op_word} threshold {threshold:.3f}" + _offenders_suffix(offenders)
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, triggered, round(value, 4), threshold,
+        message, offenders,
+    )
+
+
+async def eval_cbm_anomaly(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
+    """Fires when a machine has any unacknowledged SensorAnomaly in the
+    trailing window (default 24h, config['window_hours'])."""
+    from app.models.sensor import SensorAnomaly
+
+    cfg = rule.config
+    machine = cfg.get("machine", "")
+    window_hours = float(cfg.get("window_hours", 24))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+
+    query = select(SensorAnomaly).where(
+        SensorAnomaly.org_id == org_id, SensorAnomaly.detected_at >= cutoff,
+        SensorAnomaly.acknowledged_at.is_(None),
+    )
+    if machine:
+        query = query.where(SensorAnomaly.machine == machine)
+    anomalies = (await db.execute(query)).scalars().all()
+
+    triggered = len(anomalies) > 0
+    machines = sorted({a.machine for a in anomalies})
+    message = (
+        f"{len(anomalies)} unacknowledged sensor anomal{'y' if len(anomalies) == 1 else 'ies'}"
+        f" in the last {window_hours:g}h" if triggered
+        else "No unacknowledged sensor anomalies."
+    )
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, triggered, float(len(anomalies)), 0.0,
+        message, machines,
+    )
+
+
+async def eval_cbm_rul(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
+    """Fires when a machine's 30-day failure probability crosses config['threshold']
+    (default 0.65, matching the app-wide "high risk" convention)."""
+    from app.services.rul import days_since_last_breakdown, failure_probability_30d, get_or_refit
+
+    cfg = rule.config
+    machine = cfg.get("machine", "")
+    threshold = float(cfg.get("threshold", 0.65))
+
+    if not machine:
+        return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold, "No machine configured.")
+
+    fit = await get_or_refit(db, org_id, machine)
+    age = await days_since_last_breakdown(db, org_id, machine)
+    prob = failure_probability_30d(fit, age)
+    if prob is None:
+        return AlertTrigger(
+            str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
+            f"Insufficient failure history for {machine} to estimate RUL.",
+        )
+
+    triggered = prob >= threshold
+    message = (
+        f"{machine}: {prob * 100:.1f}% 30-day failure probability (threshold {threshold * 100:.0f}%)"
+        if triggered else f"{machine}: {prob * 100:.1f}% 30-day failure probability (within threshold)"
+    )
+    return AlertTrigger(
+        str(rule.id), rule.name, rule.type, rule.severity, triggered, round(prob, 4), threshold,
+        message, [machine] if triggered else [],
+    )
+
+
 # ─── Andon / relay output ───────────────────────────────────────────────────
 
 async def _fire_webhook(rule: AlertRule, trigger: AlertTrigger) -> None:
@@ -390,6 +543,16 @@ async def evaluate_rule(
 ) -> AlertTrigger:
     if rule.type == "stream_metric":
         return eval_stream_metric(rule)
+    if rule.type == "automl_risk":
+        if rule.dataset_id is None:
+            return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, "No dataset configured.")
+        if dataset is None:
+            dataset = await ds_service.get_dataset_or_404(db, org_id, rule.dataset_id)
+        return await _eval_automl_risk(db, org_id, rule, dataset)
+    if rule.type == "cbm_anomaly":
+        return await eval_cbm_anomaly(db, org_id, rule)
+    if rule.type == "cbm_rul":
+        return await eval_cbm_rul(db, org_id, rule)
     evaluator = _DATASET_EVALUATORS.get(rule.type)
     if evaluator is None:
         raise ValueError(f"Unknown alert type: {rule.type}")
@@ -429,7 +592,7 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
     by_dataset: dict[uuid.UUID, list[AlertRule]] = {}
     solo: list[AlertRule] = []
     for rule in rules:
-        if rule.type != "stream_metric" and rule.dataset_id is not None:
+        if rule.type not in ("stream_metric", "cbm_anomaly", "cbm_rul") and rule.dataset_id is not None:
             by_dataset.setdefault(rule.dataset_id, []).append(rule)
         else:
             solo.append(rule)

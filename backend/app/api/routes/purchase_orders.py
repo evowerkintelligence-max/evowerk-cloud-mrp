@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -109,7 +110,7 @@ async def create_purchase_order(
 
     expected_delivery_date = body.expected_delivery_date
     if expected_delivery_date is None and supplier.lead_time_days is not None:
-        expected_delivery_date = date.today() + timedelta(days=supplier.lead_time_days)
+        expected_delivery_date = datetime.now(timezone.utc).date() + timedelta(days=supplier.lead_time_days)
 
     for attempt in range(MAX_PO_NUMBER_ATTEMPTS):
         max_number = await db.scalar(
@@ -323,7 +324,10 @@ async def receive_purchase_order(
         items_by_line_id[line.id] = item
 
     # Validate every receipt before writing any of them, so a bad line in the
-    # request can't leave a partial write applied.
+    # request can't leave a partial write applied. Tracked per-line so multiple
+    # receipt entries for the same po_line_id in one request accumulate against
+    # each other, not just against the pre-request quantity_received.
+    pending_by_line: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
     for receipt in receipts_in:
         if receipt.quantity <= 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
@@ -334,7 +338,8 @@ async def receive_purchase_order(
         line = lines_by_id.get(line_id)
         if line is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Purchase order line not found")
-        if line.quantity_received + receipt.quantity > line.quantity_ordered:
+        pending_by_line[line_id] += receipt.quantity
+        if line.quantity_received + pending_by_line[line_id] > line.quantity_ordered:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"Receiving {receipt.quantity} on line {line_id} would exceed the ordered quantity",

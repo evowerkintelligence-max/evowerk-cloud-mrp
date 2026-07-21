@@ -54,52 +54,17 @@ def upgrade() -> None:
     op.create_index("ix_simulation_runs_org_id", "simulation_runs", ["org_id"])
     op.create_index("ix_simulation_runs_simulation_id", "simulation_runs", ["simulation_id"])
 
-    op.drop_index("ix_what_if_scenario_runs_scenario_id", table_name="what_if_scenario_runs")
-    op.drop_index("ix_what_if_scenario_runs_org_id", table_name="what_if_scenario_runs")
-    op.drop_table("what_if_scenario_runs")
-
-    op.drop_index("ix_what_if_scenarios_dataset_id", table_name="what_if_scenarios")
-    op.drop_index("ix_what_if_scenarios_org_id", table_name="what_if_scenarios")
-    op.drop_table("what_if_scenarios")
+    # Archive rather than drop: what_if_scenarios' base_query shape has no
+    # equivalent in Simulation.baseline, so there's no lossless transform to
+    # migrate rows into the new tables - renaming keeps any existing data
+    # recoverable instead of discarding it outright.
+    op.rename_table("what_if_scenario_runs", "what_if_scenario_runs_archived")
+    op.rename_table("what_if_scenarios", "what_if_scenarios_archived")
 
 
 def downgrade() -> None:
-    op.create_table(
-        "what_if_scenarios",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("org_id", sa.Uuid(), nullable=False),
-        sa.Column("dataset_id", sa.Uuid(), nullable=False),
-        sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("description", sa.String(length=2000), nullable=False),
-        sa.Column("base_query", sa.JSON(), nullable=False),
-        sa.Column("parameters", sa.JSON(), nullable=False),
-        sa.Column("created_by", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["org_id"], ["orgs.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["dataset_id"], ["datasets.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["created_by"], ["users.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_what_if_scenarios_org_id", "what_if_scenarios", ["org_id"])
-    op.create_index("ix_what_if_scenarios_dataset_id", "what_if_scenarios", ["dataset_id"])
-
-    op.create_table(
-        "what_if_scenario_runs",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("org_id", sa.Uuid(), nullable=False),
-        sa.Column("scenario_id", sa.Uuid(), nullable=False),
-        sa.Column("params", sa.JSON(), nullable=False),
-        sa.Column("result", sa.JSON(), nullable=False),
-        sa.Column("created_by", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["org_id"], ["orgs.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["scenario_id"], ["what_if_scenarios.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["created_by"], ["users.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_what_if_scenario_runs_org_id", "what_if_scenario_runs", ["org_id"])
-    op.create_index("ix_what_if_scenario_runs_scenario_id", "what_if_scenario_runs", ["scenario_id"])
+    op.rename_table("what_if_scenarios_archived", "what_if_scenarios")
+    op.rename_table("what_if_scenario_runs_archived", "what_if_scenario_runs")
 
     op.drop_index("ix_simulation_runs_simulation_id", table_name="simulation_runs")
     op.drop_index("ix_simulation_runs_org_id", table_name="simulation_runs")

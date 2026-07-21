@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, String, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,6 +24,13 @@ class AutoMLRun(Base):
     )
     dataset_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    template_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Set when this run was trained (or re-trained) off a materialized RealtimeStream
+    # snapshot rather than a one-off upload - see app.services.automl_realtime. None
+    # for every ordinary run, including template runs trained from a static Dataset.
+    source_stream_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("realtime_streams.id", ondelete="SET NULL"), nullable=True
     )
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
@@ -52,3 +59,16 @@ class AutoMLRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+    # Opt-in, settable only at creation - see app.services.automl_retrain.
+    # True means "this run is the currently-watched one for its dataset."
+    auto_retrain: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Set on a run created by automl_retrain.maybe_retrain_for_dataset.
+    retrained_from_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("automl_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    # Consecutive auto-retrain attempts for this lineage that did NOT pass
+    # the quality gate; reset to 0 on a promoted retrain. The circuit
+    # breaker trips (auto_retrain -> False) once this reaches
+    # automl_retrain.MAX_AUTO_RETRAIN_STREAK.
+    auto_retrain_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, field_validator
@@ -21,6 +23,7 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 _settings = get_settings()
 _sql_rate_limit = rate_limit("dataset_sql_query", _settings.rate_limit_sql_query_per_5min, 300)
+_query_rate_limit = rate_limit("dataset_query", _settings.rate_limit_sql_query_per_5min, 300)
 
 
 class DatasetColumn(BaseModel):
@@ -102,12 +105,12 @@ class CleanRequest(BaseModel):
     trim_strings: bool = True
     drop_duplicates: bool = True
     fill_missing: bool = False
-    fill_strategy: str | None = None  # custom | mean | median | mode
+    fill_strategy: Literal["custom", "mean", "median", "mode"] | None = None
     fill_value: str | None = None
     remove_outliers: bool = False
     outlier_iqr_factor: float = 1.5
     outlier_columns: list[str] | None = None
-    outlier_strategy: str = "remove"  # remove | cap
+    outlier_strategy: Literal["remove", "cap"] = "remove"
     standardize_numeric: bool = False
     output_name: str | None = None
 
@@ -222,20 +225,29 @@ async def list_query_history(
 
 @router.delete("/query-history/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_query_history_entry(
-    entry_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    entry_id: uuid.UUID, current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
     try:
         await history_service.delete_query_history_entry(db, current.org_id, entry_id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    await log_event(
+        db, action="dataset.query_history.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(entry_id)
+    )
+    await db.commit()
 
 
 @router.delete("/query-history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_query_history(
     action: str | None = Query(None),
-    current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    current: CurrentUser = Depends(require_role("owner")), db: AsyncSession = Depends(get_db)
 ):
     await history_service.clear_query_history(db, current.org_id, action=action)
+    await log_event(
+        db, action="dataset.query_history.cleared", org_id=current.org_id, actor_user_id=current.id,
+        metadata={"action_filter": action},
+    )
+    await db.commit()
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetailResponse)
@@ -246,7 +258,12 @@ async def get_dataset(
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
     base = _to_response(dataset)
-    return DatasetDetailResponse(**base.model_dump(), preview=ds_service.preview_rows(dataset, limit=50))
+    # ponytail: preview is still fetched on every detail load even though only
+    # the Preview tab renders it - splitting it into its own lazy endpoint (like
+    # /health) would also mean updating useDatasetPreview/EngineScreen, which
+    # read this same response elsewhere. Upgrade if this shows up as a hot path.
+    preview = await asyncio.to_thread(ds_service.preview_rows, dataset, limit=50)
+    return DatasetDetailResponse(**base.model_dump(), preview=preview)
 
 
 @router.get("/{dataset_id}/health", response_model=DatasetHealthResponse)
@@ -256,10 +273,10 @@ async def dataset_health(
     db: AsyncSession = Depends(get_db),
 ):
     dataset = await ds_service.get_dataset_or_404(db, current.org_id, dataset_id)
-    return ds_service.compute_health(dataset)
+    return await asyncio.to_thread(ds_service.compute_health, dataset)
 
 
-@router.post("/{dataset_id}/query", response_model=DatasetQueryResponse)
+@router.post("/{dataset_id}/query", response_model=DatasetQueryResponse, dependencies=[Depends(_query_rate_limit)])
 async def query_dataset(
     dataset_id: uuid.UUID,
     req: query_service.DatasetQueryRequest,

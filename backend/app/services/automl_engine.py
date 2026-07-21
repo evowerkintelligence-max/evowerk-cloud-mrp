@@ -337,7 +337,7 @@ def _pick_primary_metric(task: AutoMLTask, scores: dict[str, float]) -> tuple[st
     return "mae", float(scores.get("mae", 1e18))  # forecasting
 
 
-def _normalize_higher_is_better(task: AutoMLTask, metric_value: float) -> float:
+def normalize_higher_is_better(task: AutoMLTask, metric_value: float) -> float:
     """Flips lower-is-better metrics (rmse/mae) so every selection score compares as 'higher wins'."""
     return metric_value if task == AutoMLTask.classification else -metric_value
 
@@ -714,7 +714,10 @@ def _add_target_lag_features(df: pd.DataFrame, time_col: str, target_col: str) -
     """Assumes df is already sorted by time_col. Returns (df_with_features, new_column_names)."""
     out = df.copy()
     new_cols: list[str] = []
-    s = out[target_col]
+    # CSV/TSV-sourced datasets always load columns as strings (see
+    # app.services.datasets.dataframe_for) - coerce before any lag/rolling/
+    # trend arithmetic below, which raises TypeError on object-dtype values.
+    s = pd.to_numeric(out[target_col], errors="coerce")
 
     for lag in _LAGS:
         col = f"_lag_{lag}_"
@@ -791,6 +794,10 @@ def train_automl_baseline(
         if not time_column or time_column not in df.columns:
             raise ValueError("Forecasting requires a valid time_column present in dataset")
         df = df.sort_values(by=time_column).reset_index(drop=True)
+        # CSV/TSV-sourced datasets load every column as a string (see
+        # app/services/datasets.py's relation_for), so the lag/rolling/trend
+        # arithmetic below needs a real numeric dtype before it can run.
+        df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
         df, lag_feature_cols = _add_target_lag_features(df, time_column, target_column)
         n_before_warmup = len(df)
         df = df.dropna(subset=lag_feature_cols).reset_index(drop=True)
@@ -999,7 +1006,7 @@ def train_automl_baseline(
         scores, y_hat = _holdout_scores(fitted)
         if splitter is None:
             _, mv = _pick_primary_metric(task, scores)
-            selection_score = _normalize_higher_is_better(task, mv)
+            selection_score = normalize_higher_is_better(task, mv)
         return {
             "model_name": name,
             "selection_score": selection_score,
@@ -1053,7 +1060,7 @@ def train_automl_baseline(
             _, mv = _pick_primary_metric(task, scores)
             results.append({
                 "model_name": stack_name,
-                "selection_score": _normalize_higher_is_better(task, mv),
+                "selection_score": normalize_higher_is_better(task, mv),
                 "holdout_scores": scores,
                 "train_seconds": round(time.time() - t0, 2),
                 "params": {"base_models": [_pretty_model_name(r["model_name"]) for r in top]},

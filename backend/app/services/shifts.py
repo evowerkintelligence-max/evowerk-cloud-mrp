@@ -11,16 +11,22 @@ per-shift query, just grouped on additional keys.
 """
 from __future__ import annotations
 
+import csv
+import io
+import uuid
 from collections import defaultdict
 from typing import Any, Optional
 
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.oee_calc import date_bucket_expr, date_bucket_hour_expr, date_bucket_unparsed_expr
 from app.analytics.oee_calc import num_invalid as _inv
 from app.analytics.oee_calc import num_val as _val
 from app.analytics.oee_calc import qi
 from app.models.dataset import Dataset
+from app.models.shift_forecast import ShiftForecastDataset
 from app.services import datasets as ds_service
 
 
@@ -279,4 +285,86 @@ def analyze_shifts(dataset: Dataset, req: Any) -> dict:
         "trend": trend,
         "hourly": hourly,
         "target_rate": req.target_rate,
+    }
+
+
+_METRIC_LABELS = {
+    "oee_pct": "OEE",
+    "fpq_pct": "FPQ",
+    "total_units": "Units",
+    "total_downtime_min": "Downtime (min)",
+}
+
+
+async def prepare_forecast_source(
+    db: AsyncSession,
+    dataset: Dataset,
+    req: Any,
+    *,
+    shift: str,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    background_tasks: "BackgroundTasks | None" = None,
+) -> dict:
+    """Materialize one shift's day-bucketed trend (the same series the "Shift
+    trend" chart already renders) into a small two-column Dataset an AutoML
+    forecasting run can train on - overwriting the same Dataset on repeat
+    calls for a given (org, shift), mirroring downtime_tracking._materialize.
+    """
+    if not req.timestamp_col:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Map a timestamp column to enable forecasting.")
+
+    analysis = analyze_shifts(dataset, req)
+    points = sorted(
+        (t for t in analysis["trend"] if t["shift"] == shift and t["value"] is not None),
+        key=lambda t: t["period"],
+    )
+    if not points:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"No trend data for shift '{shift}' to forecast from."
+        )
+
+    metrics = analysis["metrics_available"]
+    key, _ = _primary_key(
+        has_oee="oee" in metrics, has_scrap="scrap" in metrics,
+        has_throughput="throughput" in metrics, has_downtime="downtime" in metrics,
+    )
+    metric_label = _METRIC_LABELS.get(key or "", "Value")
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["period", "value"])
+    for p in points:
+        writer.writerow([p["period"], p["value"]])
+    csv_bytes = buf.getvalue().encode("utf-8")
+
+    mapping = (
+        await db.execute(
+            select(ShiftForecastDataset).where(
+                ShiftForecastDataset.org_id == org_id, ShiftForecastDataset.shift == shift
+            )
+        )
+    ).scalar_one_or_none()
+
+    if mapping is None:
+        forecast_dataset = await ds_service.create_dataset(
+            db, org_id=org_id, created_by=created_by,
+            name=f"Shift Forecast Source: {shift}", filename="shift_forecast.csv", data=csv_bytes,
+        )
+        db.add(ShiftForecastDataset(org_id=org_id, shift=shift, dataset_id=forecast_dataset.id))
+        await db.flush()
+        dataset_id = forecast_dataset.id
+    else:
+        forecast_dataset = await ds_service.resolve_dataset(db, org_id, str(mapping.dataset_id))
+        await ds_service.overwrite_dataset_file(
+            db, forecast_dataset, data=csv_bytes, background_tasks=background_tasks
+        )
+        dataset_id = forecast_dataset.id
+
+    return {
+        "dataset_id": dataset_id,
+        "target_column": "value",
+        "time_column": "period",
+        "metric_label": metric_label,
+        "rows": len(points),
     }

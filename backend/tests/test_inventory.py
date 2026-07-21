@@ -427,6 +427,21 @@ async def test_count_no_variance_rejected(client):
     assert res.status_code == 400
 
 
+async def test_count_rejects_negative_counted_quantity(client):
+    token = await _register_and_login(client, email="owner8b@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+    await _receive(client, token, item, supplier, 50)
+
+    res = await client.post(
+        f"/inventory/{item['id']}/count",
+        json={"counted_quantity": "-1"},
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+
 async def test_count_against_no_balance_treats_expected_as_zero(client):
     token = await _register_and_login(client, email="owner9@example.com")
     headers = {"Authorization": f"Bearer {token}"}

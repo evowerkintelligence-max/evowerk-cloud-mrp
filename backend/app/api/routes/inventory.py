@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,7 +54,9 @@ class AdjustRequest(_ReasonFields):
 
 class CountRequest(_ReasonFields):
     location_id: str | None = None
-    counted_quantity: Decimal
+    # A physical count can't be negative - unlike AdjustRequest.quantity, which
+    # is a signed delta and legitimately goes either way.
+    counted_quantity: Decimal = Field(ge=0)
     reason_code: ReasonCode = "cycle_count"
 
 

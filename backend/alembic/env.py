@@ -21,15 +21,19 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     kpi,
     location,
     lot,
+    machine,
     maintenance_schedule,
     procurement,
     rca_case,
     realtime,
+    routing,
+    sensor,
     shift_schedule,
     simulation,
     telemetry,
     tenant,
     user,
+    work_center,
 )
 
 config = context.config

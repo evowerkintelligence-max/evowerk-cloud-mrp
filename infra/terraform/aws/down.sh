@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
-# Tear the test deployment down completely so it stops billing. Empties both
-# ECR repos first since terraform destroy refuses to delete a repo that
-# still has images in it (image_tag_mutability = IMMUTABLE means no
-# force_delete on the resource itself - see ecr.tf).
+# Tear the test deployment down, but keep the ECR repos (and their pushed
+# image layers) around: this Terraform version has no `terraform destroy
+# -exclude`, so we build the -target list dynamically from everything in
+# state except the ECR resources. Next up.sh then reuses unchanged layers
+# instead of re-uploading the whole image from scratch. ECR storage is
+# ~$0.10/GB-month - negligible next to the NAT gateway/RDS/ALB/Fargate this
+# actually destroys.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-AWS="/c/Program Files/Amazon/AWSCLIV2/aws.exe"
-REGION="us-east-1"
+mapfile -t targets < <(terraform state list | grep -vE '^aws_ecr_(repository|lifecycle_policy)\.')
 
-for repo_var in ecr_backend_repository_url ecr_frontend_repository_url; do
-  url=$(terraform output -raw "$repo_var" 2>/dev/null || true)
-  [ -z "$url" ] && continue
-  repo="${url##*/}"
-  digests=$("$AWS" ecr list-images --repository-name "$repo" --region "$REGION" --query 'imageIds[].imageDigest' --output text 2>/dev/null || true)
-  if [ -n "$digests" ]; then
-    ids=()
-    for d in $digests; do ids+=(imageDigest="$d"); done
-    echo "== Emptying $repo =="
-    "$AWS" ecr batch-delete-image --repository-name "$repo" --region "$REGION" --image-ids "${ids[@]}" >/dev/null
-  fi
+if [ ${#targets[@]} -eq 0 ]; then
+  echo "Nothing to destroy (state is empty or only has ECR repos)."
+  exit 0
+fi
+
+target_args=()
+for t in "${targets[@]}"; do
+  target_args+=(-target="$t")
 done
 
-echo "== Destroying all infrastructure =="
-terraform destroy -input=false -auto-approve
+echo "== Destroying infrastructure (ECR repos kept) =="
+terraform destroy -input=false -auto-approve "${target_args[@]}"
 
-echo "Done - all billed resources destroyed."
+echo "Done - billed resources destroyed. ECR repos/images kept for next up.sh."

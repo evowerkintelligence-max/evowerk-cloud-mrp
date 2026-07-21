@@ -7,29 +7,23 @@ schema + row count are sniffed with DuckDB. Every read is tenant-scoped, and
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 import duckdb
-from fastapi import HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analytics.oee_calc import qi, qs
+from app.api.deps import get_or_404
 from app.core.config import get_settings
+from app.models.automl_run import AutoMLRun
 from app.models.dataset import Dataset
-from app.services import storage
-
-
-def qi(name: str) -> str:
-    """Quote a SQL identifier (columns are whitelisted against headers upstream)."""
-    return '"' + str(name).replace('"', '""') + '"'
-
-
-def qs(value: str) -> str:
-    """Quote a SQL string literal."""
-    return "'" + str(value).replace("'", "''") + "'"
+from app.services import automl_storage, storage
 
 
 def open_con() -> duckdb.DuckDBPyConnection:
@@ -149,17 +143,34 @@ async def create_dataset(
     return dataset
 
 
-async def overwrite_dataset_file(db: AsyncSession, dataset: Dataset, *, data: bytes) -> Dataset:
+async def overwrite_dataset_file(
+    db: AsyncSession, dataset: Dataset, *, data: bytes, background_tasks: "BackgroundTasks | None" = None
+) -> Dataset:
     """Rewrite an existing, already-created dataset's file in place and
     re-sniff its schema/row count. Used by live-capture features (the
-    downtime-tracking board) whose Dataset keeps growing instead of being
-    created once - see storage.replace_dataset_file for the atomicity note."""
+    downtime-tracking board, shift-forecast source) whose Dataset keeps
+    growing/refreshing instead of being created once - see
+    storage.replace_dataset_file for the atomicity note.
+
+    When background_tasks is provided, also schedules a check of whether
+    any AutoML run watching this dataset (AutoMLRun.auto_retrain=True)
+    should be retrained for drift - see app.services.automl_retrain. The
+    import below is local, not at module level, specifically to avoid a
+    circular import: automl_retrain imports dataframe_for from this same
+    module at its own module level.
+    """
     storage.replace_dataset_file(dataset.org_id, dataset.id, dataset.storage_ext, data)
     columns, row_count = _sniff(storage.dataset_path(dataset.org_id, dataset.id, dataset.storage_ext))
     dataset.columns = columns
     dataset.row_count = row_count
     dataset.size_bytes = len(data)
     await db.flush()
+    if background_tasks is not None:
+        from app.services import automl_retrain
+
+        background_tasks.add_task(
+            automl_retrain.maybe_retrain_for_dataset, str(dataset.org_id), str(dataset.id)
+        )
     return dataset
 
 
@@ -181,15 +192,15 @@ async def resolve_dataset(db: AsyncSession, org_id: uuid.UUID, dataset_id: str) 
 
 
 async def get_dataset_or_404(db: AsyncSession, org_id: uuid.UUID, dataset_id: uuid.UUID) -> Dataset:
-    dataset = (
-        await db.execute(select(Dataset).where(Dataset.id == dataset_id, Dataset.org_id == org_id))
-    ).scalar_one_or_none()
-    if dataset is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
-    return dataset
+    return await get_or_404(db, Dataset, org_id, dataset_id, "Dataset not found")
 
 
 async def delete_dataset(db: AsyncSession, dataset: Dataset) -> None:
+    runs = (
+        await db.execute(select(AutoMLRun.id).where(AutoMLRun.dataset_id == dataset.id))
+    ).scalars().all()
+    for run_id in runs:
+        automl_storage.delete_run_dir(dataset.org_id, run_id)
     storage.delete_dataset_file(dataset.org_id, dataset.id, dataset.storage_ext)
     await db.delete(dataset)
     await db.flush()
@@ -251,6 +262,13 @@ def compute_health(dataset: Dataset) -> dict:
     names = [c["name"] for c in dataset.columns]
     con = open_con()
     try:
+        # Materialize once: `rel` is a read_csv_auto/read_parquet table function,
+        # so every query against it re-reads and re-parses the whole file. The
+        # per-column loop below issues 3-6 queries per column; without this,
+        # cost is columns x rows instead of rows.
+        con.execute(f"CREATE TEMP TABLE _health_src AS SELECT * FROM {rel}")  # nosec B608
+        rel = "_health_src"
+
         dup_count = 0
         if row_count and names:
             key = "concat_ws(chr(31), " + ", ".join(f"COALESCE(CAST({qi(n)} AS VARCHAR), '')" for n in names) + ")"
@@ -330,7 +348,7 @@ def compute_health(dataset: Dataset) -> dict:
                     "max": num_max,
                     "mean": round(num_mean, 4) if num_mean is not None else None,
                     "std": round(num_std, 4) if num_std is not None else None,
-                    "numeric_count": int(num_count) if num_count else None,
+                    "numeric_count": int(num_count) if num_count is not None else None,
                     "outlier_count": outlier_count,
                     "outlier_pct": outlier_pct,
                 }
@@ -367,6 +385,14 @@ def compute_health(dataset: Dataset) -> dict:
 # Both create a new dataset rather than mutating in place (datasets are
 # read-only after upload, see Dataset's docstring) — mirrors the desktop app's
 # "clean/transform always produces a new version" behavior.
+#
+# ponytail: clean_dataset/select_columns_dataset/pivot_dataset are `async def`
+# but their DuckDB work below is synchronous and blocks the event loop, same
+# issue as compute_health/preview_rows - unlike those two, offloading via
+# asyncio.to_thread isn't a safe drop-in here because each interleaves sync
+# DuckDB calls with `db.add`/`await db.flush()` on the (non-thread-safe)
+# AsyncSession. Upgrade path: split the DuckDB COPY into a thread-run helper
+# that returns the finished file, then do the db.add/flush back on the loop.
 
 def _materialize(db: AsyncSession, con: duckdb.DuckDBPyConnection, select_sql: str, *, org_id, created_by, name: str) -> Dataset:
     new_id = uuid.uuid4()
@@ -438,7 +464,7 @@ async def clean_dataset(
         cur = "_clean1"
 
         if req.remove_outliers:
-            factor = req.outlier_iqr_factor or 1.5
+            factor = req.outlier_iqr_factor
             target = [c for c in (req.outlier_columns or headers) if c in headers]
             fences: dict[str, tuple[float, float]] = {}
             for c in target:
@@ -513,6 +539,7 @@ async def select_columns_dataset(
     db: AsyncSession, dataset: Dataset, *, org_id, created_by, columns: list[str], output_name: str
 ) -> tuple[Dataset, list[str]]:
     headers = [c["name"] for c in dataset.columns]
+    validate_columns(dataset, columns)
     keep = [c for c in columns if c in headers]
     if not keep:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "None of the requested columns exist in this dataset")
@@ -534,7 +561,8 @@ def _detect_timestamp_col(headers: list[str]) -> str | None:
             if h.lower() == pattern:
                 return h
     for h in headers:
-        if any(p in h.lower() for p in ("time", "date", "ts")):
+        tokens = re.split(r"[^a-z0-9]+", h.lower())
+        if any(p in tokens for p in ("time", "date", "ts")):
             return h
     return headers[0] if headers else None
 
@@ -551,6 +579,8 @@ async def pivot_dataset(
             ts_col = req.timestamp_col if req.timestamp_col in headers else _detect_timestamp_col(headers)
             if not ts_col:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not detect a timestamp column — map one explicitly")
+            if req.tag_cols:
+                validate_columns(dataset, req.tag_cols)
             requested = req.tag_cols or [h for h in headers if h != ts_col]
             pivot_cols = [c for c in requested if c in headers and c != ts_col]
             if not pivot_cols:

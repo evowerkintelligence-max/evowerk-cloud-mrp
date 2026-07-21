@@ -38,6 +38,13 @@ class RealtimeStream(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     # {"units_col": "...", "scrap_col": "...", ...} - see StreamRunner.snapshot for the keys read.
     column_map: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Which machine this stream's ticks belong to - a stream carries one row
+    # per poll (one machine's worth of data), never multiple machines mixed
+    # together. None = this stream stays OEE-only, unaffected by CBM.
+    machine: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # {"vib_x": "vibration_x_mm_s", ...} - sensor channel name -> the field
+    # name to read from Tick.row. See app.services.sensor_consumer.
+    sensor_map: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     accumulate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # running | stopped - the user's intent, used to decide what to resume on startup.

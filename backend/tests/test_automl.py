@@ -73,6 +73,41 @@ async def test_classification_run_succeeds_end_to_end(client):
 
 
 @pytest.mark.asyncio
+async def test_forecasting_run_succeeds_on_csv_backed_dataset(client):
+    # CSV uploads load every column ALL_VARCHAR (see app/services/datasets.py's
+    # relation_for) - before the fix, _add_target_lag_features' `s.shift(1) -
+    # s.shift(7)` crashed with "unsupported operand type(s) for -: 'str' and
+    # 'str'" because the target column arrived as dtype=object, not numeric.
+    dates = pd.date_range("2024-01-01", periods=60, freq="D")
+    csv = b"date,value\n" + b"\n".join(
+        f"{d.date()},{100 + i}".encode() for i, d in enumerate(dates)
+    )
+    token = await _register_and_login(client, email="forecaster@example.com", org_name="Forecast Co")
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=csv, filename="daily.csv")
+
+    body = {
+        "name": "Forecast value",
+        "dataset_id": dataset_id,
+        "task": "forecasting",
+        "target_column": "value",
+        "feature_columns": ["value"],
+        "time_column": "date",
+        "thoroughness": "fast",
+        "algorithms": ["Ridge"],
+    }
+    created = await client.post("/automl/runs", headers=headers, json=body)
+    assert created.status_code == 202
+    run_id = created.json()["id"]
+
+    detail = await client.get(f"/automl/runs/{run_id}", headers=headers)
+    assert detail.status_code == 200
+    run = detail.json()
+    assert run["status"] == "success", run["error"]
+    assert run["best_model_name"]
+
+
+@pytest.mark.asyncio
 async def test_bad_target_column_marks_run_failed(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -199,3 +234,70 @@ def test_true_string_class_labels_are_not_coerced():
     assert result["meta"]["model_name"] == "RandomForestClassifier"
     preds = set(result["pipeline"].predict(result["explain_X"]))
     assert preds <= {"yes", "no"}
+
+
+@pytest.mark.asyncio
+async def test_create_run_accepts_auto_retrain_flag(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token)
+
+    body = {
+        "name": "Predict y", "dataset_id": dataset_id, "task": "classification",
+        "target_column": "y", "feature_columns": ["x1", "x2"], "thoroughness": "fast",
+        "auto_retrain": True,
+    }
+    created = await client.post("/automl/runs", headers=headers, json=body)
+    assert created.status_code == 202
+    assert created.json()["auto_retrain"] is True
+    assert created.json()["retrained_from_run_id"] is None
+
+    detail = await client.get(f"/automl/runs/{created.json()['id']}", headers=headers)
+    assert detail.json()["auto_retrain"] is True
+
+
+def _forecast_csv() -> bytes:
+    """40 consecutive days of a simple upward-trending value - enough history
+    for the forecasting engine's 14-day lag/rolling warmup plus a real
+    train/test split."""
+    import datetime
+
+    start = datetime.date(2026, 1, 1)
+    rows = ["date,value"]
+    for i in range(40):
+        d = start + datetime.timedelta(days=i)
+        rows.append(f"{d.isoformat()},{100 + i}")
+    return ("\n".join(rows) + "\n").encode()
+
+
+@pytest.mark.asyncio
+async def test_forecasting_run_succeeds_on_csv_sourced_string_columns(client):
+    """Regression test for the string-vs-numeric TypeError: CSV-sourced datasets
+    load every column as a string (see app.services.datasets.dataframe_for), so
+    a forecasting run's target column arrives as dtype=object. Training must
+    coerce it before doing lag/rolling arithmetic, not just before the final
+    train/test split."""
+    token = await _register_and_login(client, email="forecast@example.com", org_name="ForecastOrg")
+    headers = {"Authorization": f"Bearer {token}"}
+    dataset_id = await _upload(client, token, content=_forecast_csv(), filename="forecast.csv")
+
+    body = {
+        "name": "Forecast value",
+        "dataset_id": dataset_id,
+        "task": "forecasting",
+        "target_column": "value",
+        "feature_columns": [],
+        "thoroughness": "fast",
+        "time_column": "date",
+        "horizon": 1,
+        "forecast_strategy": "direct",
+    }
+    created = await client.post("/automl/runs", headers=headers, json=body)
+    assert created.status_code == 202
+    run_id = created.json()["id"]
+
+    detail = await client.get(f"/automl/runs/{run_id}", headers=headers)
+    assert detail.status_code == 200
+    run = detail.json()
+    assert run["status"] == "success", run.get("error")
+    assert run["best_model_name"]

@@ -43,6 +43,8 @@ class StreamCreate(BaseModel):
     interval_seconds: int = Field(5, ge=1, le=300)
     accumulate: bool = True
     column_map: dict[str, str] = Field(default_factory=dict)
+    machine: str | None = None
+    sensor_map: dict[str, str] = Field(default_factory=dict)
 
 
 def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
@@ -61,17 +63,11 @@ def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
     snap = realtime_cache.get_snapshot(stream.id) if stream.desired_status != "stopped" else None
     if snap is None:
         snap = {
-            "ts": None,
-            "stream_id": str(stream.id),
-            "name": stream.name,
+            "ts": None, "stream_id": str(stream.id), "name": stream.name,
             "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
             "error": stream.last_error,
-            "rows_in_window": 0,
-            "rows_collected": 0,
-            "duration": None,
-            "duration_s": None,
-            "last_tick_s": None,
-            "metrics": {},
+            "rows_in_window": 0, "rows_collected": 0,
+            "duration": None, "duration_s": None, "last_tick_s": None, "metrics": {},
         }
     else:
         snap = {**snap, "name": stream.name}
@@ -113,6 +109,8 @@ async def create_stream(
         integration_id=integration.id,
         name=req.name or integration.name,
         column_map=req.column_map,
+        machine=req.machine,
+        sensor_map=req.sensor_map,
         interval_seconds=req.interval_seconds,
         accumulate=req.accumulate,
         desired_status="running",

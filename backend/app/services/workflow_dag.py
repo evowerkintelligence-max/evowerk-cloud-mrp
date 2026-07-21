@@ -24,12 +24,21 @@ STEP_TYPES = (
 )
 
 
+class StepPosition(BaseModel):
+    """Canvas coordinates for a step - UI metadata only, never read by
+    validate_dag/topo_layers/descendants below."""
+
+    x: float
+    y: float
+
+
 class WorkflowStep(BaseModel):
     id: str
     name: str
     type: str
     depends_on: list[str] = []
     config: dict = {}
+    position: StepPosition | None = None
 
     @field_validator("type")
     @classmethod

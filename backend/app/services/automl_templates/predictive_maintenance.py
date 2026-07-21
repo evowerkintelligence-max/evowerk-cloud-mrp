@@ -1,0 +1,383 @@
+"""Predictive Maintenance AutoML template: re-platforms predictive.py's
+old hardcoded GradientBoostingClassifier onto the shared automl_engine
+bake-off, while keeping its RUL/cost/recommendation math and statistical
+fallback for machines with too little history to train on.
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+
+from app.services import predictive as legacy
+from app.services.automl_templates import AutoMLTemplate, ColumnRole, PreprocessResult, RecommendationRule, register_template
+
+_W, _H, _MIN_ROWS, _MIN_ANOMALY_ROWS = 7, 3, 40, 15
+
+# Matched by automl_explain_nl.py against the top SHAP/importance driver
+# among build_training_frame's rolling-7-day features. Direction mirrors
+# _BADNESS_DIRECTION below (oee/oee_slope/days_since_fail: bad when low;
+# scrap_rate/dt_rate/fail_count: bad when high) so a rule only fires on the
+# direction that actually signals elevated failure risk.
+RECOMMENDATION_RULES = [
+    RecommendationRule("oee_slope", "falling", "OEE is trending down over the last week - inspect for early signs of mechanical wear before it becomes a failure."),
+    RecommendationRule("oee", "low", "OEE is running low ahead of predicted failure - review availability/performance/quality losses on this machine."),
+    RecommendationRule("scrap_rate", "high", "Scrap rate is elevated ahead of predicted failure - check tooling wear and in-process quality checks."),
+    RecommendationRule("dt_rate", "high", "Downtime rate is climbing - review recent unplanned stops for a developing mechanical issue."),
+    RecommendationRule("fail_count", "high", "Recent failure count is elevated - this machine may need root-cause investigation, not just another PM cycle."),
+    RecommendationRule("days_since_fail", "low", "This machine failed recently - increase monitoring frequency while the underlying cause is investigated."),
+]
+
+
+def _days_since(fail_arr: np.ndarray, up_to: int) -> float:
+    idxs = np.where(fail_arr[:up_to] == 1)[0]
+    return float(up_to - idxs[-1]) if len(idxs) > 0 else 60.0
+
+
+def build_training_frame(daily: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, list[float]]]:
+    """Same rolling-window featurization as the old _ml_analyze, ported to
+    produce a flat DataFrame for automl_engine instead of numpy arrays fed
+    directly to a hardcoded model. `daily` must have columns machine, date,
+    oee, scrap_rate, dt_rate, is_failure (sorted per-machine by date is not
+    required - this function sorts internally)."""
+    rows: list[dict[str, float]] = []
+    last_x: dict[str, list[float]] = {}
+
+    for machine, mdf in daily.groupby("machine"):
+        mdf = mdf.sort_values("date").reset_index(drop=True)
+        n = len(mdf)
+        if n < _W + _H + 1:
+            continue
+
+        oee = mdf["oee"].to_numpy(dtype=float)
+        scr = mdf["scrap_rate"].to_numpy(dtype=float)
+        dtr = mdf["dt_rate"].to_numpy(dtype=float)
+        fail = mdf["is_failure"].to_numpy(dtype=int)
+
+        for i in range(_W, n - _H):
+            ow = oee[i - _W:i]
+            rows.append({
+                "oee_7d": float(np.mean(ow)),
+                "oee_slope_7d": legacy._linreg_slope(ow.tolist()),
+                "scrap_rate_7d": float(np.mean(scr[i - _W:i])),
+                "dt_rate_7d": float(np.mean(dtr[i - _W:i])),
+                "fail_count_7d": float(np.sum(fail[i - _W:i])),
+                "days_since_fail": _days_since(fail, i),
+                "is_failure_next": 1 if np.sum(fail[i:i + _H]) > 0 else 0,
+            })
+
+        ow = oee[n - _W:n]
+        last_x[str(machine)] = [
+            float(np.mean(ow)), legacy._linreg_slope(ow.tolist()),
+            float(np.mean(scr[n - _W:n])), float(np.mean(dtr[n - _W:n])),
+            float(np.sum(fail[n - _W:n])), _days_since(fail, n),
+        ]
+
+    columns = ["oee_7d", "oee_slope_7d", "scrap_rate_7d", "dt_rate_7d", "fail_count_7d", "days_since_fail", "is_failure_next"]
+    training_df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+    return training_df, last_x
+
+
+def has_ml_signal(training_df: pd.DataFrame, min_rows: int = _MIN_ROWS) -> bool:
+    if len(training_df) < min_rows:
+        return False
+    pos_rate = float(training_df["is_failure_next"].mean())
+    return 0.05 <= pos_rate <= 0.90
+
+
+ROLES = [
+    ColumnRole("date_col", "Date column"),
+    ColumnRole("machine_col", "Machine column"),
+    ColumnRole("planned_time_col", "Planned time"),
+    ColumnRole("operating_time_col", "Operating time"),
+    ColumnRole("total_units_col", "Total units"),
+    ColumnRole("good_units_col", "Good units"),
+    ColumnRole("failure_col", "Failure flag column", required=False),
+    ColumnRole("downtime_category_col", "Downtime category", required=False),
+]
+
+# Excludes SVC/LinearSVC - automl_engine's SVC has no probability=True, so it
+# has no .predict_proba(), which postprocess() needs for a risk score, not
+# just a class label.
+_SAFE_ALGORITHMS = [
+    "LogisticRegression", "RandomForestClassifier", "ExtraTreesClassifier",
+    "HistGradientBoostingClassifier", "GradientBoostingClassifier", "KNeighborsClassifier",
+    "XGBoostClassifier", "LightGBMClassifier",
+]
+
+
+def preprocess(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
+    cols = config.get("column_map", {})
+    required = ["date_col", "machine_col", "planned_time_col", "operating_time_col", "total_units_col", "good_units_col"]
+    missing_roles = [r for r in required if not cols.get(r)]
+    if missing_roles:
+        raise ValueError(f"Missing required column mapping for: {', '.join(missing_roles)}")
+    for role_key, col_name in cols.items():
+        if col_name and col_name not in df.columns:
+            raise ValueError(f"Mapped column '{col_name}' (role '{role_key}') not found in dataset")
+
+    grouped, daily_ml, days_per_period = legacy._build_daily(
+        df, date_col=cols["date_col"], machine_col=cols["machine_col"],
+        planned_time_col=cols["planned_time_col"], operating_time_col=cols["operating_time_col"],
+        total_units_col=cols["total_units_col"], good_units_col=cols["good_units_col"],
+        target_rate=config.get("target_rate"), downtime_category_col=cols.get("downtime_category_col"),
+    )
+
+    training_df, last_x = build_training_frame(daily_ml)
+
+    # Raw per-row df, coerced/sorted the same way legacy analyze() does before
+    # its last_fail_ago lookback (predictive.py:438-439), so postprocess() can
+    # reproduce that lookback's failure_col/downtime_category_col preference
+    # order exactly - `grouped`/`daily_ml` have already aggregated those raw
+    # columns away.
+    df_ready = df.copy()
+    df_ready[cols["date_col"]] = pd.to_datetime(df_ready[cols["date_col"]], errors="coerce")
+    df_ready = df_ready.dropna(subset=[cols["date_col"]]).sort_values(cols["date_col"])
+
+    context = {
+        "grouped": grouped, "daily_ml": daily_ml, "days_per_period": days_per_period,
+        "last_x": last_x, "column_map": cols, "hourly_value": config.get("hourly_value", 1000.0),
+        "n_training_rows": len(training_df), "df": df_ready, "training_df": training_df,
+        "failure_col": cols.get("failure_col"), "downtime_category_col": cols.get("downtime_category_col"),
+    }
+
+    if not has_ml_signal(training_df):
+        return PreprocessResult(
+            skip_ml=True,
+            notes=[f"Not enough rolling-window history to train a classifier ({len(training_df)} usable "
+                   f"windows, need >= {_MIN_ROWS} with a 5-90% failure rate) - using the statistical risk model instead."],
+            context=context,
+        )
+
+    return PreprocessResult(
+        skip_ml=False,
+        df=training_df,
+        target_col="is_failure_next",
+        task="classification",
+        feature_cols=["oee_7d", "oee_slope_7d", "scrap_rate_7d", "dt_rate_7d", "fail_count_7d", "days_since_fail"],
+        algorithms=_SAFE_ALGORITHMS,
+        notes=[f"Trained on {len(training_df)} rolling 7-day windows across all machines."],
+        context=context,
+    )
+
+
+def _machine_risk_from_prob(
+    machine: str, fail_prob: float, ml_powered: bool, drivers: list[dict],
+    oee_s: list[float], avail_s: list[float], perf_s: list[float], qual_s: list[float],
+    last_fail_ago: float | None, days_per_period: float,
+) -> tuple[dict, str]:
+    current_oee = oee_s[-1]
+    slope = legacy._recent_slope(oee_s)
+    avg_a, avg_p, avg_q = sum(avail_s) / len(avail_s), sum(perf_s) / len(perf_s), sum(qual_s) / len(qual_s)
+    driver = legacy._top_driver(avg_a, avg_p, avg_q)
+
+    accel = 0.0
+    if len(oee_s) >= 14:
+        accel = legacy._linreg_slope(oee_s[-7:]) - legacy._linreg_slope(oee_s[-14:-7])
+    rul = legacy._rul_days(current_oee, slope, days_per_period, accel=accel)
+
+    if fail_prob >= 0.65 or current_oee < legacy._CRITICAL_OEE:
+        risk = "high"
+    elif fail_prob >= 0.35 or current_oee < legacy._WARN_OEE:
+        risk = "medium"
+    else:
+        risk = "low"
+
+    return {
+        "machine": machine, "current_oee": round(current_oee, 4), "trend_slope": round(slope, 5),
+        "failure_probability": round(fail_prob, 3), "risk_level": risk, "top_driver": driver, "rul_days": rul,
+        "last_failure_days_ago": last_fail_ago, "ml_powered": ml_powered, "ml_drivers": drivers,
+    }, risk
+
+
+_BADNESS_DIRECTION = {
+    "oee_7d": "low", "oee_slope_7d": "low", "scrap_rate_7d": "high",
+    "dt_rate_7d": "high", "fail_count_7d": "high", "days_since_fail": "low",
+}
+
+
+def _fit_anomaly_model(training_df: pd.DataFrame | None) -> tuple[IsolationForest, np.ndarray, np.ndarray] | None:
+    """Fits an unsupervised baseline over the same rolling-window features
+    used to train the classifier, for machines that don't have enough
+    labeled failures for supervised training but do have enough history to
+    define what "normal" looks like. Returns None below _MIN_ANOMALY_ROWS -
+    too few rows to trust a baseline."""
+    if training_df is None or len(training_df) < _MIN_ANOMALY_ROWS:
+        return None
+    x = training_df[legacy._ML_FEATURES].to_numpy(dtype=float)
+    model = IsolationForest(n_estimators=100, contamination=0.1, random_state=0).fit(x)
+    mean = x.mean(axis=0)
+    std = x.std(axis=0)
+    std[std == 0] = 1.0
+    return model, mean, std
+
+
+def _anomaly_score(
+    model: IsolationForest, mean: np.ndarray, std: np.ndarray, x_row: list[float],
+) -> tuple[float, list[dict]]:
+    """Scores one machine's latest rolling window against the fitted
+    baseline. IsolationForest.decision_function() is positive for inliers,
+    negative for outliers, unbounded - squashed into the same 0-1
+    failure_probability scale the classifier and statistical fallback both
+    already use."""
+    x = np.asarray(x_row, dtype=float).reshape(1, -1)
+    decision = float(model.decision_function(x)[0])
+    prob = round(min(0.99, max(0.01, 1.0 / (1.0 + math.exp(5.0 * decision)))), 3)
+
+    z = (x[0] - mean) / std
+    contributions = []
+    for idx, feature in enumerate(legacy._ML_FEATURES):
+        badness = -z[idx] if _BADNESS_DIRECTION[feature] == "low" else z[idx]
+        badness = max(0.0, badness)
+        if badness < 0.1:
+            continue
+        contributions.append({
+            "feature": feature, "label": legacy._ML_FEAT_LABELS[feature],
+            "importance": round(min(1.0, badness / 3.0), 3), "elevated": badness > 1.5,
+        })
+    contributions.sort(key=lambda d: d["importance"], reverse=True)
+    return prob, contributions[:3]
+
+
+def postprocess(engine_result: dict[str, Any] | None, config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    grouped = context["grouped"]
+    days_per_period = context["days_per_period"]
+    hourly_value = float(context.get("hourly_value") or 1000.0)
+    cols = context["column_map"]
+    machine_col, date_col = cols["machine_col"], cols["date_col"]
+
+    pipeline = engine_result["pipeline"] if engine_result else None
+    anomaly_model = _fit_anomaly_model(context.get("training_df"))
+    model_meta_dict: dict[str, Any] | None = None
+    if engine_result:
+        best_scores = engine_result["meta"]["scores"]
+        model_meta_dict = {
+            "algorithm": engine_result["meta"]["model_name"],
+            "accuracy_pct": round(float(best_scores.get("accuracy", 0.0)) * 100, 1),
+            "n_training_samples": context.get("n_training_rows", 0),
+            "top_features": [],  # filled in by Plan 2's explainability layer
+        }
+
+    machines_out: list[dict] = []
+    recs_out: list[dict] = []
+
+    # Fleet-relative baseline, computed once from every machine's latest OEE -
+    # matches legacy analyze() (predictive.py:444-450), which builds this
+    # before the per-machine loop and passes the SAME value into every
+    # machine's _stat_analyze() call (not each machine's own history).
+    fleet_last_oee: list[float] = []
+    for _, fmdf in grouped.groupby(machine_col):
+        fvals = fmdf.sort_values(date_col)["oee"].tolist()
+        if fvals:
+            fleet_last_oee.append(fvals[-1])
+    fleet_last_oee.sort()
+    fleet_oee_median = fleet_last_oee[len(fleet_last_oee) // 2] if fleet_last_oee else 0.0
+
+    raw_df = context["df"]
+    failure_col = context.get("failure_col")
+    downtime_category_col = context.get("downtime_category_col")
+
+    for machine, mdf in grouped.groupby(machine_col):
+        mdf = mdf.sort_values(date_col)
+        oee_s, avail_s, perf_s, qual_s = mdf["oee"].tolist(), mdf["avail"].tolist(), mdf["perf"].tolist(), mdf["qual"].tolist()
+        if not oee_s:
+            continue
+        machine_key = str(machine)
+
+        # Dual-source last-failure lookback on the raw per-row df, preferring
+        # failure_col over downtime_category_col - matches legacy analyze()
+        # exactly (predictive.py:466-477). `grouped`/`daily_ml` aggregate the
+        # raw failure_col away, so this must read context["df"], not daily_ml.
+        last_fail_ago: float | None = None
+        machine_max_date = mdf[date_col].max()
+        if failure_col and failure_col in raw_df.columns:
+            mfail_df = raw_df[raw_df[machine_col] == machine].copy()
+            mfail_df[failure_col] = pd.to_numeric(mfail_df[failure_col], errors="coerce").fillna(0)
+            mfail = mfail_df[mfail_df[failure_col] > 0]
+            if not mfail.empty:
+                last_fail_ago = float((machine_max_date - mfail[date_col].max()).days)
+        elif downtime_category_col and downtime_category_col in raw_df.columns:
+            mfail = raw_df[(raw_df[machine_col] == machine) & raw_df[downtime_category_col].isin(legacy._UNPLANNED_CATS)]
+            if not mfail.empty:
+                last_fail_ago = float((machine_max_date - mfail[date_col].max()).days)
+
+        if pipeline is not None and machine_key in context["last_x"]:
+            x_row = context["last_x"][machine_key]
+            feature_cols = ["oee_7d", "oee_slope_7d", "scrap_rate_7d", "dt_rate_7d", "fail_count_7d", "days_since_fail"]
+            x_df = pd.DataFrame([dict(zip(feature_cols, x_row))])
+            fail_prob = min(float(pipeline.predict_proba(x_df)[0][1]), 0.99)
+            ml_powered = True
+            drivers: list[dict] = []
+        elif anomaly_model is not None and machine_key in context["last_x"]:
+            model, mean, std = anomaly_model
+            fail_prob, driver_contribs = _anomaly_score(model, mean, std, context["last_x"][machine_key])
+            ml_powered = True
+            drivers = driver_contribs
+        else:
+            fail_prob, driver_contribs = legacy._stat_analyze(
+                oee_s, avail_s, perf_s, qual_s, last_fail_ago,
+                fleet_oee_median=fleet_oee_median,
+            )
+            ml_powered = False
+            drivers = driver_contribs
+
+        machine_dict, risk = _machine_risk_from_prob(
+            machine_key, fail_prob, ml_powered, drivers, oee_s, avail_s, perf_s, qual_s, last_fail_ago, days_per_period,
+        )
+        machines_out.append(machine_dict)
+
+        priority = {"high": "immediate", "medium": "scheduled", "low": "monitor"}[risk]
+        action, reason = legacy._ACTIONS.get(machine_dict["top_driver"], ("General inspection recommended", "Multiple metrics declining"))
+        pm_hours = legacy._PM_HOURS[priority]
+        avoided_h = round(fail_prob * 48.0, 1)
+        net_saving = round((avoided_h - pm_hours) * hourly_value, 2)
+        recs_out.append({
+            "machine": machine_key, "priority": priority, "action": action, "reason": reason,
+            "estimated_pm_hours": pm_hours, "avoided_downtime_hours": avoided_h, "net_saving": net_saving,
+        })
+
+    risk_order = {"high": 0, "medium": 1, "low": 2}
+    machines_out.sort(key=lambda m: (risk_order.get(m["risk_level"], 3), -m["failure_probability"]))
+    recs_out.sort(key=lambda r: {"immediate": 0, "scheduled": 1, "monitor": 2}.get(r["priority"], 3))
+
+    at_risk = sum(1 for m in machines_out if m["risk_level"] in ("high", "medium"))
+    total_avoided = sum(r["avoided_downtime_hours"] * hourly_value for r in recs_out)
+    total_pm = sum(r["estimated_pm_hours"] * hourly_value for r in recs_out)
+    net_savings = round(total_avoided - total_pm, 2)
+    roi_pct = round((net_savings / total_pm * 100) if total_pm > 0 else 0.0, 1)
+
+    predictive_result = {
+        "machines": machines_out,
+        "recommendations": recs_out,
+        "cost_summary": {
+            "total_avoided_cost": round(total_avoided, 2), "total_pm_cost": round(total_pm, 2),
+            "net_savings": net_savings, "roi_pct": roi_pct, "machines_at_risk": at_risk,
+        },
+        "model_meta": model_meta_dict,
+    }
+
+    return {
+        "predictive_result": predictive_result,
+        "pipeline": pipeline,
+        "explain_X": engine_result["explain_X"] if engine_result else None,
+        "explain_y": engine_result["explain_y"] if engine_result else None,
+        "leaderboard": engine_result["leaderboard"] if engine_result else [],
+        "best_model_name": engine_result["meta"]["model_name"] if engine_result else None,
+        "metric_name": engine_result["meta"]["metric_name"] if engine_result else None,
+        "metric_value": engine_result["meta"]["metric_value"] if engine_result else None,
+    }
+
+
+register_template(AutoMLTemplate(
+    id="predictive_maintenance",
+    label="Predictive Maintenance",
+    roles=ROLES,
+    preprocess=preprocess,
+    postprocess=postprocess,
+    recommendation_rules=RECOMMENDATION_RULES,
+    is_timeseries=True,
+    min_positive_examples=_MIN_ROWS,
+))

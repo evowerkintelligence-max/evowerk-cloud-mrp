@@ -12,6 +12,7 @@ from app.api.routes import (
     auth,
     bi,
     boms,
+    cbm,
     computer_vision,
     data_chat,
     datasets,
@@ -26,6 +27,7 @@ from app.api.routes import (
     kpis,
     locations,
     lots,
+    machines,
     mfg_forecast,
     oee,
     orgs,
@@ -38,18 +40,22 @@ from app.api.routes import (
     rca_cases,
     realtime,
     reports,
+    routings,
     scrap,
     shifts,
     simulation,
     spc,
     suppliers,
     throughput,
+    work_centers,
     workflows,
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
+from app.services import automl_realtime as automl_realtime_service
 from app.services import realtime as realtime_service
 from app.services import realtime_cache
+from app.services import sensor_consumer
 
 settings = get_settings()
 
@@ -62,7 +68,13 @@ async def lifespan(app: FastAPI):
     # Start this replica's realtime_cache consumer - see its module
     # docstring for why every replica needs its own consumer group.
     await realtime_cache.start_cache_consumer()
+    # Same re-adoption for live AutoML scoring/drift bindings - see
+    # app.services.automl_realtime.
+    await automl_realtime_service.resume_all_bindings()
+    await sensor_consumer.start_sensor_consumer()
     yield
+    automl_realtime_service.stop_all_binding_schedulers()
+    await sensor_consumer.stop_sensor_consumer()
     await realtime_cache.stop_cache_consumer()
     realtime_service.stop_all_runners()
 
@@ -91,6 +103,7 @@ app.include_router(suppliers.router)
 app.include_router(purchase_orders.router)
 app.include_router(lots.router)
 app.include_router(locations.router)
+app.include_router(machines.router)
 # Must be registered before inventory.router: /inventory/analytics is a
 # static path that would otherwise be shadowed by inventory.router's
 # /inventory/{item_id} (Starlette matches path shape before UUID validation).
@@ -113,6 +126,7 @@ app.include_router(quality.router)
 app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
 app.include_router(reports.router)
+app.include_router(routings.router)
 app.include_router(bi.router)
 app.include_router(workflows.router)
 app.include_router(automl.router)
@@ -121,12 +135,13 @@ app.include_router(kpi_dashboards.router)
 app.include_router(integrations.router)
 app.include_router(realtime.router)
 app.include_router(rca_cases.router)
-app.include_router(predictive.analyze_router)
 app.include_router(predictive.router)
 app.include_router(mfg_forecast.router)
+app.include_router(work_centers.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
 app.include_router(alerts.router)
+app.include_router(cbm.router)
 
 
 @app.get("/health")

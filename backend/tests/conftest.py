@@ -18,12 +18,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core import redis_client
-from app.db import session as db_session
+from app.db import session as db_session_module
 from app.db.base import Base
 from app.main import app
 from app.models import (  # noqa: F401 - register models
     alert,
     audit,
+    automl_live_binding,
     automl_run,
     bom,
     dashboard,
@@ -36,17 +37,22 @@ from app.models import (  # noqa: F401 - register models
     kpi,
     location,
     lot,
+    machine,
     maintenance_schedule,
     pace_tracking,
     procurement,
     rca_case,
     realtime,
     report_spec,
+    routing,
+    sensor,
+    shift_forecast,
     shift_schedule,
     simulation,
     telemetry,
     tenant,
     user,
+    work_center,
     workflow,
 )
 
@@ -60,6 +66,13 @@ async def test_engine():
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(test_engine):
+    async_session = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with async_session() as session:
+        yield session
 
 
 @pytest_asyncio.fixture
@@ -77,11 +90,11 @@ async def client(test_engine, monkeypatch):
     async def _get_redis_override():
         return fake_redis
 
-    app.dependency_overrides[db_session.get_db] = _get_db_override
+    app.dependency_overrides[db_session_module.get_db] = _get_db_override
     app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
     # TelemetryMiddleware opens its own session outside the DI chain, so it needs
     # its own patch of the factory to land in the test DB instead of the real one.
-    monkeypatch.setattr(db_session, "async_session_factory", session_factory)
+    monkeypatch.setattr(db_session_module, "async_session_factory", session_factory)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

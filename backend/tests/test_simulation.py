@@ -19,6 +19,13 @@ OEE_CSV = (
     b"2026-01-01,B,M1,480,460,920,890\n"
 )
 
+OEE_CSV_MULTI_DAY = (
+    b"date,shift,machine,planned_time,operating_time,total_units,good_units\n"
+    b"2026-01-01,A,M1,480,480,1000,900\n"
+    b"2026-01-02,A,M1,480,480,1000,800\n"
+    b"2026-01-03,A,M1,480,480,1200,1200\n"
+)
+
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
     reg = await client.post("/auth/register", json={"org_name": org_name, "email": email, "password": PASSWORD})
@@ -57,7 +64,6 @@ async def test_simulation_baseline_derivation(client):
     assert body["dataset_id"] == dataset_id
     assert body["baseline"]["shifts_per_day"] == 2.0
     assert body["baseline"]["shift_hours"] == 8.0
-    assert body["baseline"]["machine_count"] == 1.0
     assert body["baseline"]["throughput_per_shift"] == 910.0
     assert body["baseline"]["oee_pct"] == 91.67
     assert body["baseline"]["defect_rate_pct"] == 3.3
@@ -105,6 +111,33 @@ async def test_simulation_crud(client):
 
     listed_after = await client.get("/simulation", headers=_h(token))
     assert listed_after.json() == []
+
+
+async def test_simulation_update_null_baseline_clears_instead_of_crashing(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.put(f"/simulation/{sim['id']}", headers=_h(token), json={"baseline": None, "changes": None})
+    assert res.status_code == 200, res.text
+    assert res.json()["baseline"] == {}
+    assert res.json()["changes"] == {}
+
+
+async def test_simulation_update_null_name_rejected_instead_of_crashing(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.put(f"/simulation/{sim['id']}", headers=_h(token), json={"name": None})
+    assert res.status_code == 400, res.text
+
+
+async def test_simulation_update_null_description_clears_instead_of_rejecting(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.put(f"/simulation/{sim['id']}", headers=_h(token), json={"description": None})
+    assert res.status_code == 200, res.text
+    assert res.json()["description"] == ""
 
 
 async def test_simulation_run_persisted_history_and_compare(client):
@@ -206,3 +239,69 @@ async def test_simulation_compare_tenant_isolation(client):
         json={"run_a_id": run_a_id, "run_b_id": run_b_id},
     )
     assert res.status_code == 404
+
+
+async def test_simulation_monte_carlo_run_persists_bands_and_sensitivity(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.post(
+        f"/simulation/{sim['id']}/run/monte-carlo", headers=_h(token),
+        json={"changes": {"shifts_per_day": 3}, "target_metric": "daily_margin"},
+    )
+    assert res.status_code == 201, res.text
+    result = res.json()["result"]
+
+    assert result["variance_source"] == "default"
+    band = result["bands"]["daily_margin"]
+    assert band["p10"] <= band["p50"] <= band["p90"]
+    assert result["sensitivity"]["target_metric"] == "daily_margin"
+    assert len(result["sensitivity"]["ranked"]) > 0
+
+    listed = await client.get(f"/simulation/{sim['id']}/runs", headers=_h(token))
+    assert len(listed.json()) == 1
+
+
+async def test_simulation_monte_carlo_invalid_target_metric_rejected(client):
+    token = await _register_and_login(client)
+    sim = await _create_simulation(client, token)
+
+    res = await client.post(
+        f"/simulation/{sim['id']}/run/monte-carlo", headers=_h(token), json={"target_metric": "not_a_real_metric"}
+    )
+    assert res.status_code == 400
+
+
+async def test_simulation_monte_carlo_uses_dataset_variance_when_linked(client):
+    token = await _register_and_login(client)
+    dataset_id = await _upload(client, token, data=OEE_CSV_MULTI_DAY)
+    sim = await _create_simulation(client, token, dataset_id=dataset_id)
+
+    res = await client.post(f"/simulation/{sim['id']}/run/monte-carlo", headers=_h(token), json={})
+    assert res.status_code == 201, res.text
+    assert res.json()["result"]["variance_source"] == "dataset"
+
+
+async def test_simulation_monte_carlo_tenant_isolation(client):
+    token_a = await _register_and_login(client, email="mca@example.com", org_name="MCOrgA")
+    sim = await _create_simulation(client, token_a)
+
+    token_b = await _register_and_login(client, email="mcb@example.com", org_name="MCOrgB")
+    res = await client.post(f"/simulation/{sim['id']}/run/monte-carlo", headers=_h(token_b), json={})
+    assert res.status_code == 404
+
+
+async def test_simulation_compare_requires_same_simulation(client):
+    token = await _register_and_login(client)
+    sim_1 = await _create_simulation(client, token, name="Sim 1")
+    sim_2 = await _create_simulation(client, token, name="Sim 2")
+
+    run_1 = await client.post(f"/simulation/{sim_1['id']}/run", headers=_h(token), json={"changes": {}})
+    run_2 = await client.post(f"/simulation/{sim_2['id']}/run", headers=_h(token), json={"changes": {}})
+
+    # same org, but the two runs belong to different simulations - must be rejected
+    res = await client.post(
+        "/simulation/compare", headers=_h(token),
+        json={"run_a_id": run_1.json()["id"], "run_b_id": run_2.json()["id"]},
+    )
+    assert res.status_code == 400

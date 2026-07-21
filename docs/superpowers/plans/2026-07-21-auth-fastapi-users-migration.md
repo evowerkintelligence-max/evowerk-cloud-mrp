@@ -1334,8 +1334,12 @@ async def _handle_callback(
             associate_by_email=verified,
             is_verified_by_default=verified,
         )
-    except Exception as exc:  # fastapi_users.exceptions.UserAlreadyExists when associate_by_email=False and email taken
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not sign in with this account") from exc
+    except exceptions.UserAlreadyExists:
+        # associate_by_email=False (unverified email) and this email already
+        # has an account - narrow catch so a genuine failure inside
+        # oauth_callback() (DB error, etc.) surfaces as a 500 instead of
+        # being silently downgraded to a misleading 400.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not sign in with this account") from None
 
     tokens = await _issue_tokens(db, user)
     await db.commit()

@@ -110,7 +110,7 @@ async def test_deactivate_supplier_requires_owner(client, test_engine):
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="member2@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )
@@ -186,7 +186,7 @@ async def test_supplier_contact_mutations_require_owner(client, test_engine):
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="member3@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

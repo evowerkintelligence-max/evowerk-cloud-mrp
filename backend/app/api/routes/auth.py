@@ -138,7 +138,7 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
     user = User(
         org_id=org.id,
         email=body.email,
-        password_hash=await run_in_threadpool(hash_password, body.password),
+        hashed_password=await run_in_threadpool(hash_password, body.password),
         role="owner",
     )
     db.add(user)
@@ -197,7 +197,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         await db.commit()
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try again later")
 
-    if not await run_in_threadpool(verify_password_timing_safe, body.password, user.password_hash):
+    if not await run_in_threadpool(verify_password_timing_safe, body.password, user.hashed_password):
         _register_failed_attempt(user)
         await log_event(
             db,
@@ -259,7 +259,7 @@ async def mfa_enroll(
     user = result.scalar_one()
 
     if user.mfa_enabled:
-        if not body.password or not await run_in_threadpool(verify_password, body.password, user.password_hash):
+        if not body.password or not await run_in_threadpool(verify_password, body.password, user.hashed_password):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Password confirmation required")
 
     secret = generate_totp_secret()

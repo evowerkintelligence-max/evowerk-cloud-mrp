@@ -27,7 +27,10 @@ class Settings(BaseSettings):
 
     # SES sender address (must be a verified identity in the target AWS
     # account - see infra/terraform/aws/ses.tf) and the region to call SES in.
-    ses_from_email: str = "no-reply@evowerk.dev"
+    # Empty string means SES isn't configured (see app/core/email.py) - not
+    # "production" env, since infra/terraform/aws/ecs.tf always sets
+    # ENV=production regardless of whether a sender was ever configured.
+    ses_from_email: str = ""
     aws_region: str = "us-east-1"
 
     # Empty string disables that provider's OAuth routes entirely (see

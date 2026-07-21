@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core import redis_client
 from app.db import session as db_session
 from app.db.base import Base
+from app.services import realtime_cache
 from app.main import app
 from app.models import (  # noqa: F401 - register models on the metadata
     alert,
@@ -47,6 +48,12 @@ from app.models import (  # noqa: F401 - register models on the metadata
     user,
     workflow,
 )
+
+# No local Redpanda broker in this dev flow - stub out the realtime cache
+# consumer the same way db/redis are stubbed above, so app startup doesn't
+# hang trying to bootstrap Kafka.
+realtime_cache.start_cache_consumer = lambda *a, **k: asyncio.sleep(0)
+realtime_cache.stop_cache_consumer = lambda *a, **k: asyncio.sleep(0)
 
 engine = create_async_engine(os.environ["DATABASE_URL"])
 session_factory = async_sessionmaker(engine, expire_on_commit=False)

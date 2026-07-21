@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi_users import exceptions
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ from app.core.security import (
     refresh_token_expiry,
     totp_provisioning_uri,
     verify_password,
+    verify_password_timing_safe,
     verify_totp,
 )
 from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
@@ -85,7 +86,7 @@ router.include_router(fastapi_users.get_verify_router(UserRead), dependencies=[D
 
 
 class LoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     totp_code: str | None = None
 
@@ -166,7 +167,7 @@ async def login(
     except exceptions.UserNotExists:
         # Always pay the argon2 cost, even with no real hash to check, so this path
         # can't be timed against the "wrong password" path to enumerate emails.
-        await run_in_threadpool(user_manager.password_helper.hash, body.password)
+        await run_in_threadpool(verify_password_timing_safe, body.password, None)
         await log_event(db, action="user.login_failed", target=body.email, ip_address=_client_ip(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")

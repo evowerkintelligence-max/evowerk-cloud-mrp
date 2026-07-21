@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
+from typing import Any
 
 from fastapi import Depends, Request
 from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin, exceptions, schemas
@@ -9,6 +11,7 @@ from fastapi_users.authentication import AuthenticationBackend, BearerTransport,
 from fastapi_users.password import PasswordHelper
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from pydantic import field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -46,6 +49,20 @@ class UserUpdate(schemas.BaseUserUpdate):
 
 def _client_ip(request: Request | None) -> str | None:
     return request.client.host if request and request.client else None
+
+
+_background_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _fire_and_forget(coro: Coroutine[Any, Any, Any]) -> None:
+    """Schedules coro without awaiting it, keeping a strong reference until it
+    finishes (asyncio only holds a weak ref to tasks, so an unreferenced task
+    can be GC'd mid-flight). Used for the email sends below so response time
+    doesn't depend on whether the target user/email exists - see security
+    review notes on the forgot-password/verify-email timing side channel."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
@@ -88,7 +105,14 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         # and the founder is locked out of managing their own org.
         user_dict["role"] = "owner"
 
-        created_user = await self.user_db.create(user_dict)
+        try:
+            created_user = await self.user_db.create(user_dict)
+        except IntegrityError:
+            # Two concurrent registrations for the same email both pass the
+            # get_by_email check above before either commits; the DB's unique
+            # constraint is the real source of truth for the race.
+            await session.rollback()
+            raise exceptions.UserAlreadyExists() from None
         await self.on_after_register(created_user, request)
         return created_user
 
@@ -109,7 +133,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         from app.core.email import send_password_reset_email
 
         session = self.user_db.session
-        await send_password_reset_email(user.email, token)
+        _fire_and_forget(send_password_reset_email(user.email, token))
         await log_event(
             session,
             action="user.password_reset_requested",
@@ -136,7 +160,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         from app.core.email import send_verification_email
 
         session = self.user_db.session
-        await send_verification_email(user.email, token)
+        _fire_and_forget(send_verification_email(user.email, token))
         await log_event(
             session,
             action="user.verification_requested",

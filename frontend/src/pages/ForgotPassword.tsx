@@ -4,15 +4,18 @@ import { AuthLayout } from "@/components/AuthLayout";
 import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 
 export function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitting(true);
+    setError(false);
     try {
       await fetch("/auth/forgot-password", {
         method: "POST",
@@ -23,6 +26,11 @@ export function ForgotPassword() {
       // endpoint itself never reveals whether the email is registered
       // (see backend/tests/test_password_reset.py), so the UI shouldn't either.
       setSubmitted(true);
+    } catch {
+      // A real network failure (offline, DNS, backend down) is not the same
+      // as "the backend responded but won't say if the email exists" - this
+      // doesn't leak account existence, so it's fine to surface it distinctly.
+      setError(true);
     } finally {
       setSubmitting(false);
     }
@@ -58,6 +66,7 @@ export function ForgotPassword() {
             required
           />
         </Field>
+        {error && <Alert variant="destructive">Something went wrong. Please try again.</Alert>}
         <Button type="submit" className="w-full" loading={submitting}>
           Send reset link
         </Button>

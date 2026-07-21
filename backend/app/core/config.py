@@ -21,6 +21,23 @@ class Settings(BaseSettings):
     # Fernet key (Fernet.generate_key()) used to encrypt TOTP secrets at rest.
     mfa_encryption_key: str
 
+    # Base URL of the deployed frontend, used to build links embedded in
+    # password-reset and email-verification messages (see app/core/email.py).
+    frontend_base_url: str = "http://localhost:5173"
+
+    # SES sender address (must be a verified identity in the target AWS
+    # account - see infra/terraform/aws/ses.tf) and the region to call SES in.
+    ses_from_email: str = "no-reply@evowerk.dev"
+    aws_region: str = "us-east-1"
+
+    # Empty string disables that provider's OAuth routes entirely (see
+    # app/api/routes/oauth.py) - lets local dev run without registering
+    # OAuth apps with Google/Microsoft.
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    microsoft_oauth_client_id: str = ""
+    microsoft_oauth_client_secret: str = ""
+
     max_failed_login_attempts: int = 5
     account_lockout_minutes: int = 15
 

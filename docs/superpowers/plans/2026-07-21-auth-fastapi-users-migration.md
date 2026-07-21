@@ -587,7 +587,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import exceptions
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -783,7 +782,7 @@ async def login(
     return tokens
 ```
 
-**Note:** `OAuth2PasswordRequestForm` is imported but no longer used directly (the login route now goes through `user_manager.get_by_email` + `password_helper.verify_and_update` explicitly, preserving the exact original check-ordering: lockout is checked *before* password verification, matching `test_account_lockout_after_repeated_failures`). Remove that unused import.
+**Note:** the login route goes through `user_manager.get_by_email` + `password_helper.verify_and_update` explicitly (not fastapi-users' built-in login/`authenticate()`), preserving the exact original check-ordering: lockout is checked *before* password verification, matching `test_account_lockout_after_repeated_failures`.
 
 Leave everything from `@router.post("/mfa/enroll", ...)` (originally starting at line 252) through the end of the file (`logout`) **unchanged** - do not touch `mfa_enroll`, `mfa_verify`, `refresh`, or `logout`.
 
@@ -1118,6 +1117,8 @@ async def test_google_callback_creates_account_when_email_verified(client):
 
 
 async def test_google_callback_rejects_auto_link_when_email_not_verified(client):
+    from fastapi import status
+
     await client.post(
         "/auth/register",
         json={"org_name": "Acme", "email": "existing@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
@@ -1132,31 +1133,19 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
 
         res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
 
-    # Must NOT silently log in as the existing password account - a new,
-    # separate (unlinked) account is created instead of trusting an
-    # unverified provider email that happens to match.
-    location = res.headers["location"]
-    assert "access_token=" in location
+    # Must NOT silently log in as the existing password account. Because
+    # `email` is a unique column, "don't auto-link" can't mean "create a
+    # second User row with the same email" either - it must mean "reject
+    # the OAuth login" (no tokens issued) rather than trusting an
+    # unverified provider email that happens to match an existing account.
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
 
-    from sqlalchemy import select
-    from app.models.user import User
-
-    # two distinct users now share this email is impossible (unique index) -
-    # instead the login must have failed to link, i.e. this callback path
-    # must not have authenticated as the *existing* user. Confirmed via a
-    # fresh login with the existing user's real password still working
-    # unchanged.
+    # The existing account itself is untouched - its real password still works.
     login = await client.post(
         "/auth/login", json={"email": "existing@example.com", "password": "correct-horse-battery-staple1"}  # pragma: allowlist secret
     )
     assert login.status_code == 200
 ```
-
-**Note on the third test:** because `email` is a unique column, "don't auto-link" for an already-registered email can't mean "create a second User row with the same email" - it must mean "reject the OAuth login" (return an error, don't issue tokens) rather than silently authenticating into the existing account. Adjust the assertion in Step 1 once the real behavior is implemented in Step 3: expect a 4xx with no tokens issued, not a redirect with tokens. Update the test to:
-
-```python
-    assert res.status_code == status.HTTP_400_BAD_REQUEST
-```//<br>(add `from fastapi import status` to the imports, remove the `location`/`access_token=` assertions for this test only)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1315,17 +1304,14 @@ if settings.google_oauth_client_id or settings.microsoft_oauth_client_id:
     app.include_router(oauth.router)
 ```
 
-- [ ] **Step 5: Update the test's third assertion** (per the note in Step 1)
+- [ ] **Step 5: Make sure the OAuth router is actually mounted for tests**
 
-Edit `backend/tests/test_oauth.py`'s `test_google_callback_rejects_auto_link_when_email_not_verified` to assert `res.status_code == status.HTTP_400_BAD_REQUEST` and drop the tokens-in-location assertions, per the note left in Step 1. Add `from fastapi import status` to the test file's imports. Also add, near the top of the test file:
+The conditional mount added in Step 4 only registers `oauth.router` when a client ID is configured. `conftest.py` imports `app.main` once per test process, so the env var must be set before that first import happens - add these two lines to `backend/tests/conftest.py`, right next to the existing `os.environ.setdefault("JWT_SECRET_KEY", ...)` line (before the `from app.main import app` line below it):
 
 ```python
-import os
 os.environ.setdefault("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
-os.environ.setdefault("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
+os.environ.setdefault("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")  # pragma: allowlist secret
 ```
-
-(so the conditional mount in Step 4 actually registers the router for this test module - `conftest.py`'s `app` import happens once per process, so this must be set before `app.main` is first imported; add it to `conftest.py` instead, right next to the existing `os.environ.setdefault("JWT_SECRET_KEY", ...)` line, if a bare `import os` at the top of `test_oauth.py` runs too late.)
 
 - [ ] **Step 6: Run test to verify it passes**
 
@@ -1966,7 +1952,7 @@ Expected: all tests pass, including every test file added in Tasks 2-7.
 - [ ] **Step 2: Run backend lint**
 
 Run: `cd backend && ruff check .`
-Expected: no errors (fix any import-order/unused-import issues introduced by the `auth.py` rewrite in Task 4, e.g. the now-unused `OAuth2PasswordRequestForm` import, `hash_password`/`verify_password` if no longer called directly anywhere in `auth.py`).
+Expected: no errors (fix any import-order/unused-import issues introduced by the `auth.py` rewrite in Task 4, e.g. `hash_password`/`verify_password` if no longer called directly anywhere in `auth.py`).
 
 - [ ] **Step 3: Run frontend build + lint**
 

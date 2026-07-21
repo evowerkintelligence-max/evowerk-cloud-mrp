@@ -22,6 +22,7 @@ import {
   oeeColor,
   paceStatus,
   rankedBarOption,
+  token,
 } from "./shared";
 import {
   useAutoMLRun,
@@ -570,7 +571,7 @@ export function Shifts() {
                     height={280}
                     option={{
                       tooltip: TOOLTIP,
-                      legend: { textStyle: { color: "#64748b", fontSize: 11 }, top: 4 },
+                      legend: { textStyle: { color: token("--muted-foreground"), fontSize: 11 }, top: 4 },
                       grid: { top: 40, bottom: 28, left: 56, right: 20 },
                       xAxis: { type: "category", data: trendPeriods, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE },
                       yAxis: { type: "value", axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },

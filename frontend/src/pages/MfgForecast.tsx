@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
+import { Database, Percent, Target } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { STAT_TONES, StatCard } from "@/components/StatCard";
 import { Field } from "@/components/Field";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -153,18 +155,13 @@ export function MfgForecast() {
             <CardContent className="space-y-4">
               <Alert>{forecast.data.summary}</Alert>
               <div className="grid gap-4 sm:grid-cols-3">
-                <div className="rounded-md border border-border p-3">
-                  <div className="text-xs text-muted-foreground">MAPE</div>
-                  <div className="text-xl font-semibold">{forecast.data.mape_pct}%</div>
-                </div>
-                <div className="rounded-md border border-border p-3">
-                  <div className="text-xs text-muted-foreground">R²</div>
-                  <div className="text-xl font-semibold">{forecast.data.r2}</div>
-                </div>
-                <div className="rounded-md border border-border p-3">
-                  <div className="text-xs text-muted-foreground">Training points</div>
-                  <div className="text-xl font-semibold">{forecast.data.n_training_points}</div>
-                </div>
+                {[
+                  { label: "MAPE", value: `${forecast.data.mape_pct}%`, icon: <Percent /> },
+                  { label: "R²", value: forecast.data.r2, icon: <Target /> },
+                  { label: "Training points", value: forecast.data.n_training_points, icon: <Database /> },
+                ].map((s, i) => (
+                  <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} tone={STAT_TONES[i % STAT_TONES.length]} />
+                ))}
               </div>
 
               <div className="text-sm font-medium">Next {forecast.data.horizon} days</div>

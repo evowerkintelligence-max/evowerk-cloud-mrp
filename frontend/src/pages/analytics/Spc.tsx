@@ -1,7 +1,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { STAT_TONES, StatCard } from "@/components/StatCard";
-import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt } from "./shared";
+import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt, token } from "./shared";
 
 export interface SpcPoint {
   label: string;
@@ -92,7 +92,7 @@ export function controlChart(points: SpcPoint[], value: (p: SpcPoint) => number 
         symbolSize: 6,
         data: points.map((p) => ({
           value: value(p),
-          itemStyle: p.in_control ? { color: C.blue } : { color: C.red, borderColor: "#fff", borderWidth: 1 },
+          itemStyle: p.in_control ? { color: C.blue } : { color: C.red, borderColor: token("--foreground"), borderWidth: 1 },
         })),
         lineStyle: { width: 1.5, color: C.blue },
         markLine: {

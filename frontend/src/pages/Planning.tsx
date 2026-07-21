@@ -1,9 +1,11 @@
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
+import { CalendarClock, Hammer, ListChecks, ShoppingCart } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { today, plusDays } from "@/lib/date";
 import { PageHeader } from "@/components/PageHeader";
+import { StatCard } from "@/components/StatCard";
 import { Field } from "@/components/Field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -294,6 +296,45 @@ export function Planning() {
               spec={{ type: "kind_report", report_kind: "mrp-plan", report_params: { horizon_start: horizonStart, horizon_end: horizonEnd } }}
               label={`MRP plan — ${horizonStart} to ${horizonEnd}`}
             />
+          )}
+
+          {plan.data && plan.data.lines.length > 0 && (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              {[
+                {
+                  label: "Planned items",
+                  value: plan.data.lines.length,
+                  icon: <ListChecks />,
+                  tone: "primary" as const,
+                },
+                {
+                  label: "To build",
+                  value: plan.data.lines.filter(
+                    (l) => l.is_manufactured && Number(l.suggested_order_quantity) > 0,
+                  ).length,
+                  icon: <Hammer />,
+                  tone: "accent" as const,
+                },
+                {
+                  label: "To order",
+                  value: plan.data.lines.filter(
+                    (l) => !l.is_manufactured && Number(l.suggested_order_quantity) > 0,
+                  ).length,
+                  icon: <ShoppingCart />,
+                  tone: "info" as const,
+                },
+                {
+                  label: "Past due",
+                  value: plan.data.lines.filter(
+                    (l) => l.suggested_order_date && l.suggested_order_date < today(),
+                  ).length,
+                  icon: <CalendarClock />,
+                  tone: "warning" as const,
+                },
+              ].map((s) => (
+                <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} tone={s.tone} />
+              ))}
+            </div>
           )}
 
           {plan.isError && <Alert variant="destructive">{(plan.error as Error).message}</Alert>}

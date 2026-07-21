@@ -88,6 +88,7 @@ async def _get_redis_override():
 app.dependency_overrides[db_session.get_db] = _get_db_override
 app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
 
+
 async def _noop(*_args, **_kwargs) -> None:
     return None
 

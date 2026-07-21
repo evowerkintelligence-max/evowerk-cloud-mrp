@@ -17,7 +17,7 @@ import {
   useDatasets,
   type EngineField,
 } from "@/pages/analytics/shared";
-import { cn } from "@/lib/utils";
+import { PageTabs } from "@/components/PageTabs";
 
 interface RcaCase {
   id: string;
@@ -885,6 +885,13 @@ function EventsLog({ caseId }: { caseId: string }) {
 
 const TABS = ["cause tree", "actions", "analysis", "history"] as const;
 
+const TAB_LABELS: Record<(typeof TABS)[number], string> = {
+  "cause tree": "Cause tree",
+  actions: "Actions",
+  analysis: "Analysis",
+  history: "History",
+};
+
 function CaseDetail({ caseId, onBack }: { caseId: string; onBack: () => void }) {
   const qc = useQueryClient();
   const [tab, setTab] = useState<(typeof TABS)[number]>("cause tree");
@@ -958,17 +965,11 @@ function CaseDetail({ caseId, onBack }: { caseId: string; onBack: () => void }) 
       {updateCase.isError && <Alert variant="destructive">{errorMessage(updateCase.error)}</Alert>}
       {deleteCase.isError && <Alert variant="destructive">{errorMessage(deleteCase.error)}</Alert>}
 
-      <div className="flex gap-2 border-b border-border">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn("px-3 py-2 text-sm capitalize", tab === t ? "border-b-2 border-primary font-medium text-foreground" : "text-muted-foreground")}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      <PageTabs
+        tabs={TABS.map((t) => ({ value: t, label: TAB_LABELS[t] }))}
+        active={tab}
+        onChange={setTab}
+      />
 
       {tab === "cause tree" && <CauseTree caseId={caseId} />}
       {tab === "actions" && <Actions caseId={caseId} columns={columns} />}

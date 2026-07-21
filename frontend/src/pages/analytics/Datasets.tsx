@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Package } from "lucide-react";
+import { Database, HardDrive, Package, Rows3 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { StatCard } from "@/components/StatCard";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
 import { Alert } from "@/components/ui/alert";
@@ -33,6 +34,9 @@ export function Datasets() {
     },
   });
   const isOwner = org.data?.role === "owner";
+
+  const totalRows = (datasets.data ?? []).reduce((s, d) => s + d.row_count, 0);
+  const totalBytes = (datasets.data ?? []).reduce((s, d) => s + d.size_bytes, 0);
 
   const upload = useMutation({
     mutationFn: async () => {
@@ -132,65 +136,72 @@ export function Datasets() {
           description="Upload your first production data file to start running the analytics engines."
         />
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>All datasets</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <TableWrap>
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Name</TH>
-                    <TH>Format</TH>
-                    <TH>Rows</TH>
-                    <TH>Columns</TH>
-                    <TH>Size</TH>
-                    <TH>Uploaded</TH>
-                    <TH />
-                  </TR>
-                </THead>
-                <TBody>
-                  {datasets.data.map((d) => (
-                    <TR key={d.id}>
-                      <TD className="font-medium">
-                        {d.name}
-                        <div className="text-xs text-muted-foreground">{d.original_filename}</div>
-                      </TD>
-                      <TD>
-                        <Badge variant="neutral">{d.fmt}</Badge>
-                      </TD>
-                      <TD>{fmt(d.row_count)}</TD>
-                      <TD>{d.columns.length}</TD>
-                      <TD>{fileSize(d.size_bytes)}</TD>
-                      <TD>{new Date(d.created_at).toLocaleDateString()}</TD>
-                      <TD>
-                        <div className="flex justify-end gap-2">
-                          <Button variant="secondary" size="sm" onClick={() => navigate(`/datasets/${d.id}`)}>
-                            Open
-                          </Button>
-                          {isOwner && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-rose-400 hover:text-rose-300"
-                              loading={del.isPending && del.variables === d.id}
-                              onClick={() => {
-                                if (confirm(`Delete dataset "${d.name}"? This cannot be undone.`)) del.mutate(d.id);
-                              }}
-                            >
-                              Delete
-                            </Button>
-                          )}
-                        </div>
-                      </TD>
+        <div className="space-y-8">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+            <StatCard label="Datasets" value={datasets.data.length} icon={<Database />} tone="primary" />
+            <StatCard label="Total rows" value={fmt(totalRows)} icon={<Rows3 />} tone="accent" />
+            <StatCard label="Total size" value={fileSize(totalBytes)} icon={<HardDrive />} tone="success" />
+          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>All datasets</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <TableWrap>
+                <Table>
+                  <THead>
+                    <TR>
+                      <TH>Name</TH>
+                      <TH>Format</TH>
+                      <TH>Rows</TH>
+                      <TH>Columns</TH>
+                      <TH>Size</TH>
+                      <TH>Uploaded</TH>
+                      <TH />
                     </TR>
-                  ))}
-                </TBody>
-              </Table>
-            </TableWrap>
-          </CardContent>
-        </Card>
+                  </THead>
+                  <TBody>
+                    {datasets.data.map((d) => (
+                      <TR key={d.id}>
+                        <TD className="font-medium">
+                          {d.name}
+                          <div className="text-xs text-muted-foreground">{d.original_filename}</div>
+                        </TD>
+                        <TD>
+                          <Badge variant="neutral">{d.fmt}</Badge>
+                        </TD>
+                        <TD>{fmt(d.row_count)}</TD>
+                        <TD>{d.columns.length}</TD>
+                        <TD>{fileSize(d.size_bytes)}</TD>
+                        <TD>{new Date(d.created_at).toLocaleDateString()}</TD>
+                        <TD>
+                          <div className="flex justify-end gap-2">
+                            <Button variant="secondary" size="sm" onClick={() => navigate(`/datasets/${d.id}`)}>
+                              Open
+                            </Button>
+                            {isOwner && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive hover:text-destructive/80"
+                                loading={del.isPending && del.variables === d.id}
+                                onClick={() => {
+                                  if (confirm(`Delete dataset "${d.name}"? This cannot be undone.`)) del.mutate(d.id);
+                                }}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          </div>
+                        </TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              </TableWrap>
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   );

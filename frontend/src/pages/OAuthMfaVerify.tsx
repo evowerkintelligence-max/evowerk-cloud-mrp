@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Field } from "@/components/Field";
@@ -9,8 +9,10 @@ import { Alert } from "@/components/ui/alert";
 import { errorMessage } from "@/lib/utils";
 
 export function OAuthMfaVerify() {
-  const [searchParams] = useSearchParams();
-  const pendingToken = searchParams.get("pending_token") ?? "";
+  const location = useLocation();
+  // Passed via router state (not a URL query param) from OAuthCallback, so
+  // this short-lived token never sits in the visible URL/browser history.
+  const pendingToken = (location.state as { pendingToken?: string } | null)?.pendingToken ?? "";
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);

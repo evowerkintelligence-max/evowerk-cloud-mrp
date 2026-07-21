@@ -19,7 +19,9 @@ export function OAuthCallback() {
       setTokens(accessToken, refreshToken);
       navigate("/", { replace: true });
     } else if (mfaPendingToken) {
-      navigate(`/oauth/mfa-verify?pending_token=${encodeURIComponent(mfaPendingToken)}`, { replace: true });
+      // Passed via router state, not a URL query param, so the short-lived
+      // pending token never sits in the visible URL/browser history.
+      navigate("/oauth/mfa-verify", { replace: true, state: { pendingToken: mfaPendingToken } });
     } else {
       navigate("/login", { replace: true });
     }

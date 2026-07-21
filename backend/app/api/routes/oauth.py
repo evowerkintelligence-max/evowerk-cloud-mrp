@@ -202,6 +202,9 @@ async def oauth_mfa_verify(
     if not user.mfa_enabled or not verify_totp(decrypt_secret(user.mfa_secret or ""), body.code):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
 
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account disabled")
+
     tokens = await _issue_tokens(db, user)
     await log_event(
         db,

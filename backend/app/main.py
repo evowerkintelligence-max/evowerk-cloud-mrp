@@ -29,6 +29,7 @@ from app.api.routes import (
     lots,
     machines,
     mfg_forecast,
+    oauth,
     oee,
     orgs,
     pace_tracking,
@@ -96,6 +97,8 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+if settings.google_oauth_client_id or settings.microsoft_oauth_client_id:
+    app.include_router(oauth.router)
 app.include_router(orgs.router)
 app.include_router(items.router)
 app.include_router(boms.router)

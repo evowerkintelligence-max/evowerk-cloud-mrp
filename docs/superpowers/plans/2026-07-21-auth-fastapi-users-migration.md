@@ -142,7 +142,13 @@ class User(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(lazy="joined")
+    # selectin (not joined): joined eager-loading a to-many collection makes
+    # SQLAlchemy require .unique() on every Result, which would break the
+    # many existing `select(User)...)` call sites across this codebase
+    # (login, get_current_user, test fixtures) that don't call it. selectin
+    # issues a separate query instead - no duplicate rows, no .unique()
+    # needed, and it's async-session-safe (no implicit lazy IO).
+    oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(lazy="selectin")
 
 
 class RefreshToken(Base):
@@ -308,7 +314,10 @@ Edit `backend/app/core/config.py`, add after `mfa_encryption_key: str`:
 
     # SES sender address (must be a verified identity in the target AWS
     # account - see infra/terraform/aws/ses.tf) and the region to call SES in.
-    ses_from_email: str = "no-reply@evowerk.dev"
+    # Empty string means SES isn't configured (see app/core/email.py) - not
+    # "production" env, since infra/terraform/aws/ecs.tf always sets
+    # ENV=production regardless of whether a sender was ever configured.
+    ses_from_email: str = ""
     aws_region: str = "us-east-1"
 
     # Empty string disables that provider's OAuth routes entirely (see
@@ -455,6 +464,11 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         # more (see app.services.inventory / app.api.routes.inventory).
         session.add(Location(org_id=org.id, code="MAIN", name="Main", is_default=True))
         user_dict["org_id"] = org.id
+        # The org-founding user must be its owner - require_role("owner") gates
+        # BOM/inventory/dataset/forecast/BI/item-catalog management throughout
+        # the app. Without this, User.role's column default ("member") applies
+        # and the founder is locked out of managing their own org.
+        user_dict["role"] = "owner"
 
         created_user = await self.user_db.create(user_dict)
         await self.on_after_register(created_user, request)
@@ -587,10 +601,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import exceptions
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, CurrentUser
@@ -602,14 +616,13 @@ from app.core.security import (
     encrypt_secret,
     generate_refresh_token,
     generate_totp_secret,
-    hash_password,
     hash_refresh_token,
     refresh_token_expiry,
     totp_provisioning_uri,
     verify_password,
     verify_totp,
 )
-from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
+from app.core.users import UserCreate, UserManager, UserRead, get_user_manager
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.middleware.rate_limit import rate_limit
@@ -623,10 +636,45 @@ _login_rate_limit = rate_limit("login", settings.rate_limit_login_per_5min, 300)
 _refresh_rate_limit = rate_limit("refresh", settings.rate_limit_refresh_per_5min, 300)
 _mfa_verify_rate_limit = rate_limit("mfa_verify", settings.rate_limit_mfa_verify_per_5min, 300)
 
-router.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
+
+class RegisterResponse(UserRead):
+    # org_id/user_id kept alongside the standard UserRead fields: several
+    # other test modules' _register_and_login() helpers read reg["org_id"]/
+    # reg["user_id"] straight off the register response to seed fixtures via
+    # direct DB inserts. Dropping them (UserRead alone) is a breaking change
+    # to that contract, not just to test_auth.py - see Step 2 below.
+    org_id: uuid.UUID
+    user_id: uuid.UUID
+
+
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(_register_rate_limit)],
 )
+async def register(
+    user_create: UserCreate,
+    request: Request,
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    # Not fastapi_users.get_register_router(): its built-in UserAlreadyExists
+    # handling hardcodes 409->400, which would break the API's existing
+    # contract (and test_register_duplicate_email_rejected). Same UserManager
+    # .create() the built-in router calls, just with our own status mapping.
+    try:
+        created_user = await user_manager.create(user_create, safe=True, request=request)
+    except exceptions.UserAlreadyExists:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
+    return RegisterResponse(
+        id=created_user.id,
+        email=created_user.email,
+        is_active=created_user.is_active,
+        is_superuser=created_user.is_superuser,
+        is_verified=created_user.is_verified,
+        org_id=created_user.org_id,
+        user_id=created_user.id,
+    )
 
 
 class LoginRequest(BaseModel):
@@ -783,16 +831,13 @@ async def login(
     return tokens
 ```
 
-**Note:** `OAuth2PasswordRequestForm` is imported but no longer used directly (the login route now goes through `user_manager.get_by_email` + `password_helper.verify_and_update` explicitly, preserving the exact original check-ordering: lockout is checked *before* password verification, matching `test_account_lockout_after_repeated_failures`). Remove that unused import.
+**Note:** the login route goes through `user_manager.get_by_email` + `password_helper.verify_and_update` explicitly (not fastapi-users' built-in login/`authenticate()`), preserving the exact original check-ordering: lockout is checked *before* password verification, matching `test_account_lockout_after_repeated_failures`.
 
 Leave everything from `@router.post("/mfa/enroll", ...)` (originally starting at line 252) through the end of the file (`logout`) **unchanged** - do not touch `mfa_enroll`, `mfa_verify`, `refresh`, or `logout`.
 
-- [ ] **Step 2: Register `is_active` accessor sanity check**
+- [ ] **Step 2: Confirm the register response shape is preserved**
 
-`UserRead` (from `schemas.BaseUser`) exposes `id, email, is_active, is_superuser, is_verified` - the register endpoint's response body shape changes from `{org_id, user_id}` to this. Confirm nothing depends on the old shape:
-
-Run (Grep tool): search `org_id` and `user_id` together in `frontend/src/pages/Register.tsx` and `backend/tests/test_auth.py`.
-Expected: `Register.tsx` doesn't read the response body at all (just checks `res.ok`); `test_auth.py`'s `_register()` helper only asserts `res.status_code == 201` and returns `res.json()` but no caller reads specific keys from it beyond that check. No changes needed.
+`RegisterResponse` above deliberately keeps `org_id`/`user_id` alongside `UserRead`'s standard fields, because more than `frontend/src/pages/Register.tsx` and `backend/tests/test_auth.py` depend on the old `{org_id, user_id}` shape - a full-suite run surfaced 10 other test files with their own local `_register_and_login()` helpers that read `reg["org_id"]`/`reg["user_id"]` off the register response to seed fixtures via direct DB inserts (`test_ai_insights.py`, `test_automl_retrain.py`, `test_dataset_overwrite.py`, `test_demand_forecasting.py`, `test_downtime_tracking.py`, `test_inventory_analytics.py`, `test_morning_brief.py`, `test_rca.py`, `test_scenario.py`, `test_shift_forecast.py`, `test_telemetry.py`). Run (Grep tool): search `reg\[.org_id.\]|reg\[.user_id.\]` across `backend/tests/` to confirm the full set before moving on - this is why Step 3 below runs the full suite, not just `test_auth.py`, before committing.
 
 - [ ] **Step 3: Run the full auth test suite**
 
@@ -914,12 +959,16 @@ async def _send_via_ses(to: str, subject: str, body: str) -> None:
 async def send_email(to: str, subject: str, body: str) -> None:
     """Provider-agnostic email interface. AWS deployments route through SES
     (see _send_via_ses, authenticated via the ECS task's IAM role - no static
-    SMTP credentials to manage). Non-production environments log instead of
-    sending, so local dev and tests don't need real AWS credentials."""
-    if settings.env == "production":
+    SMTP credentials to manage) once a sending identity is configured. Gated
+    on ses_from_email being set, not on settings.env == "production" -
+    infra/terraform/aws/ecs.tf always sets ENV=production regardless of
+    whether ses_from_email was ever configured, so that would send-or-crash
+    on every deployment instead of degrading to logging. Local dev and tests
+    (ses_from_email unset by default) never need real AWS credentials."""
+    if settings.ses_from_email:
         await _send_via_ses(to, subject, body)
         return
-    logger.info("send_email (dev, not actually sent): to=%s subject=%s\n%s", to, subject, body)
+    logger.info("send_email (no SES sender configured, not actually sent): to=%s subject=%s\n%s", to, subject, body)
 
 
 async def send_password_reset_email(to: str, token: str) -> None:
@@ -1036,7 +1085,11 @@ Expected: FAIL with 404s (`/auth/forgot-password` etc. not mounted yet)
 
 - [ ] **Step 3: Mount the routers**
 
-Edit `backend/app/api/routes/auth.py`. Right after the existing `router.include_router(fastapi_users.get_register_router(...))` block added in Task 4, add:
+Edit `backend/app/api/routes/auth.py`. Task 4's `register` route is a hand-written function (not a mounted `fastapi_users` router - see Task 4's final implementation), so `fastapi_users` isn't imported yet in this file. Add it to the existing `from app.core.users import UserCreate, UserManager, UserRead, get_user_manager` line, then add these two router mounts right after the `register` route function (before the `class LoginRequest` block):
+
+```python
+from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
+```
 
 ```python
 router.include_router(fastapi_users.get_reset_password_router())
@@ -1073,6 +1126,20 @@ git commit -m "feat: wire password reset and email verification routes"
 - Consumes: `UserManager`, `get_user_manager` (Task 3); `_issue_tokens`, `TokenResponse` (Task 4, `auth.py`).
 - Produces: `GET /auth/google/authorize`, `GET /auth/google/callback`, `GET /auth/microsoft/authorize`, `GET /auth/microsoft/callback`.
 
+**No self-service OAuth signup.** This app's access model is admin-provisioned:
+a company's admin creates accounts for their employees (via `/register` or a
+future invite flow) - it is not a public app anyone can sign up for. So
+`GET /auth/{provider}/callback` must reject outright when no account already
+exists for the authenticated email, *before* ever touching `UserManager`'s
+user-creation path (`User.org_id` is NOT NULL and only `UserManager.create()`
+- which requires an `org_name` the OAuth flow never collects - creates an
+`Org`; letting `oauth_callback()`'s new-user branch run would either crash on
+that NOT NULL constraint or, if "fixed" by inventing a placeholder org, let a
+stranger who merely owns a matching Google/Microsoft account mint themselves
+a new org, which is exactly what this access model forbids). Google/Microsoft
+login is a convenience for people who already have a provisioned account,
+never a second signup path.
+
 **Before writing code:** `BaseUserManager.oauth_callback()` is the lower-level method `fastapi_users.get_oauth_router()` calls internally, and it accepts `associate_by_email`/`is_verified_by_default` as call-time arguments - that's what makes a per-request verified-email check possible (the auto-generated router bakes these in as fixed config instead). Confirm the exact signature against the installed package before writing the callback body:
 
 Run: `python -c "import inspect, fastapi_users.manager; print(inspect.signature(fastapi_users.manager.BaseUserManager.oauth_callback))"`
@@ -1101,13 +1168,20 @@ async def test_google_authorize_redirects_to_google(client):
     assert "accounts.google.com" in res.headers["location"]
 
 
-async def test_google_callback_creates_account_when_email_verified(client):
+async def test_google_callback_logs_in_existing_account_when_email_verified(client):
+    # No self-service OAuth signup - this account must already exist
+    # (provisioned via /register, standing in here for "an admin created it").
+    await client.post(
+        "/auth/register",
+        json={"org_name": "Acme", "email": "provisioned@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
+    )
+
     with (
         patch("app.api.routes.oauth.google_client") as mock_client,
         patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
     ):
         mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
-        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-1", "newuser@example.com"))
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-1", "provisioned@example.com"))
 
         res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
 
@@ -1117,7 +1191,26 @@ async def test_google_callback_creates_account_when_email_verified(client):
     assert "refresh_token=" in location
 
 
+async def test_google_callback_rejects_unknown_email(client):
+    from fastapi import status
+
+    # No account was ever registered for this email - OAuth must not create
+    # one, even though the provider itself vouches the caller owns it.
+    with (
+        patch("app.api.routes.oauth.google_client") as mock_client,
+        patch("app.api.routes.oauth._google_email_verified", AsyncMock(return_value=True)),
+    ):
+        mock_client.get_access_token = AsyncMock(return_value={"access_token": "fake-token", "expires_in": 3600})
+        mock_client.get_id_email = AsyncMock(return_value=("google-account-id-3", "stranger@example.com"))
+
+        res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
+
+    assert res.status_code == status.HTTP_403_FORBIDDEN
+
+
 async def test_google_callback_rejects_auto_link_when_email_not_verified(client):
+    from fastapi import status
+
     await client.post(
         "/auth/register",
         json={"org_name": "Acme", "email": "existing@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
@@ -1132,31 +1225,19 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
 
         res = await client.get("/auth/google/callback?code=fake-code&state=fake-state", follow_redirects=False)
 
-    # Must NOT silently log in as the existing password account - a new,
-    # separate (unlinked) account is created instead of trusting an
-    # unverified provider email that happens to match.
-    location = res.headers["location"]
-    assert "access_token=" in location
+    # Must NOT silently log in as the existing password account. Because
+    # `email` is a unique column, "don't auto-link" can't mean "create a
+    # second User row with the same email" either - it must mean "reject
+    # the OAuth login" (no tokens issued) rather than trusting an
+    # unverified provider email that happens to match an existing account.
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
 
-    from sqlalchemy import select
-    from app.models.user import User
-
-    # two distinct users now share this email is impossible (unique index) -
-    # instead the login must have failed to link, i.e. this callback path
-    # must not have authenticated as the *existing* user. Confirmed via a
-    # fresh login with the existing user's real password still working
-    # unchanged.
+    # The existing account itself is untouched - its real password still works.
     login = await client.post(
         "/auth/login", json={"email": "existing@example.com", "password": "correct-horse-battery-staple1"}  # pragma: allowlist secret
     )
     assert login.status_code == 200
 ```
-
-**Note on the third test:** because `email` is a unique column, "don't auto-link" for an already-registered email can't mean "create a second User row with the same email" - it must mean "reject the OAuth login" (return an error, don't issue tokens) rather than silently authenticating into the existing account. Adjust the assertion in Step 1 once the real behavior is implemented in Step 3: expect a 4xx with no tokens issued, not a redirect with tokens. Update the test to:
-
-```python
-    assert res.status_code == status.HTTP_400_BAD_REQUEST
-```//<br>(add `from fastapi import status` to the imports, remove the `location`/`access_token=` assertions for this test only)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1173,6 +1254,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from fastapi_users import exceptions
 from httpx_oauth.clients.google import GoogleOAuth2
 from httpx_oauth.clients.microsoft import MicrosoftGraphOAuth2
 
@@ -1232,6 +1314,19 @@ async def _handle_callback(
     token_data = await client.get_access_token(code, redirect_uri)
     access_token = token_data["access_token"]
     account_id, account_email = await client.get_id_email(access_token)
+
+    # No self-service OAuth signup: reject before ever reaching
+    # UserManager's user-creation path (see the note at the top of this
+    # task). A stranger who merely controls a matching Google/Microsoft
+    # account must not be able to mint themselves an account/org here.
+    try:
+        await user_manager.get_by_email(account_email)
+    except exceptions.UserNotExists:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "No account found for this email. Contact your organization administrator.",
+        ) from None
+
     verified = await email_verified_check(access_token)
 
     try:
@@ -1246,8 +1341,12 @@ async def _handle_callback(
             associate_by_email=verified,
             is_verified_by_default=verified,
         )
-    except Exception as exc:  # fastapi_users.exceptions.UserAlreadyExists when associate_by_email=False and email taken
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not sign in with this account") from exc
+    except exceptions.UserAlreadyExists:
+        # associate_by_email=False (unverified email) and this email already
+        # has an account - narrow catch so a genuine failure inside
+        # oauth_callback() (DB error, etc.) surfaces as a 500 instead of
+        # being silently downgraded to a misleading 400.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not sign in with this account") from None
 
     tokens = await _issue_tokens(db, user)
     await db.commit()
@@ -1315,17 +1414,14 @@ if settings.google_oauth_client_id or settings.microsoft_oauth_client_id:
     app.include_router(oauth.router)
 ```
 
-- [ ] **Step 5: Update the test's third assertion** (per the note in Step 1)
+- [ ] **Step 5: Make sure the OAuth router is actually mounted for tests**
 
-Edit `backend/tests/test_oauth.py`'s `test_google_callback_rejects_auto_link_when_email_not_verified` to assert `res.status_code == status.HTTP_400_BAD_REQUEST` and drop the tokens-in-location assertions, per the note left in Step 1. Add `from fastapi import status` to the test file's imports. Also add, near the top of the test file:
+The conditional mount added in Step 4 only registers `oauth.router` when a client ID is configured. `conftest.py` imports `app.main` once per test process, so the env var must be set before that first import happens - add these two lines to `backend/tests/conftest.py`, right next to the existing `os.environ.setdefault("JWT_SECRET_KEY", ...)` line (before the `from app.main import app` line below it):
 
 ```python
-import os
 os.environ.setdefault("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
-os.environ.setdefault("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
+os.environ.setdefault("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")  # pragma: allowlist secret
 ```
-
-(so the conditional mount in Step 4 actually registers the router for this test module - `conftest.py`'s `app` import happens once per process, so this must be set before `app.main` is first imported; add it to `conftest.py` instead, right next to the existing `os.environ.setdefault("JWT_SECRET_KEY", ...)` line, if a bare `import os` at the top of `test_oauth.py` runs too late.)
 
 - [ ] **Step 6: Run test to verify it passes**
 
@@ -1966,7 +2062,7 @@ Expected: all tests pass, including every test file added in Tasks 2-7.
 - [ ] **Step 2: Run backend lint**
 
 Run: `cd backend && ruff check .`
-Expected: no errors (fix any import-order/unused-import issues introduced by the `auth.py` rewrite in Task 4, e.g. the now-unused `OAuth2PasswordRequestForm` import, `hash_password`/`verify_password` if no longer called directly anywhere in `auth.py`).
+Expected: no errors (fix any import-order/unused-import issues introduced by the `auth.py` rewrite in Task 4, e.g. `hash_password`/`verify_password` if no longer called directly anywhere in `auth.py`).
 
 - [ ] **Step 3: Run frontend build + lint**
 

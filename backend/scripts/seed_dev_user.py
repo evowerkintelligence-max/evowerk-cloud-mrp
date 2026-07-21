@@ -41,7 +41,7 @@ async def main() -> None:
             User(
                 org_id=org.id,
                 email=DEV_EMAIL,
-                password_hash=hash_password(DEV_PASSWORD),
+                hashed_password=hash_password(DEV_PASSWORD),
                 role="owner",
             )
         )

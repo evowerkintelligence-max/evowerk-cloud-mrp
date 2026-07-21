@@ -4,10 +4,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr, field_validator
+from fastapi_users import exceptions
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, CurrentUser
@@ -19,19 +19,16 @@ from app.core.security import (
     encrypt_secret,
     generate_refresh_token,
     generate_totp_secret,
-    hash_password,
     hash_refresh_token,
     refresh_token_expiry,
     totp_provisioning_uri,
     verify_password,
-    verify_password_timing_safe,
     verify_totp,
 )
+from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.middleware.rate_limit import rate_limit
-from app.models.location import Location
-from app.models.tenant import Org
 from app.models.user import RefreshToken, User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -43,28 +40,52 @@ _refresh_rate_limit = rate_limit("refresh", settings.rate_limit_refresh_per_5min
 _mfa_verify_rate_limit = rate_limit("mfa_verify", settings.rate_limit_mfa_verify_per_5min, 300)
 
 
-class RegisterRequest(BaseModel):
-    org_name: str
-    email: EmailStr
-    password: str
-
-    @field_validator("password")
-    @classmethod
-    def password_policy(cls, v: str) -> str:
-        if len(v) < 12:
-            raise ValueError("Password must be at least 12 characters long")
-        if not any(c.isalpha() for c in v) or not any(c.isdigit() for c in v):
-            raise ValueError("Password must contain at least one letter and one digit")
-        return v
-
-
-class RegisterResponse(BaseModel):
+class RegisterResponse(UserRead):
+    # org_id/user_id kept alongside the standard UserRead fields: several
+    # other test modules' _register_and_login() helpers read reg["org_id"]/
+    # reg["user_id"] straight off the register response to seed fixtures via
+    # direct DB inserts. Dropping them (UserRead alone) is a breaking change
+    # to that contract, not just to test_auth.py.
     org_id: uuid.UUID
     user_id: uuid.UUID
 
 
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_register_rate_limit)],
+)
+async def register(
+    user_create: UserCreate,
+    request: Request,
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    # Not fastapi_users.get_register_router(): its built-in UserAlreadyExists
+    # handling hardcodes 409->400, which would break the API's existing
+    # contract (and test_register_duplicate_email_rejected). Same UserManager
+    # .create() the built-in router calls, just with our own status mapping.
+    try:
+        created_user = await user_manager.create(user_create, safe=True, request=request)
+    except exceptions.UserAlreadyExists:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
+    return RegisterResponse(
+        id=created_user.id,
+        email=created_user.email,
+        is_active=created_user.is_active,
+        is_superuser=created_user.is_superuser,
+        is_verified=created_user.is_verified,
+        org_id=created_user.org_id,
+        user_id=created_user.id,
+    )
+
+
+router.include_router(fastapi_users.get_reset_password_router(), dependencies=[Depends(_register_rate_limit)])
+router.include_router(fastapi_users.get_verify_router(UserRead), dependencies=[Depends(_register_rate_limit)])
+
+
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
     totp_code: str | None = None
 
@@ -119,46 +140,6 @@ def _reset_failed_attempts(user: User) -> None:
     user.locked_until = None
 
 
-@router.post(
-    "/register",
-    response_model=RegisterResponse,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(_register_rate_limit)],
-)
-async def register(body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    org = Org(name=body.org_name)
-    db.add(org)
-    await db.flush()
-
-    # Every org starts with one default location so the location dimension is
-    # optional: receive/consume/adjust fall back to it until the user creates
-    # more (see app.services.inventory / app.api.routes.inventory).
-    db.add(Location(org_id=org.id, code="MAIN", name="Main", is_default=True))
-
-    user = User(
-        org_id=org.id,
-        email=body.email,
-        password_hash=await run_in_threadpool(hash_password, body.password),
-        role="owner",
-    )
-    db.add(user)
-    try:
-        await db.flush()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
-
-    await log_event(
-        db,
-        action="user.register",
-        org_id=org.id,
-        actor_user_id=user.id,
-        ip_address=_client_ip(request),
-    )
-    await db.commit()
-    return RegisterResponse(org_id=org.id, user_id=user.id)
-
-
 async def _issue_tokens(db: AsyncSession, user: User) -> TokenResponse:
     access_token = create_access_token(user_id=str(user.id), org_id=str(user.org_id))
     raw_refresh = generate_refresh_token()
@@ -174,14 +155,18 @@ async def _issue_tokens(db: AsyncSession, user: User) -> TokenResponse:
 
 
 @router.post("/login", response_model=TokenResponse, dependencies=[Depends(_login_rate_limit)])
-async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email))
-    user = result.scalar_one_or_none()
-
-    if user is None:
+async def login(
+    body: LoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    try:
+        user = await user_manager.get_by_email(body.email)
+    except exceptions.UserNotExists:
         # Always pay the argon2 cost, even with no real hash to check, so this path
         # can't be timed against the "wrong password" path to enumerate emails.
-        await run_in_threadpool(verify_password_timing_safe, body.password, None)
+        await run_in_threadpool(user_manager.password_helper.hash, body.password)
         await log_event(db, action="user.login_failed", target=body.email, ip_address=_client_ip(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
@@ -197,7 +182,13 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         await db.commit()
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try again later")
 
-    if not await run_in_threadpool(verify_password_timing_safe, body.password, user.password_hash):
+    verified, updated_hash = await run_in_threadpool(
+        user_manager.password_helper.verify_and_update, body.password, user.hashed_password
+    )
+    if updated_hash is not None:
+        user.hashed_password = updated_hash
+
+    if not verified:
         _register_failed_attempt(user)
         await log_event(
             db,
@@ -259,7 +250,7 @@ async def mfa_enroll(
     user = result.scalar_one()
 
     if user.mfa_enabled:
-        if not body.password or not await run_in_threadpool(verify_password, body.password, user.password_hash):
+        if not body.password or not await run_in_threadpool(verify_password, body.password, user.hashed_password):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Password confirmation required")
 
     secret = generate_totp_secret()

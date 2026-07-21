@@ -16,6 +16,14 @@ concurrency:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    # dorny/paths-filter falls back to the GitHub API to list the PR's
+    # changed files (actions/checkout's default shallow clone doesn't have
+    # enough history for a local git diff) - that API call needs
+    # pull-requests: read, which the default token doesn't grant without
+    # this explicit permissions block.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}

@@ -188,7 +188,7 @@ async def test_pace_shift_handoff_allows_other_member_to_act(client, test_engine
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="paceoperatorb@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )
@@ -234,7 +234,7 @@ async def test_pace_discard_allowed_for_creator_not_other_members(client, test_e
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="pdmember@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )
@@ -270,7 +270,7 @@ async def test_pace_discard_allowed_for_owner_deleting_someone_elses_session(cli
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="pd2member@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

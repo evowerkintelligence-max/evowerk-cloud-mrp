@@ -108,7 +108,7 @@ async def test_rbac_blocks_non_owner_from_delete(client, test_engine):
             User(
                 org_id=uuid_module.UUID(org_id),
                 email="member2@example.com",
-                password_hash=hash_password(PASSWORD),
+                hashed_password=hash_password(PASSWORD),
                 role="member",
                 is_active=True,
             )

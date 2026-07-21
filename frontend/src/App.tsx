@@ -6,6 +6,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { ForgotPassword } from "./pages/ForgotPassword";
+import { ResetPassword } from "./pages/ResetPassword";
+import { VerifyEmail } from "./pages/VerifyEmail";
+import { OAuthCallback } from "./pages/OAuthCallback";
+import { OAuthMfaVerify } from "./pages/OAuthMfaVerify";
 import { MfaChallenge } from "./pages/MfaChallenge";
 
 // Routed pages are lazy-loaded so one page's broken/missing dependency (e.g.
@@ -106,6 +111,11 @@ export function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
+          <Route path="/oauth/callback" element={<OAuthCallback />} />
+          <Route path="/oauth/mfa-verify" element={<OAuthMfaVerify />} />
           <Route
             path="/mfa"
             element={

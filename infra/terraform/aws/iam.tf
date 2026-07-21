@@ -28,6 +28,8 @@ data "aws_iam_policy_document" "secrets_read" {
       aws_secretsmanager_secret.jwt_secret.arn,
       aws_secretsmanager_secret.mfa_key.arn,
       aws_secretsmanager_secret.database_url.arn,
+      aws_secretsmanager_secret.google_oauth_secret.arn,
+      aws_secretsmanager_secret.microsoft_oauth_secret.arn,
     ]
   }
 }
@@ -45,4 +47,19 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
 resource "aws_iam_role" "ecs_task" {
   name               = "${local.name_prefix}-ecs-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+}
+
+data "aws_iam_policy_document" "ses_send" {
+  count = var.ses_from_email != "" ? 1 : 0
+  statement {
+    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_ses" {
+  count  = var.ses_from_email != "" ? 1 : 0
+  name   = "${local.name_prefix}-ses-send"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ses_send[0].json
 }

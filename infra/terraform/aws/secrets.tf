@@ -45,3 +45,23 @@ resource "aws_secretsmanager_secret_version" "database_url" {
   secret_id     = aws_secretsmanager_secret.database_url.id
   secret_string = local.database_url
 }
+
+resource "aws_secretsmanager_secret" "google_oauth_secret" {
+  name                    = "${local.name_prefix}/google-oauth-client-secret"
+  recovery_window_in_days = 0 # throwaway test env - allow immediate re-deploy after down.sh
+}
+
+resource "aws_secretsmanager_secret_version" "google_oauth_secret" {
+  secret_id     = aws_secretsmanager_secret.google_oauth_secret.id
+  secret_string = var.google_oauth_client_secret
+}
+
+resource "aws_secretsmanager_secret" "microsoft_oauth_secret" {
+  name                    = "${local.name_prefix}/microsoft-oauth-client-secret"
+  recovery_window_in_days = 0 # throwaway test env - allow immediate re-deploy after down.sh
+}
+
+resource "aws_secretsmanager_secret_version" "microsoft_oauth_secret" {
+  secret_id     = aws_secretsmanager_secret.microsoft_oauth_secret.id
+  secret_string = var.microsoft_oauth_client_secret
+}

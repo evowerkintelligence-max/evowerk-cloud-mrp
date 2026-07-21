@@ -86,12 +86,19 @@ resource "aws_ecs_task_definition" "backend" {
         { name = "ENV", value = "production" },
         { name = "REDIS_URL", value = "redis://redis.internal:6379/0" },
         { name = "CORS_ORIGINS", value = jsonencode([var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}"]) },
+        { name = "SES_FROM_EMAIL", value = var.ses_from_email },
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "FRONTEND_BASE_URL", value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
+        { name = "GOOGLE_OAUTH_CLIENT_ID", value = var.google_oauth_client_id },
+        { name = "MICROSOFT_OAUTH_CLIENT_ID", value = var.microsoft_oauth_client_id },
       ]
 
       secrets = [
         { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },
         { name = "JWT_SECRET_KEY", valueFrom = aws_secretsmanager_secret.jwt_secret.arn },
         { name = "MFA_ENCRYPTION_KEY", valueFrom = aws_secretsmanager_secret.mfa_key.arn },
+        { name = "GOOGLE_OAUTH_CLIENT_SECRET", valueFrom = aws_secretsmanager_secret.google_oauth_secret.arn },
+        { name = "MICROSOFT_OAUTH_CLIENT_SECRET", valueFrom = aws_secretsmanager_secret.microsoft_oauth_secret.arn },
       ]
 
       logConfiguration = {

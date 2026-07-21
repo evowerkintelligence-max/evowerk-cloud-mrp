@@ -31,6 +31,17 @@ export default defineConfig({
       // nginx.conf.template - cbm backs the Predictive Maintenance
       // fleet/machine-detail views, so that page was silently broken.
       //
+      // nginx.conf.template dropped its equivalent allowlist entirely (now
+      // dispatches on try_files $uri, which checks for a real built static
+      // file before falling back to the API - a check with no ambiguity in
+      // a production image where every asset already exists on disk). This
+      // dev proxy can't do the same: vite's proxy matcher has no "is this a
+      // real file" primitive, so matching every path here would also swallow
+      // vite's own module/asset requests (/@vite/client, /src/*.tsx,
+      // /node_modules/.vite/*) before vite's own middleware ever saw them.
+      // An explicit list is still the right call here - just remember to
+      // update this one when a new backend router ships.
+      //
       // Several of these prefixes are ALSO SPA routes (/rca-cases, /analytics,
       // /bi, /reports, /workflows, /automl, /alerts, /integrations, /realtime,
       // /simulation, /predictive - see App.tsx). Client-side nav

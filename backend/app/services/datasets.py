@@ -310,7 +310,15 @@ def compute_health(dataset: Dataset) -> dict:
             inferred = "text"
             non_null = row_count - null_count
             if num_count and non_null and num_count >= non_null * 0.9:
-                inferred = "numeric"
+                # Zero-padded digit strings (zip codes, part/batch numbers) TRY_CAST
+                # cleanly to DOUBLE but lose their leading zeros as real numbers -
+                # that's an identifier, not a quantity. ponytail: only catches the
+                # unambiguous leading-zero signal, not every ID-like numeric column.
+                leading_zero_count = con.execute(
+                    f"SELECT COUNT(*) FROM (SELECT {blank} AS v FROM {rel}) "  # nosec B608
+                    f"WHERE regexp_matches(v, '^0[0-9]')"
+                ).fetchone()[0]
+                inferred = "text" if leading_zero_count >= num_count * 0.5 else "numeric"
             elif non_null:
                 date_count = con.execute(
                     f"SELECT COUNT(*) FROM (SELECT TRY_CAST({blank} AS TIMESTAMP) AS v FROM {rel}) WHERE v IS NOT NULL"  # nosec B608

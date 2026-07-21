@@ -48,7 +48,7 @@ class Chart(Base):
         Uuid(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    chart_type: Mapped[str] = mapped_column(String(16), nullable=False)  # "bar" | "line" | "pie"
+    chart_type: Mapped[str] = mapped_column(String(16), nullable=False)  # see bi.CHART_TYPES
     # Serialized DatasetQueryRequest (select/group_by/filters/join_items_on/order_by/limit).
     query_config: Mapped[dict] = mapped_column(JSON, nullable=False)
     category_field: Mapped[str] = mapped_column(String(255), nullable=False)

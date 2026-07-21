@@ -142,7 +142,13 @@ class User(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(lazy="joined")
+    # selectin (not joined): joined eager-loading a to-many collection makes
+    # SQLAlchemy require .unique() on every Result, which would break the
+    # many existing `select(User)...)` call sites across this codebase
+    # (login, get_current_user, test fixtures) that don't call it. selectin
+    # issues a separate query instead - no duplicate rows, no .unique()
+    # needed, and it's async-session-safe (no implicit lazy IO).
+    oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(lazy="selectin")
 
 
 class RefreshToken(Base):

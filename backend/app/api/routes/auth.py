@@ -80,8 +80,8 @@ async def register(
     )
 
 
-router.include_router(fastapi_users.get_reset_password_router())
-router.include_router(fastapi_users.get_verify_router(UserRead))
+router.include_router(fastapi_users.get_reset_password_router(), dependencies=[Depends(_register_rate_limit)])
+router.include_router(fastapi_users.get_verify_router(UserRead), dependencies=[Depends(_register_rate_limit)])
 
 
 class LoginRequest(BaseModel):
@@ -166,7 +166,7 @@ async def login(
     except exceptions.UserNotExists:
         # Always pay the argon2 cost, even with no real hash to check, so this path
         # can't be timed against the "wrong password" path to enumerate emails.
-        user_manager.password_helper.hash(body.password)
+        await run_in_threadpool(user_manager.password_helper.hash, body.password)
         await log_event(db, action="user.login_failed", target=body.email, ip_address=_client_ip(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
@@ -182,7 +182,9 @@ async def login(
         await db.commit()
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try again later")
 
-    verified, updated_hash = user_manager.password_helper.verify_and_update(body.password, user.hashed_password)
+    verified, updated_hash = await run_in_threadpool(
+        user_manager.password_helper.verify_and_update, body.password, user.hashed_password
+    )
     if updated_hash is not None:
         user.hashed_password = updated_hash
 

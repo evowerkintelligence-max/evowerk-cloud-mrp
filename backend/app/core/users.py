@@ -10,6 +10,7 @@ from fastapi_users.password import PasswordHelper
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from pydantic import field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.core.security import _pwd_context
@@ -70,7 +71,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         )
         org_name = user_dict.pop("org_name")
         password = user_dict.pop("password")
-        user_dict["hashed_password"] = self.password_helper.hash(password)
+        user_dict["hashed_password"] = await run_in_threadpool(self.password_helper.hash, password)
         user_dict["is_verified"] = False
 
         org = Org(name=org_name)

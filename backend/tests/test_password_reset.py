@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
+from app.core.config import get_settings
+
 pytestmark = pytest.mark.asyncio
 
 PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
@@ -57,3 +59,20 @@ async def test_request_verify_then_verify_marks_user_verified(client):
     verify_res = await client.post("/auth/verify", json={"token": token})
     assert verify_res.status_code == 200
     assert verify_res.json()["is_verified"] is True
+
+
+async def test_forgot_password_rate_limit_trips_per_ip_after_threshold(client):
+    """/auth/forgot-password shares the "register" rate-limit scope (same risk
+    class: unauthenticated, email-triggering) - it must trip just like
+    /auth/register does after rate_limit_register_per_hour requests."""
+    settings = get_settings()
+    limit = settings.rate_limit_register_per_hour
+
+    last_status = None
+    for i in range(limit + 1):
+        res = await client.post("/auth/forgot-password", json={"email": f"nobody-{i}@example.com"})
+        last_status = res.status_code
+        if last_status == 429:
+            break
+
+    assert last_status == 429, "expected the per-IP rate limit to trip before exhausting the loop"

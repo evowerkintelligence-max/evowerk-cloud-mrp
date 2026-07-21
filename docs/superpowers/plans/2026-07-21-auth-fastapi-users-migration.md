@@ -601,6 +601,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi_users import exceptions
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, CurrentUser
@@ -612,14 +613,13 @@ from app.core.security import (
     encrypt_secret,
     generate_refresh_token,
     generate_totp_secret,
-    hash_password,
     hash_refresh_token,
     refresh_token_expiry,
     totp_provisioning_uri,
     verify_password,
     verify_totp,
 )
-from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
+from app.core.users import UserCreate, UserManager, UserRead, get_user_manager
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.middleware.rate_limit import rate_limit
@@ -633,10 +633,45 @@ _login_rate_limit = rate_limit("login", settings.rate_limit_login_per_5min, 300)
 _refresh_rate_limit = rate_limit("refresh", settings.rate_limit_refresh_per_5min, 300)
 _mfa_verify_rate_limit = rate_limit("mfa_verify", settings.rate_limit_mfa_verify_per_5min, 300)
 
-router.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
+
+class RegisterResponse(UserRead):
+    # org_id/user_id kept alongside the standard UserRead fields: several
+    # other test modules' _register_and_login() helpers read reg["org_id"]/
+    # reg["user_id"] straight off the register response to seed fixtures via
+    # direct DB inserts. Dropping them (UserRead alone) is a breaking change
+    # to that contract, not just to test_auth.py - see Step 2 below.
+    org_id: uuid.UUID
+    user_id: uuid.UUID
+
+
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(_register_rate_limit)],
 )
+async def register(
+    user_create: UserCreate,
+    request: Request,
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    # Not fastapi_users.get_register_router(): its built-in UserAlreadyExists
+    # handling hardcodes 409->400, which would break the API's existing
+    # contract (and test_register_duplicate_email_rejected). Same UserManager
+    # .create() the built-in router calls, just with our own status mapping.
+    try:
+        created_user = await user_manager.create(user_create, safe=True, request=request)
+    except exceptions.UserAlreadyExists:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
+    return RegisterResponse(
+        id=created_user.id,
+        email=created_user.email,
+        is_active=created_user.is_active,
+        is_superuser=created_user.is_superuser,
+        is_verified=created_user.is_verified,
+        org_id=created_user.org_id,
+        user_id=created_user.id,
+    )
 
 
 class LoginRequest(BaseModel):
@@ -797,12 +832,9 @@ async def login(
 
 Leave everything from `@router.post("/mfa/enroll", ...)` (originally starting at line 252) through the end of the file (`logout`) **unchanged** - do not touch `mfa_enroll`, `mfa_verify`, `refresh`, or `logout`.
 
-- [ ] **Step 2: Register `is_active` accessor sanity check**
+- [ ] **Step 2: Confirm the register response shape is preserved**
 
-`UserRead` (from `schemas.BaseUser`) exposes `id, email, is_active, is_superuser, is_verified` - the register endpoint's response body shape changes from `{org_id, user_id}` to this. Confirm nothing depends on the old shape:
-
-Run (Grep tool): search `org_id` and `user_id` together in `frontend/src/pages/Register.tsx` and `backend/tests/test_auth.py`.
-Expected: `Register.tsx` doesn't read the response body at all (just checks `res.ok`); `test_auth.py`'s `_register()` helper only asserts `res.status_code == 201` and returns `res.json()` but no caller reads specific keys from it beyond that check. No changes needed.
+`RegisterResponse` above deliberately keeps `org_id`/`user_id` alongside `UserRead`'s standard fields, because more than `frontend/src/pages/Register.tsx` and `backend/tests/test_auth.py` depend on the old `{org_id, user_id}` shape - a full-suite run surfaced 10 other test files with their own local `_register_and_login()` helpers that read `reg["org_id"]`/`reg["user_id"]` off the register response to seed fixtures via direct DB inserts (`test_ai_insights.py`, `test_automl_retrain.py`, `test_dataset_overwrite.py`, `test_demand_forecasting.py`, `test_downtime_tracking.py`, `test_inventory_analytics.py`, `test_morning_brief.py`, `test_rca.py`, `test_scenario.py`, `test_shift_forecast.py`, `test_telemetry.py`). Run (Grep tool): search `reg\[.org_id.\]|reg\[.user_id.\]` across `backend/tests/` to confirm the full set before moving on - this is why Step 3 below runs the full suite, not just `test_auth.py`, before committing.
 
 - [ ] **Step 3: Run the full auth test suite**
 
@@ -1046,7 +1078,11 @@ Expected: FAIL with 404s (`/auth/forgot-password` etc. not mounted yet)
 
 - [ ] **Step 3: Mount the routers**
 
-Edit `backend/app/api/routes/auth.py`. Right after the existing `router.include_router(fastapi_users.get_register_router(...))` block added in Task 4, add:
+Edit `backend/app/api/routes/auth.py`. Task 4's `register` route is a hand-written function (not a mounted `fastapi_users` router - see Task 4's final implementation), so `fastapi_users` isn't imported yet in this file. Add it to the existing `from app.core.users import UserCreate, UserManager, UserRead, get_user_manager` line, then add these two router mounts right after the `register` route function (before the `class LoginRequest` block):
+
+```python
+from app.core.users import UserCreate, UserManager, UserRead, fastapi_users, get_user_manager
+```
 
 ```python
 router.include_router(fastapi_users.get_reset_password_router())

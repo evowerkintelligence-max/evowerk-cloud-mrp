@@ -8,18 +8,31 @@
 # Maintenance fleet/machine-detail views, so that page was silently broken in
 # every deployment until the drift was noticed).
 #
-# This version dispatches on $uri + Accept instead of a prefix allowlist:
-# try_files first checks for a real static file (every built JS/CSS/asset -
-# always wins, no ambiguity), then falls to $spa_fallback (index.html, for a
-# page navigation - Accept leads with text/html) or @api (proxied to the
-# backend - fetch() calls never send that Accept) for anything else. A new
-# backend router needs zero changes here to work: nothing enumerates
-# prefixes anymore, so nothing can drift out of sync with main.py again.
-# (vite.config.ts's dev proxy still uses an explicit prefix list - vite's
-# proxy matcher has no "check if this is a real file on disk first"
-# primitive, so blindly proxying everything would also swallow vite's own
-# module/asset requests. That asymmetry is why only this file could drop the
-# allowlist.)
+# This version dispatches on $uri + Accept instead of a backend-prefix
+# allowlist: try_files first checks for a real static file (every built
+# JS/CSS/asset - always wins, no ambiguity), then falls to $spa_fallback
+# (index.html, for a page navigation - Accept leads with text/html) or @api
+# (proxied to the backend) for anything else. A new backend router needs
+# zero changes here to work: nothing enumerates backend prefixes anymore.
+#
+# That alone reintroduced a narrower gap though: a client that doesn't send
+# a browser-realistic Accept header (curl, a plain uptime check, a testing
+# tool's own reachability probe before it drives a real browser) hitting a
+# real frontend-only page - /login, /register, etc - has Accept: */* same
+# as apiFetch()'s calls do, so it fell through to @api and got the backend's
+# bare 404 instead of the app shell (confirmed live: curl to /login 404'd;
+# with a browser-realistic Accept header it correctly got index.html).
+# There's no header that reliably tells "a script fetching a real API path"
+# apart from "a non-browser client hitting a page path" - both look
+# identical over HTTP - so this can't be solved with cleverer content
+# negotiation. The frontend_only_routes location below enumerates the
+# small set of routes with NO backend equivalent at all (see App.tsx) and
+# always serves the app shell for them, regardless of Accept. Unlike the
+# backend-prefix list this replaced, this one is low-drift: new frontend
+# pages are rare (most new pages ship alongside a new backend feature,
+# which needs no entry here at all - only auth/pre-login-style pages with
+# nothing backing them do), and missing one only breaks that one page for
+# non-browser-header clients, not a whole feature area for everyone.
 #
 # proxy_buffering off + a long proxy_read_timeout apply here too: harmless for
 # ordinary JSON responses, but required for /realtime/streams/{id}/events
@@ -60,22 +73,21 @@ server {
         add_header Content-Type text/plain;
     }
 
-    # Bare root always means the app shell, regardless of what the client
-    # sends as Accept - no backend route is ever mounted at "/", so there's
-    # no ambiguity to resolve here the way there is for a path that could be
-    # either an SPA route or a backend prefix. Without this, a client that
-    # doesn't send a browser-realistic Accept header (curl, a plain uptime
-    # check, anything hitting the bare URL instead of /nginx-health) would
-    # fall through location /'s $spa_fallback logic below, get the "not a
-    # page load" branch, and land on the backend's own 404 for "/".
-    location = / {
+    # Frontend-only routes with no backend equivalent (see App.tsx) - always
+    # the app shell, regardless of Accept. Includes bare "/" via the empty
+    # alternative. Deliberately NOT exhaustive over every SPA route: pages
+    # like /items, /analytics/oee, /bi, /workflows etc DO overlap with a real
+    # backend prefix, so a non-browser client there correctly reaches the
+    # backend instead - only list a route here if nothing in app/main.py
+    # would ever answer it.
+    location ~ ^/(|login|register|forgot-password|reset-password|verify-email|oauth|mfa|procurement|warehouse|planning|sql-editor|ask|runs|report-builder|mfg-forecast)(/|$) {
         try_files /index.html =404;
     }
 
     # A real static file (built JS/CSS/assets) always wins. Otherwise: a page
     # navigation (Accept: text/html) gets index.html for react-router-dom's
-    # client-side routing to take over; everything else (every API call,
-    # regardless of prefix) gets proxied to the backend.
+    # client-side routing to take over; everything else (every backend API
+    # call, regardless of prefix) gets proxied to the backend.
     location / {
         try_files $uri $spa_fallback @api;
     }

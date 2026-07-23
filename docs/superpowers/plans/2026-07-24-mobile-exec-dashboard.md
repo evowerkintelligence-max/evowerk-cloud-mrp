@@ -6,6 +6,8 @@
 
 **Architecture:** The mobile app is a pure consumer of endpoints that already exist (`/auth/login`, `/kpi-dashboards/{id}/cards`, `/alerts/rules`, `/alerts/scan`) plus one new pair of endpoints (`/device-tokens`) for push registration. The backend push path reuses `app/services/alerts.py`'s existing `scan_all` trigger loop, adding a data-minimal Expo push send alongside the existing webhook fire. The app has no fixed backend to call — every customer self-hosts — so it asks for a server URL on first launch instead of assuming a relative-path origin the way the web frontend does.
 
+**Two repos:** the backend tasks (1–3) modify this repo, `evowerk-cloud-mrp`. The mobile tasks (4–10) live in a separate, already-created repo: `C:\Users\zeesh\evowerk-mobile` (GitHub: `zeeeeeshan7/evowerk-mobile`, private), a sibling directory of `evowerk-cloud-mrp`, not a subfolder of it. Every mobile-task file path below (`App.tsx`, `src/...`, `package.json`, `README.md`) is relative to that repo's root, and every mobile-task shell command is prefixed `cd C:\Users\zeesh\evowerk-mobile`.
+
 **Tech Stack:** Backend: FastAPI/SQLAlchemy/Alembic (existing). Mobile: Expo (managed) + React Native + TypeScript, `@react-navigation` (native-stack + bottom-tabs), `zustand` for state, `expo-secure-store` for persisted secrets, `expo-notifications` + `expo-device` for push.
 
 ## Global Constraints
@@ -30,25 +32,25 @@ Backend (existing repo):
 - `backend/tests/test_device_tokens.py` — new
 - `backend/tests/test_alerts_push.py` — new
 
-Mobile (new `mobile/` directory at repo root, its own Expo project):
-- `mobile/App.tsx` — root component, push listener wiring
-- `mobile/src/store/secureStorage.ts` — zustand `StateStorage` adapter over `expo-secure-store`
-- `mobile/src/store/serverStore.ts` — persisted server URL
-- `mobile/src/store/authStore.ts` — persisted access/refresh tokens
-- `mobile/src/store/deviceTokenStore.ts` — in-memory Expo push token (session-only)
-- `mobile/src/api/client.ts` — `apiFetch` (base URL + bearer + refresh-on-401)
-- `mobile/src/api/kpiDashboards.ts` — dashboard/cards fetchers
-- `mobile/src/api/alerts.ts` — alert rules/scan fetchers
-- `mobile/src/push/registerPush.ts` — register/unregister Expo push token
-- `mobile/src/screens/ServerUrlScreen.tsx`
-- `mobile/src/screens/LoginScreen.tsx`
-- `mobile/src/screens/DashboardScreen.tsx`
-- `mobile/src/screens/AlertsScreen.tsx`
-- `mobile/src/navigation/RootNavigator.tsx`
-- `mobile/src/navigation/MainTabs.tsx`
-- `mobile/src/navigation/navigationRef.ts`
-- `mobile/App.test.tsx` — smoke test
-- `mobile/README.md`
+Mobile (separate `evowerk-mobile` repo, `C:\Users\zeesh\evowerk-mobile` — see "Two repos" above):
+- `App.tsx` — root component, push listener wiring
+- `src/store/secureStorage.ts` — zustand `StateStorage` adapter over `expo-secure-store`
+- `src/store/serverStore.ts` — persisted server URL
+- `src/store/authStore.ts` — persisted access/refresh tokens
+- `src/store/deviceTokenStore.ts` — in-memory Expo push token (session-only)
+- `src/api/client.ts` — `apiFetch` (base URL + bearer + refresh-on-401)
+- `src/api/kpiDashboards.ts` — dashboard/cards fetchers
+- `src/api/alerts.ts` — alert rules/scan fetchers
+- `src/push/registerPush.ts` — register/unregister Expo push token
+- `src/screens/ServerUrlScreen.tsx`
+- `src/screens/LoginScreen.tsx`
+- `src/screens/DashboardScreen.tsx`
+- `src/screens/AlertsScreen.tsx`
+- `src/navigation/RootNavigator.tsx`
+- `src/navigation/MainTabs.tsx`
+- `src/navigation/navigationRef.ts`
+- `App.test.tsx` — smoke test
+- `README.md`
 
 ---
 
@@ -688,35 +690,33 @@ git commit -m "feat: send data-minimal push notification when an alert rule trig
 ## Task 4: Scaffold the Expo mobile app
 
 **Files:**
-- Create: `mobile/` (via `create-expo-app`, then modified below)
-- Create: `mobile/src/store/secureStorage.ts`
-- Create: `mobile/src/navigation/RootNavigator.tsx`
-- Modify: `mobile/App.tsx`
+- Create: `src/store/secureStorage.ts`
+- Create: `src/navigation/RootNavigator.tsx`
+- Modify: `App.tsx`
 
 **Interfaces:**
-- Produces: `secureStorage: StateStorage` (from `mobile/src/store/secureStorage.ts`) — a zustand-compatible async storage adapter, consumed by Tasks 5 and 6's persisted stores. `RootNavigator` component, consumed by `App.tsx` and extended in Tasks 5, 6, 9.
+- Produces: `secureStorage: StateStorage` (from `src/store/secureStorage.ts`) — a zustand-compatible async storage adapter, consumed by Tasks 5 and 6's persisted stores. `RootNavigator` component, consumed by `App.tsx` and extended in Tasks 5, 6, 9.
 
-- [ ] **Step 1: Scaffold the project**
+- [x] **Step 1: Scaffold the project** — already done
 
-Run from the repo root:
-
-```bash
-npx create-expo-app@latest mobile --template blank-typescript
-```
-
-Expected: creates `mobile/` with `App.tsx`, `app.json`, `package.json`, `tsconfig.json`, `babel.config.js`.
+The `evowerk-mobile` repo (`C:\Users\zeesh\evowerk-mobile`, GitHub
+`zeeeeeshan7/evowerk-mobile`, private) was created via
+`npx create-expo-app@latest evowerk-mobile --template blank-typescript`,
+committed, and pushed. It already has `App.tsx`, `app.json`, `package.json`,
+`tsconfig.json`, `babel.config.js`. Nothing to do for this step — starting
+point for Step 2 below.
 
 - [ ] **Step 2: Install dependencies**
 
 ```bash
-cd mobile
+cd C:\Users\zeesh\evowerk-mobile
 npx expo install react-native-screens react-native-safe-area-context expo-secure-store expo-notifications expo-device
 npm install @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs zustand
 ```
 
 - [ ] **Step 3: Write the secure storage adapter**
 
-Create `mobile/src/store/secureStorage.ts`:
+Create `src/store/secureStorage.ts`:
 
 ```typescript
 import * as SecureStore from "expo-secure-store";
@@ -734,7 +734,7 @@ export const secureStorage: StateStorage = {
 
 - [ ] **Step 4: Write a placeholder root navigator**
 
-Create `mobile/src/navigation/RootNavigator.tsx`:
+Create `src/navigation/RootNavigator.tsx`:
 
 ```typescript
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -765,7 +765,7 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 5: Wire it into `App.tsx`**
 
-Replace the contents of `mobile/App.tsx`:
+Replace the contents of `App.tsx`:
 
 ```typescript
 import { NavigationContainer } from "@react-navigation/native";
@@ -785,19 +785,19 @@ export default function App() {
 
 - [ ] **Step 6: Typecheck**
 
-Run: `cd mobile && npx tsc --noEmit`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit`
 Expected: no output, exit code 0.
 
 - [ ] **Step 7: Manual verification**
 
-Run: `cd mobile && npx expo start`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx expo start`
 Expected: QR code prints; opening it in Expo Go (or pressing `i`/`a` for a simulator/emulator) shows a blank screen with the text "Evowerk Mobile".
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd mobile && git add -A
-git commit -m "feat: scaffold Expo mobile app"
+cd C:\Users\zeesh\evowerk-mobile && git add -A
+git commit -m "feat: add navigation shell and secure storage adapter"
 ```
 
 ---
@@ -805,17 +805,17 @@ git commit -m "feat: scaffold Expo mobile app"
 ## Task 5: Server URL screen
 
 **Files:**
-- Create: `mobile/src/store/serverStore.ts`
-- Create: `mobile/src/screens/ServerUrlScreen.tsx`
-- Modify: `mobile/src/navigation/RootNavigator.tsx`
+- Create: `src/store/serverStore.ts`
+- Create: `src/screens/ServerUrlScreen.tsx`
+- Modify: `src/navigation/RootNavigator.tsx`
 
 **Interfaces:**
 - Consumes: `secureStorage` (Task 4).
-- Produces: `useServerStore` (zustand hook: `{ serverUrl: string | null, setServerUrl(url), clear() }`), consumed by `mobile/src/api/client.ts` (Task 6) and `RootNavigator` (this task, extended in Task 6).
+- Produces: `useServerStore` (zustand hook: `{ serverUrl: string | null, setServerUrl(url), clear() }`), consumed by `src/api/client.ts` (Task 6) and `RootNavigator` (this task, extended in Task 6).
 
 - [ ] **Step 1: Write the server URL store**
 
-Create `mobile/src/store/serverStore.ts`:
+Create `src/store/serverStore.ts`:
 
 ```typescript
 import { create } from "zustand";
@@ -844,7 +844,7 @@ export const useServerStore = create<ServerState>()(
 
 - [ ] **Step 2: Write the screen**
 
-Create `mobile/src/screens/ServerUrlScreen.tsx`:
+Create `src/screens/ServerUrlScreen.tsx`:
 
 ```typescript
 import { useState } from "react";
@@ -894,7 +894,7 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 3: Branch the root navigator on `serverUrl`**
 
-Replace `mobile/src/navigation/RootNavigator.tsx`:
+Replace `src/navigation/RootNavigator.tsx`:
 
 ```typescript
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -933,18 +933,18 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 4: Typecheck**
 
-Run: `cd mobile && npx tsc --noEmit`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit`
 Expected: no output, exit code 0.
 
 - [ ] **Step 5: Manual verification**
 
-Run: `cd mobile && npx expo start`, open in Expo Go.
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx expo start`, open in Expo Go.
 Expected: app shows the "Your Evowerk server URL" screen. Typing a non-URL value and pressing Continue shows the inline error. Typing `https://example.com` and pressing Continue navigates to the placeholder "Evowerk Mobile" screen. Reload the app (shake device → Reload, or press `r` in the terminal) — expected: it goes straight to the placeholder screen (the URL persisted).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd mobile && git add -A
+cd C:\Users\zeesh\evowerk-mobile && git add -A
 git commit -m "feat: add server URL onboarding screen"
 ```
 
@@ -953,18 +953,18 @@ git commit -m "feat: add server URL onboarding screen"
 ## Task 6: Login (with MFA) + authenticated API client
 
 **Files:**
-- Create: `mobile/src/store/authStore.ts`
-- Create: `mobile/src/api/client.ts`
-- Create: `mobile/src/screens/LoginScreen.tsx`
-- Modify: `mobile/src/navigation/RootNavigator.tsx`
+- Create: `src/store/authStore.ts`
+- Create: `src/api/client.ts`
+- Create: `src/screens/LoginScreen.tsx`
+- Modify: `src/navigation/RootNavigator.tsx`
 
 **Interfaces:**
 - Consumes: `useServerStore` (Task 5).
-- Produces: `useAuthStore` (`{ accessToken, refreshToken, setTokens(access, refresh), clear() }`), consumed by every later API call and by Task 7's sign-out. `apiFetch(path: string, init?: RequestInit): Promise<Response>` from `mobile/src/api/client.ts`, consumed by Tasks 7, 8, 9.
+- Produces: `useAuthStore` (`{ accessToken, refreshToken, setTokens(access, refresh), clear() }`), consumed by every later API call and by Task 7's sign-out. `apiFetch(path: string, init?: RequestInit): Promise<Response>` from `src/api/client.ts`, consumed by Tasks 7, 8, 9.
 
 - [ ] **Step 1: Write the auth store**
 
-Create `mobile/src/store/authStore.ts`:
+Create `src/store/authStore.ts`:
 
 ```typescript
 import { create } from "zustand";
@@ -993,7 +993,7 @@ export const useAuthStore = create<AuthState>()(
 
 - [ ] **Step 2: Write the API client**
 
-Create `mobile/src/api/client.ts` (same shared-in-flight-refresh shape as the web frontend's `frontend/src/api/client.ts`, but with an explicit base URL instead of a same-origin relative path, and no `FormData` handling - v1 is read-only, no uploads):
+Create `src/api/client.ts` (same shared-in-flight-refresh shape as the web frontend's `frontend/src/api/client.ts`, but with an explicit base URL instead of a same-origin relative path, and no `FormData` handling - v1 is read-only, no uploads):
 
 ```typescript
 import { useAuthStore } from "../store/authStore";
@@ -1056,7 +1056,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 
 - [ ] **Step 3: Write the login screen**
 
-Create `mobile/src/screens/LoginScreen.tsx`:
+Create `src/screens/LoginScreen.tsx`:
 
 ```typescript
 import { useState } from "react";
@@ -1145,7 +1145,7 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 4: Branch the root navigator on `accessToken`**
 
-Replace `mobile/src/navigation/RootNavigator.tsx`:
+Replace `src/navigation/RootNavigator.tsx`:
 
 ```typescript
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -1189,20 +1189,20 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 5: Typecheck**
 
-Run: `cd mobile && npx tsc --noEmit`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit`
 Expected: no output, exit code 0.
 
 - [ ] **Step 6: Manual verification**
 
 Prerequisite: a running backend + an org registered on it. Run `cd backend && uvicorn app.main:app --reload`, then register a test org via the web frontend's sign-up page (or `POST /auth/register` with `org_name`, `email`, and a password of your choosing).
 
-Run: `cd mobile && npx expo start`, open in Expo Go on a device/simulator that can reach the backend host (use your machine's LAN IP, not `localhost`, if testing on a physical device).
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx expo start`, open in Expo Go on a device/simulator that can reach the backend host (use your machine's LAN IP, not `localhost`, if testing on a physical device).
 Expected: enter the server URL (e.g. `http://192.168.1.x:8000`) → Login screen appears → entering the registered email/password signs in and lands on the "Evowerk Mobile" placeholder screen. Entering a wrong password shows "Invalid email, password, or code."
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd mobile && git add -A
+cd C:\Users\zeesh\evowerk-mobile && git add -A
 git commit -m "feat: add login screen and authenticated API client"
 ```
 
@@ -1211,17 +1211,17 @@ git commit -m "feat: add login screen and authenticated API client"
 ## Task 7: Push token registration
 
 **Files:**
-- Create: `mobile/src/store/deviceTokenStore.ts`
-- Create: `mobile/src/push/registerPush.ts`
-- Modify: `mobile/App.tsx`
+- Create: `src/store/deviceTokenStore.ts`
+- Create: `src/push/registerPush.ts`
+- Modify: `App.tsx`
 
 **Interfaces:**
 - Consumes: `apiFetch` (Task 6); `useAuthStore` (Task 6).
-- Produces: `registerForPush(): Promise<string | null>`, `unregisterPush(token: string | null): Promise<void>` from `mobile/src/push/registerPush.ts` — `unregisterPush` consumed by Task 9's sign-out. `useDeviceTokenStore` (`{ token: string | null, setToken(token) }`), consumed by Task 9.
+- Produces: `registerForPush(): Promise<string | null>`, `unregisterPush(token: string | null): Promise<void>` from `src/push/registerPush.ts` — `unregisterPush` consumed by Task 9's sign-out. `useDeviceTokenStore` (`{ token: string | null, setToken(token) }`), consumed by Task 9.
 
 - [ ] **Step 1: Write the device token store**
 
-Create `mobile/src/store/deviceTokenStore.ts`:
+Create `src/store/deviceTokenStore.ts`:
 
 ```typescript
 import { create } from "zustand";
@@ -1242,7 +1242,7 @@ export const useDeviceTokenStore = create<DeviceTokenState>((set) => ({
 
 - [ ] **Step 2: Write the register/unregister functions**
 
-Create `mobile/src/push/registerPush.ts`:
+Create `src/push/registerPush.ts`:
 
 ```typescript
 import * as Device from "expo-device";
@@ -1277,7 +1277,7 @@ export async function unregisterPush(token: string | null): Promise<void> {
 
 - [ ] **Step 3: Wire registration into `App.tsx`**
 
-Replace `mobile/App.tsx`:
+Replace `App.tsx`:
 
 ```typescript
 import { useEffect } from "react";
@@ -1324,18 +1324,18 @@ export default function App() {
 
 - [ ] **Step 4: Typecheck**
 
-Run: `cd mobile && npx tsc --noEmit`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit`
 Expected: no output, exit code 0.
 
 - [ ] **Step 5: Manual verification**
 
-Run: `cd mobile && npx expo start` on a **physical device** via Expo Go (push tokens require a real device, not a simulator).
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx expo start` on a **physical device** via Expo Go (push tokens require a real device, not a simulator).
 Expected: after signing in, an OS permission prompt for notifications appears; accepting it triggers a `POST /device-tokens` call. Confirm via the backend: query the `device_tokens` table (or temporarily log in `register_device_token`) and see one row for the signed-in user.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd mobile && git add -A
+cd C:\Users\zeesh\evowerk-mobile && git add -A
 git commit -m "feat: register Expo push token on login and app foreground"
 ```
 
@@ -1344,8 +1344,8 @@ git commit -m "feat: register Expo push token on login and app foreground"
 ## Task 8: Dashboard screen (KPI cards)
 
 **Files:**
-- Create: `mobile/src/api/kpiDashboards.ts`
-- Create: `mobile/src/screens/DashboardScreen.tsx`
+- Create: `src/api/kpiDashboards.ts`
+- Create: `src/screens/DashboardScreen.tsx`
 
 **Interfaces:**
 - Consumes: `apiFetch` (Task 6).
@@ -1353,7 +1353,7 @@ git commit -m "feat: register Expo push token on login and app foreground"
 
 - [ ] **Step 1: Write the API fetchers**
 
-Create `mobile/src/api/kpiDashboards.ts`:
+Create `src/api/kpiDashboards.ts`:
 
 ```typescript
 import { apiFetch } from "./client";
@@ -1391,7 +1391,7 @@ export async function fetchDashboardCards(dashboardId: string): Promise<KpiCard[
 
 - [ ] **Step 2: Write the screen**
 
-Create `mobile/src/screens/DashboardScreen.tsx`:
+Create `src/screens/DashboardScreen.tsx`:
 
 ```typescript
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -1481,13 +1481,13 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 3: Typecheck**
 
-Run: `cd mobile && npx tsc --noEmit`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit`
 Expected: no output, exit code 0. (`DashboardScreen` isn't wired into navigation until Task 9 — this step only confirms it compiles.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd mobile && git add -A
+cd C:\Users\zeesh\evowerk-mobile && git add -A
 git commit -m "feat: add dashboard screen with KPI cards"
 ```
 
@@ -1496,13 +1496,13 @@ git commit -m "feat: add dashboard screen with KPI cards"
 ## Task 9: Alerts screen, tab navigation, push tap deep link, sign out
 
 **Files:**
-- Create: `mobile/src/api/alerts.ts`
-- Create: `mobile/src/screens/AlertsScreen.tsx`
-- Create: `mobile/src/navigation/MainTabs.tsx`
-- Create: `mobile/src/navigation/navigationRef.ts`
-- Modify: `mobile/src/navigation/RootNavigator.tsx`
-- Modify: `mobile/src/screens/DashboardScreen.tsx`
-- Modify: `mobile/App.tsx`
+- Create: `src/api/alerts.ts`
+- Create: `src/screens/AlertsScreen.tsx`
+- Create: `src/navigation/MainTabs.tsx`
+- Create: `src/navigation/navigationRef.ts`
+- Modify: `src/navigation/RootNavigator.tsx`
+- Modify: `src/screens/DashboardScreen.tsx`
+- Modify: `App.tsx`
 
 **Interfaces:**
 - Consumes: `apiFetch` (Task 6); `DashboardScreen` (Task 8); `unregisterPush`, `useDeviceTokenStore` (Task 7); `useAuthStore` (Task 6).
@@ -1510,7 +1510,7 @@ git commit -m "feat: add dashboard screen with KPI cards"
 
 - [ ] **Step 1: Write the alerts API fetchers**
 
-Create `mobile/src/api/alerts.ts`:
+Create `src/api/alerts.ts`:
 
 ```typescript
 import { apiFetch } from "./client";
@@ -1533,7 +1533,7 @@ export async function scanAlerts(): Promise<AlertTrigger[]> {
 
 - [ ] **Step 2: Write the alerts screen**
 
-Create `mobile/src/screens/AlertsScreen.tsx`:
+Create `src/screens/AlertsScreen.tsx`:
 
 ```typescript
 import { useCallback, useEffect, useState } from "react";
@@ -1598,7 +1598,7 @@ const styles = StyleSheet.create({
 
 - [ ] **Step 3: Add sign-out to the dashboard screen**
 
-In `mobile/src/screens/DashboardScreen.tsx`, change the existing `react-native` import line from:
+In `src/screens/DashboardScreen.tsx`, change the existing `react-native` import line from:
 
 ```typescript
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
@@ -1638,7 +1638,7 @@ Add `ListFooterComponent={<SignOutButton />}` as a prop on the `<FlatList>` in `
 
 - [ ] **Step 4: Write the tab navigator**
 
-Create `mobile/src/navigation/MainTabs.tsx`:
+Create `src/navigation/MainTabs.tsx`:
 
 ```typescript
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -1659,7 +1659,7 @@ export function MainTabs() {
 
 - [ ] **Step 5: Write the navigation ref (for navigating from outside a component, e.g. a push-tap handler)**
 
-Create `mobile/src/navigation/navigationRef.ts`:
+Create `src/navigation/navigationRef.ts`:
 
 ```typescript
 import { createNavigationContainerRef } from "@react-navigation/native";
@@ -1669,7 +1669,7 @@ export const navigationRef = createNavigationContainerRef();
 
 - [ ] **Step 6: Wire `MainTabs` into the root navigator**
 
-Replace `mobile/src/navigation/RootNavigator.tsx`:
+Replace `src/navigation/RootNavigator.tsx`:
 
 ```typescript
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -1701,7 +1701,7 @@ export function RootNavigator() {
 
 - [ ] **Step 7: Wire the navigation ref and push-tap handler into `App.tsx`**
 
-Replace `mobile/App.tsx`:
+Replace `App.tsx`:
 
 ```typescript
 import { useEffect } from "react";
@@ -1760,18 +1760,18 @@ export default function App() {
 
 - [ ] **Step 8: Typecheck**
 
-Run: `cd mobile && npx tsc --noEmit`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit`
 Expected: no output, exit code 0.
 
 - [ ] **Step 9: Manual verification**
 
-Run: `cd mobile && npx expo start`, sign in on a physical device (per Task 7's push prerequisites).
+Run: `cd C:\Users\zeesh\evowerk-mobile && npx expo start`, sign in on a physical device (per Task 7's push prerequisites).
 Expected: two tabs, "Dashboard" and "Alerts", both visible after login. Dashboard shows KPI cards (requires an org with at least one `KpiDashboard` already configured via the web app - see spec's "Why reuse the KPI dashboard system"; if none exists, expect the "No dashboards configured for this org yet." message instead, which is correct behavior). Alerts shows the org's alert rules with live triggered/ok state. Pressing "Sign out" on Dashboard returns to the Login screen. Trigger a real alert (e.g. via the web app's rule Test button against a breaching dataset) and confirm a push notification arrives on the device; tapping it opens the app to the Alerts tab.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-cd mobile && git add -A
+cd C:\Users\zeesh\evowerk-mobile && git add -A
 git commit -m "feat: add alerts screen, tab navigation, and push-tap deep link"
 ```
 
@@ -1780,9 +1780,9 @@ git commit -m "feat: add alerts screen, tab navigation, and push-tap deep link"
 ## Task 10: Smoke test + README
 
 **Files:**
-- Create: `mobile/App.test.tsx`
-- Create: `mobile/README.md`
-- Modify: `mobile/package.json`
+- Create: `App.test.tsx`
+- Create: `README.md`
+- Modify: `package.json`
 
 **Interfaces:**
 - Consumes: `ServerUrlScreen` (Task 5) — this is the app's actual first screen (server URL, entered before login), so the smoke test renders it rather than the login screen the original spec text named before this task's design added the server-URL step.
@@ -1790,13 +1790,13 @@ git commit -m "feat: add alerts screen, tab navigation, and push-tap deep link"
 - [ ] **Step 1: Install the test dependencies**
 
 ```bash
-cd mobile
+cd C:\Users\zeesh\evowerk-mobile
 npm install --save-dev jest-expo jest @testing-library/react-native @types/jest
 ```
 
 - [ ] **Step 2: Configure the test script**
 
-In `mobile/package.json`, add a `"test"` script and a `"jest"` config block (as siblings of the existing `"scripts"`/other top-level keys):
+In `package.json`, add a `"test"` script and a `"jest"` config block (as siblings of the existing `"scripts"`/other top-level keys):
 
 ```json
   "scripts": {
@@ -1813,7 +1813,7 @@ In `mobile/package.json`, add a `"test"` script and a `"jest"` config block (as 
 
 - [ ] **Step 3: Write the failing test**
 
-Create `mobile/App.test.tsx`:
+Create `App.test.tsx`:
 
 ```typescript
 import { render, screen } from "@testing-library/react-native";
@@ -1829,12 +1829,12 @@ This shouldn't actually fail at this point since `ServerUrlScreen` already exist
 
 - [ ] **Step 4: Run the test**
 
-Run: `cd mobile && npm test`
+Run: `cd C:\Users\zeesh\evowerk-mobile && npm test`
 Expected: PASS (1 test).
 
 - [ ] **Step 5: Write the README**
 
-Create `mobile/README.md`:
+Create `README.md`:
 
 ```markdown
 # Evowerk Mobile (exec dashboard)
@@ -1869,7 +1869,7 @@ credentials.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd mobile && git add -A
+cd C:\Users\zeesh\evowerk-mobile && git add -A
 git commit -m "test: add smoke test and README"
 ```
 
@@ -1878,5 +1878,5 @@ git commit -m "test: add smoke test and README"
 ## Final verification
 
 - [ ] Backend: `cd backend && python -m pytest -q` — full suite passes.
-- [ ] Mobile: `cd mobile && npx tsc --noEmit && npm test` — both pass.
+- [ ] Mobile: `cd C:\Users\zeesh\evowerk-mobile && npx tsc --noEmit && npm test` — both pass.
 - [ ] Manual: fresh install walkthrough on a physical device — server URL → login → Dashboard cards render → Alerts shows rule status → trigger a real alert and confirm the push arrives and tapping it opens Alerts → Sign out returns to Login.

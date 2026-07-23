@@ -48,6 +48,7 @@ from app.api.routes import (
     shifts,
     simulation,
     spc,
+    staff_auth,
     suppliers,
     throughput,
     work_centers,
@@ -99,6 +100,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(staff_auth.router)
 if settings.google_oauth_client_id or settings.microsoft_oauth_client_id:
     app.include_router(oauth.router)
 app.include_router(orgs.router)

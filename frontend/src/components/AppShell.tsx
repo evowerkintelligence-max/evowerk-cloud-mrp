@@ -1,21 +1,14 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronDown, ChevronRight, LogOut, Search } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
+import { useCurrentUser } from "@/lib/currentUser";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/BrandMark";
 import { CommandPalette } from "@/components/CommandPalette";
-import { ALL_NAV_ITEMS, NAV_SECTIONS, findNavMatch, type NavItem } from "@/lib/nav";
+import { ALL_NAV_ITEMS, NAV_SECTIONS, findNavMatch, isNavItemVisible, type NavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
-
-interface OrgResponse {
-  id: string;
-  name: string;
-  enabled_features: string[];
-  is_staff: boolean;
-}
 
 const COLLAPSE_KEY = "evowerk.nav.collapsed";
 
@@ -81,14 +74,7 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
 
-  const org = useQuery<OrgResponse>({
-    queryKey: ["org-me"],
-    queryFn: async () => {
-      const res = await apiFetch("/orgs/me");
-      if (!res.ok) throw new Error("Failed to load org");
-      return res.json();
-    },
-  });
+  const org = useCurrentUser();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -122,13 +108,15 @@ export function AppShell() {
 
   const match = findNavMatch(location.pathname);
   const enabledFeatures = new Set(org.data?.enabled_features ?? []);
+  const isStaff = org.data?.is_staff ?? false;
+  const navGate = { enabledFeatures, isStaff };
   const visibleSections = NAV_SECTIONS
-    .filter((section) => section.label !== "Staff" || org.data?.is_staff)
     .map((section) => ({
       ...section,
-      items: section.items.filter((item) => !item.featureKey || enabledFeatures.has(item.featureKey)),
+      items: section.items.filter((item) => isNavItemVisible(item, navGate)),
     }))
     .filter((section) => section.items.length > 0);
+  const visibleNavItems = ALL_NAV_ITEMS.filter((item) => isNavItemVisible(item, navGate));
   const orgInitials = (org.data?.name ?? "??")
     .split(/\s+/)
     .map((w) => w[0])
@@ -139,7 +127,7 @@ export function AppShell() {
   return (
     <div className="min-h-screen">
       <div className="app-backdrop" />
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={visibleNavItems} />
       <div className="mx-auto flex min-h-screen max-w-[1680px]">
         <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-border/70 bg-card/40 md:flex">
           <div className="flex h-14 shrink-0 items-center border-b border-border/60 px-5">
@@ -248,7 +236,7 @@ export function AppShell() {
           </header>
 
           <div className="flex gap-1 overflow-x-auto border-b border-border bg-card/30 px-3 py-2 md:hidden">
-            {ALL_NAV_ITEMS.map((item) => (
+            {visibleNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CornerDownLeft, Search } from "lucide-react";
-import { ALL_NAV_ITEMS } from "@/lib/nav";
+import { ALL_NAV_ITEMS, type NavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-/** Ctrl/⌘-K navigation palette over every page in the app. */
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
+type PaletteItem = NavItem & { section: string };
+
+/** Ctrl/⌘-K navigation palette over every page in the app.
+ * `items` should already be filtered to what the current user can see
+ * (see AppShell's visibleNavItems) - this component never gates on its own. */
+export function CommandPalette({
+  open,
+  onClose,
+  items = ALL_NAV_ITEMS,
+}: {
+  open: boolean;
+  onClose: () => void;
+  items?: PaletteItem[];
+}) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -14,14 +26,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return ALL_NAV_ITEMS;
-    return ALL_NAV_ITEMS.filter(
+    if (!q) return items;
+    return items.filter(
       (item) =>
         item.label.toLowerCase().includes(q) ||
         item.section.toLowerCase().includes(q) ||
         item.keywords?.some((k) => k.toLowerCase().includes(q)),
     );
-  }, [query]);
+  }, [query, items]);
 
   useEffect(() => {
     if (open) {

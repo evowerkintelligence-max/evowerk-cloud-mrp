@@ -14,6 +14,17 @@ branch_labels = None
 depends_on = None
 
 
+# Core-tier feature keys as of this migration's authorship (see
+# backend/app/core/features.py's FEATURES/CORE_FEATURES). Hardcoded rather
+# than imported so this migration's behavior stays fixed even if the
+# registry changes later.
+_CORE_FEATURES_AT_MIGRATION_TIME = [
+    "boms", "procurement", "lots", "warehouse", "planning", "plant_summary",
+    "oee", "pace_tracking", "downtime", "downtime_tracking", "throughput",
+    "scrap", "shifts", "spc", "kpis", "kpi_dashboards", "reports", "data_chat",
+]
+
+
 def upgrade() -> None:
     op.add_column(
         "orgs",
@@ -23,6 +34,13 @@ def upgrade() -> None:
         "users",
         sa.Column("is_staff", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # Grandfather every pre-existing org into Core so deploying this
+    # migration doesn't lock every current customer out the instant
+    # require_feature() gating goes live. Staff bootstrap and any
+    # Premium-tier grants are still a manual step - see
+    # docs/superpowers/plans/2026-07-23-feature-entitlements-deploy-runbook.md.
+    orgs = sa.table("orgs", sa.column("enabled_features", sa.JSON()))
+    op.execute(orgs.update().values(enabled_features=_CORE_FEATURES_AT_MIGRATION_TIME))
 
 
 def downgrade() -> None:

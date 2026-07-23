@@ -1,8 +1,7 @@
 import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuthHydrated, useAuthStore } from "./store/authStore";
-import { useQuery } from "@tanstack/react-query";
-import { apiFetch } from "@/api/client";
+import { useCurrentUser } from "@/lib/currentUser";
 import { EmptyState } from "@/components/EmptyState";
 import { AppShell } from "./components/AppShell";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -106,24 +105,8 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
-interface EntitlementResponse {
-  enabled_features: string[];
-  is_staff: boolean;
-}
-
-function useEntitlements() {
-  return useQuery<EntitlementResponse>({
-    queryKey: ["org-me"],
-    queryFn: async () => {
-      const res = await apiFetch("/orgs/me");
-      if (!res.ok) throw new Error("Failed to load org");
-      return res.json();
-    },
-  });
-}
-
 function RequireFeature({ feature, children }: { feature: string; children: JSX.Element }) {
-  const org = useEntitlements();
+  const org = useCurrentUser();
   if (org.isLoading) return null;
   if (!org.data?.enabled_features.includes(feature)) {
     return (
@@ -136,7 +119,7 @@ function RequireFeature({ feature, children }: { feature: string; children: JSX.
 }
 
 export function RequireStaff({ children }: { children: JSX.Element }) {
-  const org = useEntitlements();
+  const org = useCurrentUser();
   if (org.isLoading) return null;
   if (!org.data?.is_staff) return <Navigate to="/" replace />;
   return children;

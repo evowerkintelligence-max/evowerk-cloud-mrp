@@ -89,6 +89,30 @@ async def test_staff_lists_and_edits_customer_features(client):
     assert sorted(org.enabled_features) == ["automl", "oee"]
 
 
+async def test_create_customer_rejects_unknown_feature_key(client):
+    staff_token = await _register_login_and_make_staff(client)
+    res = await client.post(
+        "/admin/customers", headers=_h(staff_token),
+        json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["not_a_real_feature"]},
+    )
+    assert res.status_code == 422, res.text
+
+
+async def test_update_customer_features_rejects_unknown_feature_key(client):
+    staff_token = await _register_login_and_make_staff(client)
+    create = await client.post(
+        "/admin/customers", headers=_h(staff_token),
+        json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
+    )
+    org_id = create.json()["org_id"]
+
+    res = await client.patch(
+        f"/admin/customers/{org_id}", headers=_h(staff_token),
+        json={"enabled_features": ["not_a_real_feature"]},
+    )
+    assert res.status_code == 422, res.text
+
+
 async def test_create_customer_duplicate_owner_email_409s(client):
     staff_token = await _register_login_and_make_staff(client)
     first = await client.post(

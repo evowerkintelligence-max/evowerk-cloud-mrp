@@ -1,23 +1,21 @@
-# Feature Entitlements — Deploy Runbook
+# Feature Entitlements Deploy Runbook
 
-One-time manual steps required the first time `b2e9f4a71c83_org_features_user_staff.py` runs
-against production. Skipping these locks the product: every org defaults to `enabled_features=[]`
-(403 on every gated route) and no user defaults to `is_staff=True` (nobody can reach
-`/admin/customers` to fix that).
+One-time manual step required the first time `b2e9f4a71c83_org_features_user_staff.py` runs
+against production. The migration itself backfills every pre-existing org's `enabled_features` to
+Core (so nobody gets 403'd on Core routes the instant this deploys), but no user defaults to
+`is_staff=True`, so nobody can reach `/admin/customers` to grant Premium or adjust anything until
+one account is flipped manually.
 
 1. **After the migration runs**, connect to the production DB directly and flip one account to
    staff:
    ```sql
    UPDATE users SET is_staff = true WHERE email = '<your EvoWerk email>';
    ```
-2. **Log in as that account**, go to `/admin/customers`, and for each existing org at the time of
-   this deploy, use "Edit features" to set their `enabled_features` to whatever they were actually
-   sold (Core, or Core + Premium — see `backend/app/core/features.py`'s `CORE_FEATURES`/
-   `PREMIUM_FEATURES`). If there are zero or very few production customers at deploy time, this is
-   a couple of clicks, not a script — a scripted backfill is unnecessary at current scale
-   (`ponytail: manual backfill via /admin/customers UI; revisit only if the number of pre-existing
-   orgs at some future migration makes clicking through each one impractical`).
+2. **Log in as that account**, go to `/admin/customers`, and for any existing org that was actually
+   sold Premium (not just Core), use "Edit features" to add the Premium keys (see
+   `backend/app/core/features.py`'s `CORE_FEATURES`/`PREMIUM_FEATURES`). Orgs on Core need no
+   action; the migration already covers them.
 
-Both steps are one-time — every org created after this deploy goes through `/admin/customers`
+This step is one-time, every org created after this deploy goes through `/admin/customers`
 onboarding, which sets `enabled_features` at creation time, and `is_staff` accounts are set up once
 per EvoWerk employee, not per deploy.

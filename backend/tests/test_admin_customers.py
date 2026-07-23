@@ -89,6 +89,21 @@ async def test_staff_lists_and_edits_customer_features(client):
     assert sorted(org.enabled_features) == ["automl", "oee"]
 
 
+async def test_create_customer_duplicate_owner_email_409s(client):
+    staff_token = await _register_login_and_make_staff(client)
+    first = await client.post(
+        "/admin/customers", headers=_h(staff_token),
+        json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
+    )
+    assert first.status_code == 201, first.text
+
+    dupe = await client.post(
+        "/admin/customers", headers=_h(staff_token),
+        json={"org_name": "Other Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
+    )
+    assert dupe.status_code == 409, dupe.text
+
+
 async def test_patch_unknown_customer_404s(client):
     staff_token = await _register_login_and_make_staff(client)
     res = await client.patch(

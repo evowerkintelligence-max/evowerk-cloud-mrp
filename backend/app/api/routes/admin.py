@@ -4,6 +4,7 @@ import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi_users import exceptions
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, require_staff
 from app.core.users import UserCreate, UserManager, get_user_manager
 from app.db.session import get_db
+from app.middleware.audit import log_event
 from app.models.tenant import Org
 from app.models.user import User
 
@@ -40,21 +42,32 @@ async def create_customer(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_manager: UserManager = Depends(get_user_manager),
-    _current: CurrentUser = Depends(require_staff),
+    current: CurrentUser = Depends(require_staff),
 ):
     # Same Org+Location+owner-role creation transaction /auth/register uses
     # (UserManager.create, backend/app/core/users.py) - just with a throwaway
     # password the customer never sees, since forgot_password() below sends
     # them a real "set your password" link instead.
     throwaway_password = secrets.token_urlsafe(24)
-    created_user = await user_manager.create(
-        UserCreate(email=body.owner_email, password=throwaway_password, org_name=body.org_name),
-        safe=True,
-        request=request,
-    )
+    try:
+        created_user = await user_manager.create(
+            UserCreate(email=body.owner_email, password=throwaway_password, org_name=body.org_name),
+            safe=True,
+            request=request,
+        )
+    except exceptions.UserAlreadyExists:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
 
     org = (await db.execute(select(Org).where(Org.id == created_user.org_id))).scalar_one()
     org.enabled_features = body.enabled_features
+    await log_event(
+        db,
+        action="org.features_granted",
+        org_id=org.id,
+        actor_user_id=current.id,
+        target=str(org.id),
+        metadata={"enabled_features": body.enabled_features},
+    )
     await db.commit()
 
     # Same flow /auth/forgot-password uses (on_after_forgot_password sends the
@@ -92,7 +105,7 @@ async def update_customer_features(
     org_id: uuid.UUID,
     body: CustomerFeaturesUpdate,
     db: AsyncSession = Depends(get_db),
-    _current: CurrentUser = Depends(require_staff),
+    current: CurrentUser = Depends(require_staff),
 ):
     # Not app.api.deps.get_or_404: that helper filters on model.org_id, which
     # Org itself doesn't have (Org is the tenant root, not a child row) - this
@@ -102,6 +115,14 @@ async def update_customer_features(
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Customer not found")
     org.enabled_features = body.enabled_features
+    await log_event(
+        db,
+        action="org.features_updated",
+        org_id=org.id,
+        actor_user_id=current.id,
+        target=str(org.id),
+        metadata={"enabled_features": body.enabled_features},
+    )
     await db.commit()
 
     owner = (

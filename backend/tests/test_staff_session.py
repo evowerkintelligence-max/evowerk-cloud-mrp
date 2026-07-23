@@ -7,8 +7,6 @@ import pytest
 
 from app.core.security import create_staff_access_token, decode_token
 
-pytestmark = pytest.mark.asyncio
-
 
 def test_staff_access_token_has_staff_type_and_correct_subject():
     staff_id = str(uuid.uuid4())
@@ -19,6 +17,7 @@ def test_staff_access_token_has_staff_type_and_correct_subject():
     assert payload["sub"] == staff_id
 
 
+@pytest.mark.asyncio
 async def test_get_current_staff_rejects_a_customer_access_token(client, db_session):
     from app.models.staff import StaffAccount
     from app.core.security import hash_password

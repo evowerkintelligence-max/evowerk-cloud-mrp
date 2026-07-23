@@ -65,6 +65,7 @@ const Predictive = lazyPage(() => import("./pages/Predictive"), "Predictive");
 const MfgForecast = lazyPage(() => import("./pages/MfgForecast"), "MfgForecast");
 const ComputerVision = lazyPage(() => import("./pages/ComputerVision"), "ComputerVision");
 const Alerts = lazyPage(() => import("./pages/Alerts"), "Alerts");
+const Customers = lazyPage(() => import("./pages/admin/Customers"), "Customers");
 
 function PageFallback() {
   return (
@@ -211,6 +212,7 @@ export function App() {
             <Route path="/mfg-forecast" element={<RequireFeature feature="mfg_forecast"><MfgForecast /></RequireFeature>} />
             <Route path="/computer-vision" element={<RequireFeature feature="computer_vision"><ComputerVision /></RequireFeature>} />
             <Route path="/alerts" element={<Alerts />} />
+            <Route path="/admin/customers" element={<RequireStaff><Customers /></RequireStaff>} />
           </Route>
         </Routes>
       </Suspense>

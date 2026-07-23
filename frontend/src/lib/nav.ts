@@ -114,6 +114,12 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/alerts", label: "Alerts", icon: Bell, keywords: ["notifications"] },
     ],
   },
+  {
+    label: "Staff",
+    items: [
+      { to: "/admin/customers", label: "Customers", icon: Users, keywords: ["onboard", "admin", "plan", "features"] },
+    ],
+  },
 ];
 
 export const ALL_NAV_ITEMS = NAV_SECTIONS.flatMap((s) =>

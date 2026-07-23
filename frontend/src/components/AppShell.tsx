@@ -122,10 +122,13 @@ export function AppShell() {
 
   const match = findNavMatch(location.pathname);
   const enabledFeatures = new Set(org.data?.enabled_features ?? []);
-  const visibleSections = NAV_SECTIONS.map((section) => ({
-    ...section,
-    items: section.items.filter((item) => !item.featureKey || enabledFeatures.has(item.featureKey)),
-  })).filter((section) => section.items.length > 0);
+  const visibleSections = NAV_SECTIONS
+    .filter((section) => section.label !== "Staff" || org.data?.is_staff)
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => !item.featureKey || enabledFeatures.has(item.featureKey)),
+    }))
+    .filter((section) => section.items.length > 0);
   const orgInitials = (org.data?.name ?? "??")
     .split(/\s+/)
     .map((w) => w[0])

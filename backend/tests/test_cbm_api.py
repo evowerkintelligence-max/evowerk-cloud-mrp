@@ -46,6 +46,29 @@ async def test_fleet_dashboard_shows_stream_status_per_machine(client):
     assert machines["M1"]["status"] == "learning"  # no readings yet -> learning, not "active"
 
 
+async def test_fleet_dashboard_flags_unmapped_stream(client):
+    token = await _register_and_login(client)
+    integ = await client.post(
+        "/integrations", headers=_h(token),
+        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
+    )
+    stream = await client.post(
+        "/realtime/streams", headers=_h(token),
+        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {}},
+    )
+    assert stream.status_code == 200, stream.text
+
+    res = await client.get("/cbm/fleet", headers=_h(token))
+    assert res.status_code == 200, res.text
+    machines = {m["machine"]: m for m in res.json()["machines"]}
+    assert machines["M1"]["status"] == "unmapped"
+    assert machines["M1"]["risk_level"] == "unknown"
+    assert machines["M1"]["failure_probability_30d"] is None
+    assert machines["M1"]["active_anomalies"] == 0
+    assert machines["M1"]["last_reading_at"] is None
+    assert machines["M1"]["stream_id"] == stream.json()["stream_id"]
+
+
 async def test_machine_detail_returns_readings_and_anomalies(client):
     token = await _register_and_login(client)
     integ = await client.post(

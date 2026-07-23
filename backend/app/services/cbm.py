@@ -47,6 +47,15 @@ async def fleet_dashboard(db: AsyncSession, org_id: uuid.UUID) -> list[dict]:
     out = []
     for stream in streams:
         machine = stream.machine
+
+        if not stream.sensor_map:
+            out.append({
+                "machine": machine, "status": "unmapped", "risk_level": "unknown",
+                "failure_probability_30d": None, "active_anomalies": 0,
+                "last_reading_at": None, "stream_id": str(stream.id),
+            })
+            continue
+
         baselines = (
             await db.execute(select(SensorBaseline).where(SensorBaseline.org_id == org_id, SensorBaseline.machine == machine))
         ).scalars().all()
@@ -83,6 +92,7 @@ async def fleet_dashboard(db: AsyncSession, org_id: uuid.UUID) -> list[dict]:
             "machine": machine, "status": status, "risk_level": _risk_level(prob),
             "failure_probability_30d": prob, "active_anomalies": len(active_anomalies),
             "last_reading_at": last_reading.ts.isoformat() if last_reading else None,
+            "stream_id": str(stream.id),
         })
 
     out.sort(key=lambda m: {"high": 0, "medium": 1, "low": 2, "unknown": 3}.get(m["risk_level"], 4))

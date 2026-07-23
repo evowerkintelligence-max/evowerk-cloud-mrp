@@ -1,4 +1,4 @@
-"""org.enabled_features, user.is_staff
+"""org.enabled_features, staff_accounts
 
 Revision ID: b2e9f4a71c83
 Revises: a1f4c8b02d17
@@ -30,19 +30,25 @@ def upgrade() -> None:
         "orgs",
         sa.Column("enabled_features", sa.JSON(), nullable=False, server_default="[]"),
     )
-    op.add_column(
-        "users",
-        sa.Column("is_staff", sa.Boolean(), nullable=False, server_default=sa.false()),
-    )
     # Grandfather every pre-existing org into Core so deploying this
     # migration doesn't lock every current customer out the instant
-    # require_feature() gating goes live. Staff bootstrap and any
-    # Premium-tier grants are still a manual step - see
+    # require_feature() gating goes live. Premium-tier grants are still a
+    # manual step - see
     # docs/superpowers/plans/2026-07-23-feature-entitlements-deploy-runbook.md.
     orgs = sa.table("orgs", sa.column("enabled_features", sa.JSON()))
     op.execute(orgs.update().values(enabled_features=_CORE_FEATURES_AT_MIGRATION_TIME))
 
+    op.create_table(
+        "staff_accounts",
+        sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
+        sa.Column("employee_id", sa.String(), nullable=False, unique=True),
+        sa.Column("hashed_password", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_staff_accounts_employee_id", "staff_accounts", ["employee_id"])
+
 
 def downgrade() -> None:
-    op.drop_column("users", "is_staff")
+    op.drop_index("ix_staff_accounts_employee_id", table_name="staff_accounts")
+    op.drop_table("staff_accounts")
     op.drop_column("orgs", "enabled_features")

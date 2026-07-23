@@ -32,10 +32,6 @@ class User(Base):
     # sets this False explicitly); existing rows are backfilled True by the
     # migration so no deployed customer's users get locked out retroactively.
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    # EvoWerk employee who can manage any org via /admin/customers - distinct
-    # from `role` above, which only ever governs permissions within one's own
-    # org. Never set through any endpoint - flipped directly in the DB.
-    is_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Encrypted at rest (see app.core.security.encrypt_secret) - these hold ciphertext,
     # not the raw TOTP secret, so they're wider than the 32-char base32 secret itself.

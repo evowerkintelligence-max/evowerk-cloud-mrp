@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_token
 from app.db.base import Base
 from app.db.session import get_db
+from app.models.tenant import Org
 from app.models.user import User
 
 ModelT = TypeVar("ModelT", bound=Base)
@@ -58,6 +59,27 @@ def require_role(*roles: str):
         return current
 
     return _check
+
+
+def require_feature(key: str):
+    async def _check(
+        current: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> CurrentUser:
+        org_features = (
+            await db.execute(select(Org.enabled_features).where(Org.id == current.org_id))
+        ).scalar_one()
+        if key not in org_features:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Not included in your plan")
+        return current
+
+    return _check
+
+
+async def require_staff(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if not current.user.is_staff:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Staff only")
+    return current
 
 
 async def get_or_404(

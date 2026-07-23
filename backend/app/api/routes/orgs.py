@@ -21,6 +21,8 @@ class OrgResponse(BaseModel):
     role: str
     user_id: str
     adjust_approval_threshold: Decimal
+    enabled_features: list[str]
+    is_staff: bool
 
 
 class OrgUpdateRequest(BaseModel):
@@ -40,6 +42,8 @@ async def get_my_org(
         role=current.role,
         user_id=str(current.id),
         adjust_approval_threshold=org.adjust_approval_threshold,
+        enabled_features=org.enabled_features,
+        is_staff=current.user.is_staff,
     )
 
 
@@ -69,4 +73,6 @@ async def update_my_org(
         role=current.role,
         user_id=str(current.id),
         adjust_approval_threshold=org.adjust_approval_threshold,
+        enabled_features=org.enabled_features,
+        is_staff=current.user.is_staff,
     )

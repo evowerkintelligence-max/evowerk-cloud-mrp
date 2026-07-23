@@ -83,14 +83,7 @@ export function Login() {
     <AuthLayout
       title="Welcome back"
       subtitle="Sign in to your Evowerk workspace"
-      footer={
-        <>
-          Need an account?{" "}
-          <Link to="/register" className="font-medium text-primary hover:underline">
-            Register
-          </Link>
-        </>
-      }
+      footer={null}
     >
       <form onSubmit={onSubmit} className="space-y-4">
         <Field label="Email" htmlFor="email">

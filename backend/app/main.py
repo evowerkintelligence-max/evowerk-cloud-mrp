@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.deps import require_feature
 from app.api.routes import (
     ai_insights,
+    admin,
     alerts,
     automl,
     auth,
@@ -101,6 +102,7 @@ app.include_router(auth.router)
 if settings.google_oauth_client_id or settings.microsoft_oauth_client_id:
     app.include_router(oauth.router)
 app.include_router(orgs.router)
+app.include_router(admin.router)
 app.include_router(items.router)
 app.include_router(boms.router, dependencies=[Depends(require_feature("boms"))])
 app.include_router(suppliers.router, dependencies=[Depends(require_feature("procurement"))])

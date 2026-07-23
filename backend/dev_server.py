@@ -51,6 +51,7 @@ from app.models import (  # noqa: F401 - register models on the metadata
     report_spec,
     shift_schedule,
     simulation,
+    staff,
     telemetry,
     tenant,
     user,

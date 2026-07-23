@@ -13,6 +13,8 @@ import { cn } from "@/lib/utils";
 interface OrgResponse {
   id: string;
   name: string;
+  enabled_features: string[];
+  is_staff: boolean;
 }
 
 const COLLAPSE_KEY = "evowerk.nav.collapsed";
@@ -119,6 +121,11 @@ export function AppShell() {
   }
 
   const match = findNavMatch(location.pathname);
+  const enabledFeatures = new Set(org.data?.enabled_features ?? []);
+  const visibleSections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => !item.featureKey || enabledFeatures.has(item.featureKey)),
+  })).filter((section) => section.items.length > 0);
   const orgInitials = (org.data?.name ?? "??")
     .split(/\s+/)
     .map((w) => w[0])
@@ -136,7 +143,7 @@ export function AppShell() {
             <Brand />
           </div>
           <nav className="flex flex-1 flex-col overflow-y-auto px-3 py-3">
-            {NAV_SECTIONS.map((section, idx) => {
+            {visibleSections.map((section, idx) => {
               const isCollapsed = collapsed[section.label];
               // The single-item Overview section renders without a group header.
               if (section.items.length === 1 && idx === 0) {

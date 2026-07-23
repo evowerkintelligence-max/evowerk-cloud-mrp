@@ -66,6 +66,14 @@ resource "aws_ecs_task_definition" "backend" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
+  volume {
+    name = "data"
+    efs_volume_configuration {
+      file_system_id = aws_efs_file_system.data.id
+      root_directory = "/"
+    }
+  }
+
   container_definitions = jsonencode([
     {
       name      = "backend"
@@ -80,6 +88,14 @@ resource "aws_ecs_task_definition" "backend" {
 
       portMappings = [
         { containerPort = 8000, protocol = "tcp" }
+      ]
+
+      # Backs data_dir (./data, resolved to /app/data - see backend/app/core/
+      # config.py + Dockerfile's WORKDIR) with the EFS volume above, so
+      # uploaded dataset files survive task restarts instead of living only
+      # in the container's throwaway layer.
+      mountPoints = [
+        { sourceVolume = "data", containerPath = "/app/data", readOnly = false }
       ]
 
       environment = [
@@ -225,7 +241,7 @@ resource "aws_ecs_service" "backend" {
     registry_arn = aws_service_discovery_service.backend.arn
   }
 
-  depends_on = [aws_ecs_service.redis, aws_db_instance.postgres]
+  depends_on = [aws_ecs_service.redis, aws_db_instance.postgres, aws_efs_mount_target.data]
 }
 
 resource "aws_ecs_service" "frontend" {

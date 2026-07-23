@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
+from app.core.background import fire_and_forget
+from app.core.email import send_email
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
@@ -20,6 +23,8 @@ from app.models.procurement import PurchaseOrder, PurchaseOrderLine, PurchaseOrd
 from app.services.inventory import apply_inventory_delta
 from app.services.locations import resolve_location_id
 from app.services.lots import find_or_create_lot
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 
@@ -79,6 +84,21 @@ class PurchaseOrderResponse(BaseModel):
 
 class PurchaseOrderDetailResponse(PurchaseOrderResponse):
     lines: list[PurchaseOrderLineResponse]
+
+
+async def _fetch_po_lines_with_items(
+    db: AsyncSession, po_id: uuid.UUID, *, for_update: bool = False
+) -> list[tuple[PurchaseOrderLine, Item]]:
+    query = (
+        select(PurchaseOrderLine, Item)
+        .join(Item, Item.id == PurchaseOrderLine.item_id)
+        .where(PurchaseOrderLine.po_id == po_id)
+        .order_by(PurchaseOrderLine.sequence)
+    )
+    if for_update:
+        query = query.with_for_update(of=PurchaseOrderLine)
+    result = await db.execute(query)
+    return result.all()
 
 
 async def _po_to_response(
@@ -184,12 +204,7 @@ async def get_purchase_order(
     po = await get_or_404(db, PurchaseOrder, current.org_id, po_id, "Purchase order not found")
     supplier = await get_or_404(db, Supplier, current.org_id, po.supplier_id, "Supplier not found")
 
-    lines_result = await db.execute(
-        select(PurchaseOrderLine, Item)
-        .join(Item, Item.id == PurchaseOrderLine.item_id)
-        .where(PurchaseOrderLine.po_id == po.id)
-        .order_by(PurchaseOrderLine.sequence)
-    )
+    lines_result = await _fetch_po_lines_with_items(db, po.id)
     lines = [
         PurchaseOrderLineResponse(
             id=str(line.id),
@@ -202,7 +217,7 @@ async def get_purchase_order(
             unit_price=line.unit_price,
             sequence=line.sequence,
         )
-        for line, item in lines_result.all()
+        for line, item in lines_result
     ]
 
     base = await _po_to_response(db, po, supplier)
@@ -261,6 +276,31 @@ async def update_purchase_order_lines(
     return await get_purchase_order(po_id, current, db)
 
 
+async def _send_po_email(
+    po: PurchaseOrder, supplier: Supplier, lines: list[tuple[PurchaseOrderLine, Item]]
+) -> None:
+    # No `db` argument on purpose: this runs fire-and-forget, after the
+    # request's session may already be closed, so it must work from data
+    # already loaded onto these objects rather than issuing new queries.
+    if not supplier.email or not supplier.email.strip():
+        return
+    line_text = "\n".join(
+        f"- {item.sku} {item.name}: {line.quantity_ordered} @ {line.unit_price}"
+        for line, item in lines
+    )
+    body = (
+        f"Purchase order #{po.po_number} for {supplier.name}\n\n"
+        f"{line_text}\n\n"
+        f"Expected delivery: {po.expected_delivery_date or 'TBD'}"
+    )
+    try:
+        await send_email(supplier.email, f"Purchase Order #{po.po_number}", body)
+    except Exception:
+        # A failed send shouldn't roll back or fail the submit - the PO is
+        # already committed as submitted; this is a best-effort notification.
+        logger.exception("Failed to send PO email for po_id=%s", po.id)
+
+
 @router.post("/{po_id}/submit", response_model=PurchaseOrderResponse)
 async def submit_purchase_order(
     po_id: uuid.UUID,
@@ -273,11 +313,11 @@ async def submit_purchase_order(
     if po.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only draft purchase orders can be submitted")
 
-    has_lines = await db.scalar(
-        select(func.count()).select_from(PurchaseOrderLine).where(PurchaseOrderLine.po_id == po.id)
-    )
-    if not has_lines:
+    lines = await _fetch_po_lines_with_items(db, po.id)
+    if not lines:
         raise HTTPException(status.HTTP_409_CONFLICT, "Can't submit a purchase order with no lines")
+
+    supplier = await get_or_404(db, Supplier, current.org_id, po.supplier_id, "Supplier not found")
 
     po.status = "submitted"
     await db.flush()
@@ -291,7 +331,14 @@ async def submit_purchase_order(
         metadata={"po_number": po.po_number},
     )
     await db.commit()
-    return await _po_to_response(db, po)
+
+    # Best-effort notification - fire-and-forget so a slow/unavailable SES
+    # endpoint doesn't add latency to the submit response (see app/core/
+    # background.py). Uses only already-loaded attributes on po/supplier/
+    # lines, since the request's db session may close before this runs.
+    fire_and_forget(_send_po_email(po, supplier, lines))
+
+    return await _po_to_response(db, po, supplier)
 
 
 @router.post("/{po_id}/receive", response_model=PurchaseOrderDetailResponse)
@@ -311,15 +358,10 @@ async def receive_purchase_order(
     if not receipts_in:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide at least one line to receive")
 
-    all_lines_result = await db.execute(
-        select(PurchaseOrderLine, Item)
-        .join(Item, Item.id == PurchaseOrderLine.item_id)
-        .where(PurchaseOrderLine.po_id == po.id)
-        .with_for_update(of=PurchaseOrderLine)
-    )
+    all_lines_result = await _fetch_po_lines_with_items(db, po.id, for_update=True)
     lines_by_id: dict[uuid.UUID, PurchaseOrderLine] = {}
     items_by_line_id: dict[uuid.UUID, Item] = {}
-    for line, item in all_lines_result.all():
+    for line, item in all_lines_result:
         lines_by_id[line.id] = line
         items_by_line_id[line.id] = item
 

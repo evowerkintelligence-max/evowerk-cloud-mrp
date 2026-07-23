@@ -41,6 +41,34 @@ on the web app. The mobile app is a pure consumer of whatever
 `KpiDashboard`s (`tier="supervisor"`) an org has already built - no new
 backend compute path needed for the dashboard screen.
 
+## Connecting to a deployment
+
+Evowerk never hosts customer data - `infra/terraform/aws` and
+`infra/terraform/azure` both deploy a fully self-contained,
+customer-owned stack (own VPC/VNet, own Postgres, own domain), and the
+backend is deliberately never internet-facing on its own - only the
+frontend has a public HTTPS endpoint, and its nginx
+(`frontend/nginx.conf.template`) reverse-proxies API calls to the backend
+internally. The web app gets this for free: `frontend/src/api/client.ts`
+calls relative paths (`/auth/login`, etc.), so whatever origin served the
+page is also where the API lives.
+
+A native app has no such origin to inherit. Mobile therefore needs:
+
+- A one-time **Server URL** screen before login - the user enters their
+  org's deployment URL (custom domain, or the raw ALB/Container Apps
+  hostname from that Terraform module's `app_url` output), stored in
+  `expo-secure-store` alongside the tokens.
+- Every API call in the mobile app is `${serverUrl}${path}` instead of a
+  relative path - the only structural difference from the web app's
+  `client.ts`. No backend or nginx changes needed - the same reverse proxy
+  that serves the browser today already answers every path the app calls.
+
+This is the standard pattern for self-hosted-product mobile apps (Mattermost,
+Nextcloud, self-hosted GitLab) and keeps the "we never touch your data"
+posture intact - the phone talks directly to the customer's own server, same
+as a browser would.
+
 ## Data model
 
 ### New `DeviceToken`
@@ -81,10 +109,19 @@ per-rule subscriber list in v1).
   `DeviceToken` rows for `org_id`, POSTs to Expo's push API
   (`https://exp.host/--/api/v2/push/send`) in one batched call (Expo's API
   accepts a list of messages per request - one HTTP call per scan, not one
-  per token), body `{title: rule.name, body: trigger.message}` for each
-  `triggered=True` result only (webhook fires every scan regardless of
-  state per its own docstring; push should not - nobody wants a push every
-  5 minutes confirming nothing is wrong).
+  per token), for each `triggered=True` result only (webhook fires every
+  scan regardless of state per its own docstring; push should not - nobody
+  wants a push every 5 minutes confirming nothing is wrong).
+  **Data-minimal by design**: push delivery (Expo, wrapping Apple's/
+  Google's own relays) is unavoidable third-party infrastructure - no push
+  notification reaches a phone without transiting one - but consistent with
+  never hosting customer data, the push payload carries no business content:
+  `{title: "Evowerk Alert", body: "A rule triggered - open the app for
+  details.", data: {rule_id}}`. The real `trigger.message`/value/offenders
+  are fetched by the app directly from the customer's own server
+  (`GET /alerts/rules` + `POST /alerts/scan/{rule_id}`) only after the user
+  taps the notification - the actual alert content never leaves the
+  customer's infrastructure.
   `ponytail: no delivery retry/dedup - same accepted-risk shape as
   _fire_webhook; add if proven insufficient.`
 - Needs an `httpx` POST with a short timeout, same pattern as
@@ -92,6 +129,10 @@ per-rule subscriber list in v1).
 
 ## Mobile app (new `mobile/` directory, Expo/React Native + TypeScript)
 
+- **Server URL screen** (first launch only): user enters their deployment
+  URL, stored in `expo-secure-store`; all subsequent API calls in the app
+  use it as the base URL (see "Connecting to a deployment" above). A
+  "Change server" option in settings clears it and any stored tokens.
 - **Login screen**: email/password -> `POST /auth/login`
   (`backend/app/api/routes/auth.py`), store `access_token`/`refresh_token`
   in `expo-secure-store`. MFA (`mfa_required`) prompts a second TOTP code
@@ -111,8 +152,10 @@ per-rule subscriber list in v1).
 - **Alerts screen**: `GET /alerts/rules` + `POST /alerts/scan`
   (`backend/app/api/routes/alerts.py`) on the same pull-to-refresh/poll,
   list of rules with triggered/ok state and `message`.
-- **Push tap handling**: tapping a push notification deep-links to the
-  Alerts screen.
+- **Push tap handling**: tapping a push notification (which carries only
+  `{rule_id}`, no message content - see push section above) deep-links to
+  the Alerts screen, which fetches that rule's live state directly from
+  the customer's server.
 
 ## Testing
 

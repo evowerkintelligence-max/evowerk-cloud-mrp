@@ -1,6 +1,7 @@
 import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuthHydrated, useAuthStore } from "./store/authStore";
+import { useStaffAuthHydrated, useStaffAuthStore } from "@/store/staffAuthStore";
 import { useCurrentUser } from "@/lib/currentUser";
 import { EmptyState } from "@/components/EmptyState";
 import { AppShell } from "./components/AppShell";
@@ -64,7 +65,7 @@ const Predictive = lazyPage(() => import("./pages/Predictive"), "Predictive");
 const MfgForecast = lazyPage(() => import("./pages/MfgForecast"), "MfgForecast");
 const ComputerVision = lazyPage(() => import("./pages/ComputerVision"), "ComputerVision");
 const Alerts = lazyPage(() => import("./pages/Alerts"), "Alerts");
-const Customers = lazyPage(() => import("./pages/admin/Customers"), "Customers");
+const StaffPortal = lazyPage(() => import("./pages/staff/StaffPortal"), "StaffPortal");
 
 function PageFallback() {
   return (
@@ -118,10 +119,11 @@ function RequireFeature({ feature, children }: { feature: string; children: JSX.
   return children;
 }
 
-export function RequireStaff({ children }: { children: JSX.Element }) {
-  const org = useCurrentUser();
-  if (org.isLoading) return null;
-  if (!org.data?.is_staff) return <Navigate to="/" replace />;
+function RequireStaffSession({ children }: { children: JSX.Element }) {
+  const accessToken = useStaffAuthStore((s) => s.accessToken);
+  const hydrated = useStaffAuthHydrated();
+  if (!hydrated) return null;
+  if (!accessToken) return <Navigate to="/login" replace />;
   return children;
 }
 
@@ -132,6 +134,7 @@ export function App() {
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/staff" element={<RequireStaffSession><StaffPortal /></RequireStaffSession>} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
@@ -195,7 +198,6 @@ export function App() {
             <Route path="/mfg-forecast" element={<RequireFeature feature="mfg_forecast"><MfgForecast /></RequireFeature>} />
             <Route path="/computer-vision" element={<RequireFeature feature="computer_vision"><ComputerVision /></RequireFeature>} />
             <Route path="/alerts" element={<Alerts />} />
-            <Route path="/admin/customers" element={<RequireStaff><Customers /></RequireStaff>} />
           </Route>
         </Routes>
       </Suspense>

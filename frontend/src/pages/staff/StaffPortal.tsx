@@ -1,12 +1,16 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/api/client";
-import { PageHeader } from "@/components/PageHeader";
+import { LogOut } from "lucide-react";
+import { staffApiFetch } from "@/api/staffClient";
+import { useStaffAuthStore } from "@/store/staffAuthStore";
+import { BrandMark } from "@/components/BrandMark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field } from "@/components/Field";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { CORE_FEATURES, FEATURES, PREMIUM_FEATURES } from "@/lib/features";
 
@@ -17,7 +21,7 @@ interface Customer {
   enabled_features: string[];
 }
 
-function FeatureCheckboxes({
+function FeatureToggles({
   selected,
   onChange,
 }: {
@@ -41,10 +45,10 @@ function FeatureCheckboxes({
           Core + Premium
         </Button>
       </div>
-      <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {Object.entries(FEATURES).map(([key, def]) => (
           <label key={key} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} />
+            <Switch checked={selected.has(key)} onCheckedChange={() => toggle(key)} />
             {def.label}
           </label>
         ))}
@@ -60,7 +64,7 @@ function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      const res = await apiFetch("/admin/customers", {
+      const res = await staffApiFetch("/admin/customers", {
         method: "POST",
         body: JSON.stringify({ org_name: orgName, owner_email: ownerEmail, enabled_features: Array.from(features) }),
       });
@@ -87,7 +91,7 @@ function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
         <Field label="Owner email">
           <Input type="email" value={ownerEmail} onChange={(e) => setOwnerEmail(e.target.value)} />
         </Field>
-        <FeatureCheckboxes selected={features} onChange={setFeatures} />
+        <FeatureToggles selected={features} onChange={setFeatures} />
         <Button
           disabled={!orgName || !ownerEmail}
           loading={create.isPending}
@@ -106,7 +110,7 @@ function EditCustomerRow({ customer, onSaved }: { customer: Customer; onSaved: (
 
   const update = useMutation({
     mutationFn: async () => {
-      const res = await apiFetch(`/admin/customers/${customer.org_id}`, {
+      const res = await staffApiFetch(`/admin/customers/${customer.org_id}`, {
         method: "PATCH",
         body: JSON.stringify({ enabled_features: Array.from(features) }),
       });
@@ -149,7 +153,7 @@ function EditCustomerRow({ customer, onSaved }: { customer: Customer; onSaved: (
       <TD colSpan={4}>
         <div className="space-y-3 py-2">
           <div className="font-medium">{customer.org_name}</div>
-          <FeatureCheckboxes selected={features} onChange={setFeatures} />
+          <FeatureToggles selected={features} onChange={setFeatures} />
           <div className="flex gap-2">
             <Button size="sm" loading={update.isPending} onClick={() => update.mutate()}>
               Save
@@ -164,12 +168,14 @@ function EditCustomerRow({ customer, onSaved }: { customer: Customer; onSaved: (
   );
 }
 
-export function Customers() {
+export function StaffPortal() {
+  const navigate = useNavigate();
+  const clearStaffAuth = useStaffAuthStore((s) => s.clear);
   const qc = useQueryClient();
   const customers = useQuery<Customer[]>({
     queryKey: ["admin-customers"],
     queryFn: async () => {
-      const res = await apiFetch("/admin/customers");
+      const res = await staffApiFetch("/admin/customers");
       if (!res.ok) throw new Error("Failed to load customers");
       return res.json();
     },
@@ -179,34 +185,50 @@ export function Customers() {
     qc.invalidateQueries({ queryKey: ["admin-customers"] });
   }
 
+  function logout() {
+    clearStaffAuth();
+    navigate("/login");
+  }
+
   return (
-    <div className="space-y-6">
-      <PageHeader title="Customers" description="Onboard new customers and manage existing customers' feature access." />
-      <NewCustomerForm onCreated={refresh} />
-      <Card>
-        <CardHeader>
-          <CardTitle>Existing customers</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <TableWrap>
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Organization</TH>
-                  <TH>Owner</TH>
-                  <TH>Features</TH>
-                  <TH />
-                </TR>
-              </THead>
-              <TBody>
-                {customers.data?.map((c) => (
-                  <EditCustomerRow key={c.org_id} customer={c} onSaved={refresh} />
-                ))}
-              </TBody>
-            </Table>
-          </TableWrap>
-        </CardContent>
-      </Card>
+    <div className="min-h-screen">
+      <header className="flex h-14 items-center justify-between border-b border-border/70 px-5">
+        <BrandMark className="size-8 text-foreground" title="Evowerk" />
+        <Button variant="ghost" size="icon" onClick={logout} aria-label="Log out" title="Log out">
+          <LogOut />
+        </Button>
+      </header>
+      <main className="mx-auto w-full max-w-4xl space-y-6 px-6 py-8">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">Customers</h1>
+          <p className="text-sm text-muted-foreground">Onboard new customers and manage existing customers' feature access.</p>
+        </div>
+        <NewCustomerForm onCreated={refresh} />
+        <Card>
+          <CardHeader>
+            <CardTitle>Existing customers</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Organization</TH>
+                    <TH>Owner</TH>
+                    <TH>Features</TH>
+                    <TH />
+                  </TR>
+                </THead>
+                <TBody>
+                  {customers.data?.map((c) => (
+                    <EditCustomerRow key={c.org_id} customer={c} onSaved={refresh} />
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </CardContent>
+        </Card>
+      </main>
     </div>
   );
 }

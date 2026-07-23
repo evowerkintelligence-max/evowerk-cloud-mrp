@@ -7,7 +7,6 @@ export interface CurrentUser {
   role: string;
   user_id: string;
   enabled_features: string[];
-  is_staff: boolean;
 }
 
 /** GET /orgs/me - single source of truth for the current user/org, shared via

@@ -44,8 +44,6 @@ export interface NavItem {
   keywords?: string[];
   /** Gates this item to orgs with this key in their enabled_features - see frontend/src/lib/features.ts. Absent = always visible (System pages, Datasets, SQL Editor, BI Dashboards). */
   featureKey?: string;
-  /** Gates this item to is_staff users, independent of featureKey. */
-  requiresStaff?: boolean;
 }
 
 export interface NavSection {
@@ -116,12 +114,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/alerts", label: "Alerts", icon: Bell, keywords: ["notifications"] },
     ],
   },
-  {
-    label: "Staff",
-    items: [
-      { to: "/admin/customers", label: "Customers", icon: Users, keywords: ["onboard", "admin", "plan", "features"], requiresStaff: true },
-    ],
-  },
 ];
 
 export const ALL_NAV_ITEMS = NAV_SECTIONS.flatMap((s) =>
@@ -131,10 +123,9 @@ export const ALL_NAV_ITEMS = NAV_SECTIONS.flatMap((s) =>
 /** Single filter every nav surface (sidebar, mobile topbar, command palette)
  * runs through, so entitlement/staff gating can't drift between them. */
 export function isNavItemVisible(
-  item: Pick<NavItem, "featureKey" | "requiresStaff">,
-  { enabledFeatures, isStaff }: { enabledFeatures: Set<string>; isStaff: boolean },
+  item: Pick<NavItem, "featureKey">,
+  { enabledFeatures }: { enabledFeatures: Set<string> },
 ): boolean {
-  if (item.requiresStaff && !isStaff) return false;
   if (item.featureKey && !enabledFeatures.has(item.featureKey)) return false;
   return true;
 }

@@ -108,8 +108,7 @@ export function AppShell() {
 
   const match = findNavMatch(location.pathname);
   const enabledFeatures = new Set(org.data?.enabled_features ?? []);
-  const isStaff = org.data?.is_staff ?? false;
-  const navGate = { enabledFeatures, isStaff };
+  const navGate = { enabledFeatures };
   const visibleSections = NAV_SECTIONS
     .map((section) => ({
       ...section,

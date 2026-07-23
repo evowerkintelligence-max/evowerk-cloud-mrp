@@ -5,7 +5,9 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from app.core.security import hash_password
 from app.db import session as db_session
+from app.models.staff import StaffAccount
 from app.models.tenant import Org
 from app.models.user import User
 
@@ -22,30 +24,38 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"], reg.json()["user_id"]
 
 
-async def _register_login_and_make_staff(client, email="staff@evowerk.example", org_name="EvoWerk Staff"):
-    token, user_id = await _register_and_login(client, email=email, org_name=org_name)
+async def _make_staff_token(client, employee_id="staff1", password="correct-horse-battery-staple1"):
     async with db_session.async_session_factory() as db:
-        user = (await db.execute(select(User).where(User.id == uuid.UUID(user_id)))).scalar_one()
-        user.is_staff = True
+        db.add(StaffAccount(employee_id=employee_id, hashed_password=hash_password(password)))
         await db.commit()
-    return token
+    login = await client.post("/staff/auth/login", json={"employee_id": employee_id, "password": password})
+    assert login.status_code == 200, login.text
+    return login.json()["access_token"]
 
 
 def _h(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_non_staff_cannot_create_customer(client):
-    token, _user_id = await _register_and_login(client)
+async def test_no_token_cannot_create_customer(client):
     res = await client.post(
-        "/admin/customers", headers=_h(token),
+        "/admin/customers",
         json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
     )
-    assert res.status_code == 403
+    assert res.status_code == 401
+
+
+async def test_customer_token_cannot_create_customer(client):
+    customer_token, _user_id = await _register_and_login(client)
+    res = await client.post(
+        "/admin/customers", headers=_h(customer_token),
+        json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
+    )
+    assert res.status_code == 401
 
 
 async def test_staff_creates_customer_with_features(client):
-    staff_token = await _register_login_and_make_staff(client)
+    staff_token = await _make_staff_token(client)
 
     res = await client.post(
         "/admin/customers", headers=_h(staff_token),
@@ -66,7 +76,7 @@ async def test_staff_creates_customer_with_features(client):
 
 
 async def test_staff_lists_and_edits_customer_features(client):
-    staff_token = await _register_login_and_make_staff(client)
+    staff_token = await _make_staff_token(client)
     create = await client.post(
         "/admin/customers", headers=_h(staff_token),
         json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
@@ -90,7 +100,7 @@ async def test_staff_lists_and_edits_customer_features(client):
 
 
 async def test_create_customer_rejects_unknown_feature_key(client):
-    staff_token = await _register_login_and_make_staff(client)
+    staff_token = await _make_staff_token(client)
     res = await client.post(
         "/admin/customers", headers=_h(staff_token),
         json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["not_a_real_feature"]},
@@ -99,7 +109,7 @@ async def test_create_customer_rejects_unknown_feature_key(client):
 
 
 async def test_update_customer_features_rejects_unknown_feature_key(client):
-    staff_token = await _register_login_and_make_staff(client)
+    staff_token = await _make_staff_token(client)
     create = await client.post(
         "/admin/customers", headers=_h(staff_token),
         json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
@@ -114,7 +124,7 @@ async def test_update_customer_features_rejects_unknown_feature_key(client):
 
 
 async def test_create_customer_duplicate_owner_email_409s(client):
-    staff_token = await _register_login_and_make_staff(client)
+    staff_token = await _make_staff_token(client)
     first = await client.post(
         "/admin/customers", headers=_h(staff_token),
         json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
@@ -129,7 +139,7 @@ async def test_create_customer_duplicate_owner_email_409s(client):
 
 
 async def test_patch_unknown_customer_404s(client):
-    staff_token = await _register_login_and_make_staff(client)
+    staff_token = await _make_staff_token(client)
     res = await client.patch(
         "/admin/customers/00000000-0000-0000-0000-000000000000", headers=_h(staff_token),
         json={"enabled_features": ["oee"]},

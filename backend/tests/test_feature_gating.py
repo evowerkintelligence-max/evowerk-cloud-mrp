@@ -75,7 +75,7 @@ async def test_purchase_orders_route_403s_without_procurement_entitlement(client
     assert res.status_code == 200, res.text
 
 
-async def test_orgs_me_exposes_enabled_features_and_is_staff(client):
+async def test_orgs_me_exposes_enabled_features(client):
     token, org_id = await _register_and_login(client)
 
     async with db_session.async_session_factory() as db:
@@ -87,4 +87,3 @@ async def test_orgs_me_exposes_enabled_features_and_is_staff(client):
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["enabled_features"] == ["boms", "oee"]
-    assert body["is_staff"] is False

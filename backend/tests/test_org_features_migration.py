@@ -7,7 +7,6 @@ from sqlalchemy import select
 
 from app.db import session as db_session
 from app.models.tenant import Org
-from app.models.user import User
 
 pytestmark = pytest.mark.asyncio
 
@@ -22,12 +21,10 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"], reg.json()["org_id"], reg.json()["user_id"]
 
 
-async def test_new_org_and_user_default_to_no_entitlements(client):
-    _token, org_id, user_id = await _register_and_login(client)
+async def test_new_org_defaults_to_no_entitlements(client):
+    _token, org_id, _user_id = await _register_and_login(client)
 
     async with db_session.async_session_factory() as db:
         org = (await db.execute(select(Org).where(Org.id == uuid.UUID(org_id)))).scalar_one()
-        user = (await db.execute(select(User).where(User.id == uuid.UUID(user_id)))).scalar_one()
 
     assert org.enabled_features == []
-    assert user.is_staff is False

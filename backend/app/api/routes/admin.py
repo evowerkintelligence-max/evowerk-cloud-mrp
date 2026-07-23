@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, require_staff
+from app.api.deps import StaffSession, require_staff_session
 from app.core.features import FEATURES
 from app.core.users import UserCreate, UserManager, get_user_manager
 from app.db.session import get_db
@@ -17,7 +17,7 @@ from app.middleware.audit import log_event
 from app.models.tenant import Org
 from app.models.user import User
 
-router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_staff)])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_staff_session)])
 
 
 def _validate_feature_keys(v: list[str]) -> list[str]:
@@ -54,7 +54,7 @@ async def create_customer(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_manager: UserManager = Depends(get_user_manager),
-    current: CurrentUser = Depends(require_staff),
+    current: StaffSession = Depends(require_staff_session),
 ):
     # Same Org+Location+owner-role creation transaction /auth/register uses
     # (UserManager.create, backend/app/core/users.py) - just with a throwaway
@@ -101,7 +101,7 @@ async def create_customer(
 @router.get("/customers", response_model=list[CustomerResponse])
 async def list_customers(
     db: AsyncSession = Depends(get_db),
-    _current: CurrentUser = Depends(require_staff),
+    _current: StaffSession = Depends(require_staff_session),
 ):
     rows = (
         await db.execute(
@@ -124,7 +124,7 @@ async def update_customer_features(
     org_id: uuid.UUID,
     body: CustomerFeaturesUpdate,
     db: AsyncSession = Depends(get_db),
-    current: CurrentUser = Depends(require_staff),
+    current: StaffSession = Depends(require_staff_session),
 ):
     # Not app.api.deps.get_or_404: that helper filters on model.org_id, which
     # Org itself doesn't have (Org is the tenant root, not a child row) - this

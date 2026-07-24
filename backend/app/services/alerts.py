@@ -651,12 +651,20 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
 
     # scan_all only - not scan_one, which backs the rule editor's interactive
     # "Test" button and would otherwise spam an external relay on every keystroke.
+    # Push fires only on the off->on transition (rule.last_triggered tracks each
+    # rule's state across scans) - unlike the webhook, which mirrors live state
+    # every scan per _fire_webhook's own docstring, a push must not repeat every
+    # poll interval while a rule stays triggered (that turned a mobile client
+    # polling this endpoint every 60s into a notification-spam loop).
     for trigger in results:
         rule = rule_by_id.get(trigger.rule_id)
         if rule is not None:
             await _fire_webhook(rule, trigger)
-        if trigger.triggered:
-            await _send_push(db, org_id, trigger)
+            if trigger.triggered and not rule.last_triggered:
+                await _send_push(db, org_id, trigger)
+            if rule.last_triggered != trigger.triggered:
+                rule.last_triggered = trigger.triggered
+    await db.commit()
 
     return results
 

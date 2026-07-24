@@ -144,6 +144,74 @@ async def test_scan_one_does_not_send_push(client, push_server):
     assert len(handler.received) == 0
 
 
+async def test_scan_all_does_not_repush_while_rule_stays_triggered(client, push_server):
+    """The bug this fixes: a sustained breach must push once on the off->on
+    transition, not on every subsequent scan while it's still triggered -
+    otherwise a client polling /alerts/scan every 60s (see the mobile app's
+    AlertsScreen) turns into a repeat-notification spam loop."""
+    _, handler = push_server
+
+    token = await _register_and_login(client)
+    await client.post(
+        "/device-tokens", json={"expo_push_token": "ExponentPushToken[abc]"}, headers=_h(token)
+    )
+    dataset_id = await _upload(client, token, PT_CSV_MISS)
+    await _create_production_target_rule(client, token, dataset_id)
+
+    first_scan = await client.post("/alerts/scan", headers=_h(token))
+    assert first_scan.status_code == 200, first_scan.text
+    assert first_scan.json()["triggered_count"] == 1
+    assert len(handler.received) == 1
+
+    second_scan = await client.post("/alerts/scan", headers=_h(token))
+    assert second_scan.status_code == 200, second_scan.text
+    assert second_scan.json()["triggered_count"] == 1  # still triggered...
+    assert len(handler.received) == 1  # ...but no second push
+
+
+async def test_scan_all_repushes_after_resolve_and_retrigger(client, push_server):
+    """The flag must not be a one-way latch: once a rule resolves (goes
+    on->off) its last_triggered resets, so a later re-trigger pushes again
+    instead of staying silent forever after the first breach."""
+    _, handler = push_server
+
+    token = await _register_and_login(client)
+    await client.post(
+        "/device-tokens", json={"expo_push_token": "ExponentPushToken[abc]"}, headers=_h(token)
+    )
+    miss_dataset_id = await _upload(client, token, PT_CSV_MISS)
+    rule_id = await _create_production_target_rule(client, token, miss_dataset_id)
+
+    first_scan = await client.post("/alerts/scan", headers=_h(token))
+    assert first_scan.status_code == 200, first_scan.text
+    assert first_scan.json()["triggered_count"] == 1
+    assert len(handler.received) == 1  # off->on: pushes
+
+    # Resolve: repoint the rule at a dataset that meets target.
+    meet_dataset_id = await _upload(client, token, PT_CSV_MEET)
+    update = await client.put(
+        f"/alerts/rules/{rule_id}", json={"dataset_id": meet_dataset_id}, headers=_h(token)
+    )
+    assert update.status_code == 200, update.text
+
+    resolved_scan = await client.post("/alerts/scan", headers=_h(token))
+    assert resolved_scan.status_code == 200, resolved_scan.text
+    assert resolved_scan.json()["triggered_count"] == 0
+    assert len(handler.received) == 1  # on->off: no push
+
+    # Re-trigger: a fresh rule against a fresh missing-target dataset (avoids
+    # mutating dataset_id back on the existing rule just to flip it again).
+    miss_dataset_id_2 = await _upload(client, token, PT_CSV_MISS)
+    rule_id_2 = await _create_production_target_rule(client, token, miss_dataset_id_2)
+
+    retrigger_scan = await client.post("/alerts/scan", headers=_h(token))
+    assert retrigger_scan.status_code == 200, retrigger_scan.text
+    assert retrigger_scan.json()["triggered_count"] == 1
+
+    assert len(handler.received) == 2  # off->on again: pushes
+    assert handler.received[1][0]["data"]["rule_id"] == rule_id_2
+
+
 async def test_scan_all_push_batch_excludes_other_orgs_tokens(client, push_server):
     """Verify org isolation: org A's alerts include only org A's tokens, never org B's."""
     _, handler = push_server

@@ -34,6 +34,13 @@ class AlertRule(Base):
     # critical | warning | info
     severity: Mapped[str] = mapped_column(String(16), nullable=False, default="warning")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Tracks whether this rule was triggered on its most recent scan_all pass -
+    # used only to detect the off->on transition for push notifications
+    # (app/services/alerts.py _send_push), so a sustained breach pushes once,
+    # not on every poll interval. The webhook path (_fire_webhook) does NOT
+    # use this - it deliberately mirrors live state every scan, see its own
+    # docstring.
+    last_triggered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

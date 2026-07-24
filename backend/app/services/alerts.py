@@ -22,10 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analytics.oee_calc import val_expr
 from app.models.alert import AlertRule
 from app.models.dataset import Dataset
+from app.models.device_token import DeviceToken
 from app.services import datasets as ds_service
 
 _MAX_OFFENDERS_SHOWN = 5
 _WEBHOOK_TIMEOUT = 5.0
+_EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+_PUSH_TIMEOUT = 5.0
 
 logger = logging.getLogger(__name__)
 
@@ -519,6 +522,37 @@ async def _fire_webhook(rule: AlertRule, trigger: AlertTrigger) -> None:
         logger.warning("Alert webhook failed for rule %s (%s): %s", rule.id, url, exc)
 
 
+async def _send_push(db: AsyncSession, org_id: uuid.UUID, trigger: AlertTrigger) -> None:
+    """Data-minimal push to every device registered for this org: title/body
+    carry no business content, only trigger.rule_id - the app fetches the
+    real message directly from this server after the user taps, so alert
+    content never transits Apple/Google/Expo's relay (see the mobile design
+    spec's "Connecting to a deployment" / data-minimal push sections - never
+    hosting customer data extends to never routing it through a push relay).
+    One batched HTTP call per scan (Expo's API accepts a list of messages),
+    not one call per registered device.
+    ponytail: no retry/backoff/queue - same accepted-risk shape as
+    _fire_webhook; add if proven insufficient."""
+    tokens = (
+        await db.execute(select(DeviceToken.expo_push_token).where(DeviceToken.org_id == org_id))
+    ).scalars().all()
+    if not tokens:
+        return
+    messages = [
+        {
+            "to": expo_token, "title": "Evowerk Alert",
+            "body": "A rule triggered - open the app for details.",
+            "data": {"rule_id": trigger.rule_id},
+        }
+        for expo_token in tokens
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_PUSH_TIMEOUT) as client:
+            await client.post(_EXPO_PUSH_URL, json=messages)
+    except httpx.HTTPError as exc:
+        logger.warning("Push notification failed for org %s: %s", org_id, exc)
+
+
 _DATASET_EVALUATORS = {
     "machine_downtime": _eval_machine_downtime,
     "quality": _eval_quality,
@@ -621,6 +655,8 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
         rule = rule_by_id.get(trigger.rule_id)
         if rule is not None:
             await _fire_webhook(rule, trigger)
+        if trigger.triggered:
+            await _send_push(db, org_id, trigger)
 
     return results
 

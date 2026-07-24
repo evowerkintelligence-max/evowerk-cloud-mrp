@@ -142,3 +142,29 @@ async def test_scan_one_does_not_send_push(client, push_server):
     assert res.status_code == 200, res.text
     assert res.json()["triggered"] is True
     assert len(handler.received) == 0
+
+
+async def test_scan_all_push_batch_excludes_other_orgs_tokens(client, push_server):
+    """Verify org isolation: org A's alerts include only org A's tokens, never org B's."""
+    _, handler = push_server
+
+    token_a = await _register_and_login(client, email="owner-a@example.com", org_name="Acme A")
+    token_b = await _register_and_login(client, email="owner-b@example.com", org_name="Acme B")
+
+    await client.post(
+        "/device-tokens", json={"expo_push_token": "ExponentPushToken[org-a-device]"}, headers=_h(token_a)
+    )
+    await client.post(
+        "/device-tokens", json={"expo_push_token": "ExponentPushToken[org-b-device]"}, headers=_h(token_b)
+    )
+
+    dataset_id = await _upload(client, token_a, PT_CSV_MISS)
+    await _create_production_target_rule(client, token_a, dataset_id)
+
+    scan = await client.post("/alerts/scan", headers=_h(token_a))
+    assert scan.status_code == 200, scan.text
+    assert scan.json()["triggered_count"] == 1
+
+    assert len(handler.received) == 1
+    tokens_notified = {msg["to"] for msg in handler.received[0]}
+    assert tokens_notified == {"ExponentPushToken[org-a-device]"}

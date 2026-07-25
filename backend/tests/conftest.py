@@ -16,13 +16,16 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="evowerk-test-data-"))
 import asyncio
 
 import fakeredis.aioredis as fakeredis
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core import background as background_module
 from app.core import redis_client
+from app.core.features import PREMIUM_FEATURES
 from app.db import session as db_session_module
 from app.db.base import Base
 from app.main import app
@@ -55,12 +58,14 @@ from app.models import (  # noqa: F401 - register models
     shift_forecast,
     shift_schedule,
     simulation,
+    staff,
     telemetry,
     tenant,
     user,
     work_center,
     workflow,
 )
+from app.models.tenant import Org
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -117,3 +122,32 @@ async def client(test_engine, monkeypatch):
 
     app.dependency_overrides.clear()
     await fake_redis.aclose()
+
+
+# Modules that test the entitlement-default behavior itself and must see a
+# freshly-registered org's real (empty) default, not the blanket grant below.
+_ENTITLEMENT_DEFAULT_TEST_MODULES = {"test_feature_gating", "test_org_features_migration"}
+
+
+@pytest.fixture(autouse=True)
+def _default_full_entitlements(request):
+    # ponytail: pre-existing tests (60+ files) predate per-org feature gating
+    # and assume a fresh org can hit every router. Rather than hand-editing
+    # every test file's local _register_and_login helper, grant every org
+    # created during a test PREMIUM_FEATURES by default, here in the one
+    # shared fixture module. Upgrade path: if a test needs to exercise a
+    # specific entitlement gap, have it override org.enabled_features
+    # directly (as test_feature_gating.py already does).
+    if request.module.__name__.rsplit(".", 1)[-1] in _ENTITLEMENT_DEFAULT_TEST_MODULES:
+        yield
+        return
+
+    def _grant(mapper, connection, target):
+        if not target.enabled_features:
+            target.enabled_features = list(PREMIUM_FEATURES)
+
+    event.listen(Org, "before_insert", _grant)
+    try:
+        yield
+    finally:
+        event.remove(Org, "before_insert", _grant)

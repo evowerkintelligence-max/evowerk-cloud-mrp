@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.deps import require_feature
 from app.api.routes import (
     ai_insights,
+    admin,
     alerts,
     automl,
     auth,
@@ -47,6 +49,7 @@ from app.api.routes import (
     shifts,
     simulation,
     spc,
+    staff_auth,
     suppliers,
     throughput,
     work_centers,
@@ -98,55 +101,57 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(staff_auth.router)
 if settings.google_oauth_client_id or settings.microsoft_oauth_client_id:
     app.include_router(oauth.router)
 app.include_router(orgs.router)
+app.include_router(admin.router)
 app.include_router(items.router)
-app.include_router(boms.router)
+app.include_router(boms.router, dependencies=[Depends(require_feature("boms"))])
 app.include_router(suppliers.router)
-app.include_router(purchase_orders.router)
-app.include_router(lots.router)
+app.include_router(purchase_orders.router, dependencies=[Depends(require_feature("procurement"))])
+app.include_router(lots.router, dependencies=[Depends(require_feature("lots"))])
 app.include_router(locations.router)
 app.include_router(machines.router)
 # Must be registered before inventory.router: /inventory/analytics is a
 # static path that would otherwise be shadowed by inventory.router's
 # /inventory/{item_id} (Starlette matches path shape before UUID validation).
-app.include_router(inventory_analytics.router)
-app.include_router(inventory.router)
-app.include_router(forecasts.router)
-app.include_router(forecasts.mrp_router)
+app.include_router(inventory_analytics.router, dependencies=[Depends(require_feature("warehouse"))])
+app.include_router(inventory.router, dependencies=[Depends(require_feature("warehouse"))])
+app.include_router(forecasts.router, dependencies=[Depends(require_feature("planning"))])
+app.include_router(forecasts.mrp_router, dependencies=[Depends(require_feature("planning"))])
 app.include_router(datasets.router)
-app.include_router(oee.router)
-app.include_router(pace_tracking.router)
-app.include_router(plant_summary.router)
-app.include_router(downtime.router)
-app.include_router(downtime_tracking.router)
-app.include_router(throughput.router)
-app.include_router(scrap.router)
-app.include_router(shifts.router)
-app.include_router(simulation.router)
-app.include_router(spc.router)
+app.include_router(oee.router, dependencies=[Depends(require_feature("oee"))])
+app.include_router(pace_tracking.router, dependencies=[Depends(require_feature("pace_tracking"))])
+app.include_router(plant_summary.router, dependencies=[Depends(require_feature("plant_summary"))])
+app.include_router(downtime.router, dependencies=[Depends(require_feature("downtime"))])
+app.include_router(downtime_tracking.router, dependencies=[Depends(require_feature("downtime_tracking"))])
+app.include_router(throughput.router, dependencies=[Depends(require_feature("throughput"))])
+app.include_router(scrap.router, dependencies=[Depends(require_feature("scrap"))])
+app.include_router(shifts.router, dependencies=[Depends(require_feature("shifts"))])
+app.include_router(simulation.router, dependencies=[Depends(require_feature("simulation"))])
+app.include_router(spc.router, dependencies=[Depends(require_feature("spc"))])
 app.include_router(quality.router)
 app.include_router(process_mining.router)
 app.include_router(ai_insights.router)
-app.include_router(reports.router)
+app.include_router(reports.router, dependencies=[Depends(require_feature("reports"))])
 app.include_router(routings.router)
 app.include_router(bi.router)
 app.include_router(workflows.router)
-app.include_router(automl.router)
-app.include_router(kpis.router)
-app.include_router(kpi_dashboards.router)
+app.include_router(automl.router, dependencies=[Depends(require_feature("automl"))])
+app.include_router(kpis.router, dependencies=[Depends(require_feature("kpis"))])
+app.include_router(kpi_dashboards.router, dependencies=[Depends(require_feature("kpi_dashboards"))])
 app.include_router(integrations.router)
 app.include_router(realtime.router)
-app.include_router(rca_cases.router)
-app.include_router(predictive.router)
-app.include_router(mfg_forecast.router)
+app.include_router(rca_cases.router, dependencies=[Depends(require_feature("rca_cases"))])
+app.include_router(predictive.router, dependencies=[Depends(require_feature("predictive"))])
+app.include_router(mfg_forecast.router, dependencies=[Depends(require_feature("mfg_forecast"))])
 app.include_router(work_centers.router)
-app.include_router(computer_vision.router)
-app.include_router(data_chat.router)
+app.include_router(computer_vision.router, dependencies=[Depends(require_feature("computer_vision"))])
+app.include_router(data_chat.router, dependencies=[Depends(require_feature("data_chat"))])
 app.include_router(alerts.router)
 app.include_router(device_tokens.router)
-app.include_router(cbm.router)
+app.include_router(cbm.router, dependencies=[Depends(require_feature("predictive"))])
 
 
 @app.get("/health")

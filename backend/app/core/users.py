@@ -27,6 +27,10 @@ settings = get_settings()
 
 class UserCreate(schemas.BaseUserCreate):
     org_name: str
+    # Set on the Org in the same transaction as its creation (see
+    # UserManager.create below) so a crash after this call never leaves an
+    # org+owner committed with enabled_features still at the empty default.
+    org_features: list[str] | None = None
 
     @field_validator("password")
     @classmethod
@@ -72,11 +76,14 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             user_create.create_update_dict() if safe else user_create.create_update_dict_superuser()
         )
         org_name = user_dict.pop("org_name")
+        org_features = user_dict.pop("org_features", None)
         password = user_dict.pop("password")
         user_dict["hashed_password"] = await run_in_threadpool(self.password_helper.hash, password)
         user_dict["is_verified"] = False
 
         org = Org(name=org_name)
+        if org_features is not None:
+            org.enabled_features = org_features
         session.add(org)
         await session.flush()
         # Every org starts with one default location so the location dimension is

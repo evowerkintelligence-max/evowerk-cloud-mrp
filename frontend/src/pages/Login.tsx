@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { errorMessage } from "@/lib/utils";
+import { useStaffAuthStore } from "@/store/staffAuthStore";
+import { staffApiFetch } from "@/api/staffClient";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -17,6 +19,9 @@ export function Login() {
   const [submitting, setSubmitting] = useState(false);
   const [providers, setProviders] = useState({ google: false, microsoft: false });
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
+  const [staffMode, setStaffMode] = useState(false);
+  const [employeeId, setEmployeeId] = useState("");
+  const setStaffToken = useStaffAuthStore((s) => s.setToken);
   const setTokens = useAuthStore((s) => s.setTokens);
   const navigate = useNavigate();
 
@@ -79,79 +84,118 @@ export function Login() {
     }
   }
 
+  async function onStaffSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await staffApiFetch("/staff/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ employee_id: employeeId, password }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(errorMessage(body, "Login failed"));
+        return;
+      }
+      const data = await res.json();
+      setStaffToken(data.access_token);
+      navigate("/staff");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <AuthLayout
       title="Welcome back"
       subtitle="Sign in to your Evowerk workspace"
-      footer={
-        <>
-          Need an account?{" "}
-          <Link to="/register" className="font-medium text-primary hover:underline">
-            Register
-          </Link>
-        </>
-      }
+      footer={null}
     >
-      <form onSubmit={onSubmit} className="space-y-4">
-        <Field label="Email" htmlFor="email">
-          <Input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </Field>
-        <Field
-          label={
-            <div className="flex items-center justify-between">
-              <span>Password</span>
-              <Link to="/forgot-password" className="text-xs font-medium text-primary hover:underline">
-                Forgot password?
-              </Link>
-            </div>
-          }
-          htmlFor="password"
-        >
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </Field>
-        {mfaRequired && (
-          <Field label="Authenticator code" htmlFor="totp" hint="Enter the 6-digit code from your app.">
+      {staffMode ? (
+        <form onSubmit={onStaffSubmit} className="space-y-4">
+          <Field label="Employee ID" htmlFor="employee-id">
+            <Input id="employee-id" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required />
+          </Field>
+          <Field label="Password" htmlFor="staff-password">
+            <Input id="staff-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </Field>
+          {error && <Alert variant="destructive">{error}</Alert>}
+          <Button type="submit" className="w-full" loading={submitting}>
+            Log in
+          </Button>
+        </form>
+      ) : (
+        <form onSubmit={onSubmit} className="space-y-4">
+          <Field label="Email" htmlFor="email">
             <Input
-              id="totp"
-              inputMode="numeric"
-              value={totpCode}
-              onChange={(e) => setTotpCode(e.target.value)}
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
           </Field>
-        )}
-        {error && <Alert variant="destructive">{error}</Alert>}
-        <Button type="submit" className="w-full" loading={submitting}>
-          {mfaRequired ? "Verify" : "Log in"}
-        </Button>
-      </form>
-      {resendState === "sent" ? (
-        <Alert variant="success" className="mt-4">
-          Check your email — if that account exists and isn't verified yet, a new verification link is on its way.
-        </Alert>
-      ) : (
-        <button
-          type="button"
-          onClick={onResendVerification}
-          disabled={resendState === "sending"}
-          className="mt-4 block w-full text-center text-xs font-medium text-primary hover:underline disabled:opacity-50"
-        >
-          Resend verification email
-        </button>
+          <Field
+            label={
+              <div className="flex items-center justify-between">
+                <span>Password</span>
+                <Link to="/forgot-password" className="text-xs font-medium text-primary hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
+            }
+            htmlFor="password"
+          >
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </Field>
+          {mfaRequired && (
+            <Field label="Authenticator code" htmlFor="totp" hint="Enter the 6-digit code from your app.">
+              <Input
+                id="totp"
+                inputMode="numeric"
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value)}
+                required
+              />
+            </Field>
+          )}
+          {error && <Alert variant="destructive">{error}</Alert>}
+          <Button type="submit" className="w-full" loading={submitting}>
+            {mfaRequired ? "Verify" : "Log in"}
+          </Button>
+        </form>
       )}
-      {(providers.google || providers.microsoft) && (
+      {!staffMode && (
+        resendState === "sent" ? (
+          <Alert variant="success" className="mt-4">
+            Check your email — if that account exists and isn't verified yet, a new verification link is on its way.
+          </Alert>
+        ) : (
+          <button
+            type="button"
+            onClick={onResendVerification}
+            disabled={resendState === "sending"}
+            className="mt-4 block w-full text-center text-xs font-medium text-primary hover:underline disabled:opacity-50"
+          >
+            Resend verification email
+          </button>
+        )
+      )}
+      <button
+        type="button"
+        onClick={() => { setStaffMode((s) => !s); setError(null); }}
+        className="mt-6 block w-full text-center text-xs font-medium text-muted-foreground hover:underline"
+      >
+        {staffMode ? "Back to customer login" : "Staff Login"}
+      </button>
+      {!staffMode && (providers.google || providers.microsoft) && (
         <div className="mt-6 space-y-2">
           <div className="relative">
             <div className="absolute inset-0 flex items-center">

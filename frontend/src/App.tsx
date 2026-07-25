@@ -1,11 +1,13 @@
 import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuthHydrated, useAuthStore } from "./store/authStore";
+import { useStaffAuthHydrated, useStaffAuthStore } from "@/store/staffAuthStore";
+import { useCurrentUser } from "@/lib/currentUser";
+import { EmptyState } from "@/components/EmptyState";
 import { AppShell } from "./components/AppShell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
 import { Login } from "./pages/Login";
-import { Register } from "./pages/Register";
 import { ForgotPassword } from "./pages/ForgotPassword";
 import { ResetPassword } from "./pages/ResetPassword";
 import { VerifyEmail } from "./pages/VerifyEmail";
@@ -63,6 +65,7 @@ const Predictive = lazyPage(() => import("./pages/Predictive"), "Predictive");
 const MfgForecast = lazyPage(() => import("./pages/MfgForecast"), "MfgForecast");
 const ComputerVision = lazyPage(() => import("./pages/ComputerVision"), "ComputerVision");
 const Alerts = lazyPage(() => import("./pages/Alerts"), "Alerts");
+const StaffPortal = lazyPage(() => import("./pages/staff/StaffPortal"), "StaffPortal");
 
 function PageFallback() {
   return (
@@ -103,6 +106,27 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
+function RequireFeature({ feature, children }: { feature: string; children: JSX.Element }) {
+  const org = useCurrentUser();
+  if (org.isLoading) return null;
+  if (!org.data?.enabled_features.includes(feature)) {
+    return (
+      <div className="p-8">
+        <EmptyState title="Not included in your plan" description="Contact EvoWerk to add this feature to your account." />
+      </div>
+    );
+  }
+  return children;
+}
+
+function RequireStaffSession({ children }: { children: JSX.Element }) {
+  const accessToken = useStaffAuthStore((s) => s.accessToken);
+  const hydrated = useStaffAuthHydrated();
+  if (!hydrated) return null;
+  if (!accessToken) return <Navigate to="/login" replace />;
+  return children;
+}
+
 export function App() {
   const { pathname } = useLocation();
   return (
@@ -110,7 +134,7 @@ export function App() {
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          <Route path="/staff" element={<RequireStaffSession><StaffPortal /></RequireStaffSession>} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
@@ -133,46 +157,46 @@ export function App() {
           >
             <Route path="/" element={<Dashboard />} />
             <Route path="/items" element={<Items />} />
-            <Route path="/boms" element={<Boms />} />
-            <Route path="/procurement" element={<Procurement />} />
-            <Route path="/lots" element={<Lots />} />
-            <Route path="/warehouse" element={<Warehouse />} />
-            <Route path="/planning" element={<Planning />} />
+            <Route path="/boms" element={<RequireFeature feature="boms"><Boms /></RequireFeature>} />
+            <Route path="/procurement" element={<RequireFeature feature="procurement"><Procurement /></RequireFeature>} />
+            <Route path="/lots" element={<RequireFeature feature="lots"><Lots /></RequireFeature>} />
+            <Route path="/warehouse" element={<RequireFeature feature="warehouse"><Warehouse /></RequireFeature>} />
+            <Route path="/planning" element={<RequireFeature feature="planning"><Planning /></RequireFeature>} />
             <Route path="/analytics" element={<Navigate to="/analytics/oee" replace />} />
-            <Route path="/analytics/oee" element={<Oee />} />
-            <Route path="/analytics/pace-tracking" element={<PaceTracking />} />
-            <Route path="/analytics/plant-summary" element={<PlantSummary />} />
-            <Route path="/analytics/downtime" element={<Downtime />} />
-            <Route path="/analytics/downtime-tracking" element={<DowntimeTracking />} />
-            <Route path="/analytics/throughput" element={<Throughput />} />
-            <Route path="/analytics/scrap" element={<Scrap />} />
-            <Route path="/analytics/shifts" element={<Shifts />} />
-            <Route path="/analytics/spc" element={<Spc />} />
+            <Route path="/analytics/oee" element={<RequireFeature feature="oee"><Oee /></RequireFeature>} />
+            <Route path="/analytics/pace-tracking" element={<RequireFeature feature="pace_tracking"><PaceTracking /></RequireFeature>} />
+            <Route path="/analytics/plant-summary" element={<RequireFeature feature="plant_summary"><PlantSummary /></RequireFeature>} />
+            <Route path="/analytics/downtime" element={<RequireFeature feature="downtime"><Downtime /></RequireFeature>} />
+            <Route path="/analytics/downtime-tracking" element={<RequireFeature feature="downtime_tracking"><DowntimeTracking /></RequireFeature>} />
+            <Route path="/analytics/throughput" element={<RequireFeature feature="throughput"><Throughput /></RequireFeature>} />
+            <Route path="/analytics/scrap" element={<RequireFeature feature="scrap"><Scrap /></RequireFeature>} />
+            <Route path="/analytics/shifts" element={<RequireFeature feature="shifts"><Shifts /></RequireFeature>} />
+            <Route path="/analytics/spc" element={<RequireFeature feature="spc"><Spc /></RequireFeature>} />
             <Route path="/datasets" element={<Datasets />} />
             <Route path="/datasets/:id" element={<DatasetDetail />} />
             <Route path="/sql-editor" element={<SqlEditor />} />
-            <Route path="/simulation" element={<Simulation />} />
-            <Route path="/ask" element={<Ask />} />
+            <Route path="/simulation" element={<RequireFeature feature="simulation"><Simulation /></RequireFeature>} />
+            <Route path="/ask" element={<RequireFeature feature="data_chat"><Ask /></RequireFeature>} />
             <Route path="/bi" element={<BiDashboards />} />
             <Route path="/bi/new" element={<ChartBuilder />} />
             <Route path="/bi/:id" element={<BiDashboardDetail />} />
             <Route path="/workflows" element={<Workflows />} />
             <Route path="/workflows/:id" element={<WorkflowBuilder />} />
             <Route path="/runs" element={<RunHistory />} />
-            <Route path="/report-builder" element={<ReportBuilder />} />
-            <Route path="/automl" element={<TemplatesHome />} />
-            <Route path="/automl/runs/:id" element={<AutoMLTemplateResultsView />} />
-            <Route path="/automl/advanced" element={<AutoML />} />
-            <Route path="/automl/advanced/new" element={<AutoMLRun />} />
-            <Route path="/automl/advanced/:id" element={<AutoMLRun />} />
-            <Route path="/kpis" element={<Kpis />} />
-            <Route path="/kpis/dashboards" element={<KpiDashboards />} />
+            <Route path="/report-builder" element={<RequireFeature feature="reports"><ReportBuilder /></RequireFeature>} />
+            <Route path="/automl" element={<RequireFeature feature="automl"><TemplatesHome /></RequireFeature>} />
+            <Route path="/automl/runs/:id" element={<RequireFeature feature="automl"><AutoMLTemplateResultsView /></RequireFeature>} />
+            <Route path="/automl/advanced" element={<RequireFeature feature="automl"><AutoML /></RequireFeature>} />
+            <Route path="/automl/advanced/new" element={<RequireFeature feature="automl"><AutoMLRun /></RequireFeature>} />
+            <Route path="/automl/advanced/:id" element={<RequireFeature feature="automl"><AutoMLRun /></RequireFeature>} />
+            <Route path="/kpis" element={<RequireFeature feature="kpis"><Kpis /></RequireFeature>} />
+            <Route path="/kpis/dashboards" element={<RequireFeature feature="kpi_dashboards"><KpiDashboards /></RequireFeature>} />
             <Route path="/integrations" element={<Integrations />} />
             <Route path="/realtime" element={<Realtime />} />
-            <Route path="/rca-cases" element={<RcaCases />} />
-            <Route path="/predictive" element={<Predictive />} />
-            <Route path="/mfg-forecast" element={<MfgForecast />} />
-            <Route path="/computer-vision" element={<ComputerVision />} />
+            <Route path="/rca-cases" element={<RequireFeature feature="rca_cases"><RcaCases /></RequireFeature>} />
+            <Route path="/predictive" element={<RequireFeature feature="predictive"><Predictive /></RequireFeature>} />
+            <Route path="/mfg-forecast" element={<RequireFeature feature="mfg_forecast"><MfgForecast /></RequireFeature>} />
+            <Route path="/computer-vision" element={<RequireFeature feature="computer_vision"><ComputerVision /></RequireFeature>} />
             <Route path="/alerts" element={<Alerts />} />
           </Route>
         </Routes>

@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from sqlalchemy import select
+
+from app.models.staff import StaffAccount
+
+pytestmark = pytest.mark.asyncio
+
+
+async def test_staff_account_round_trips_through_the_db(db_session):
+    staff = StaffAccount(employee_id="zeeshan", hashed_password="not-a-real-hash")
+    db_session.add(staff)
+    await db_session.commit()
+
+    fetched = (
+        await db_session.execute(select(StaffAccount).where(StaffAccount.employee_id == "zeeshan"))
+    ).scalar_one()
+    assert fetched.id is not None
+    assert isinstance(fetched.id, uuid.UUID)
+    assert fetched.hashed_password == "not-a-real-hash"  # pragma: allowlist secret
+    assert fetched.created_at is not None

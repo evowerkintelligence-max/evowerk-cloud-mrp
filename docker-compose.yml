@@ -87,6 +87,12 @@ services:
       CORS_ORIGINS: '["http://localhost:5173"]'
     ports:
       - "8000:8000"
+    volumes:
+      # data_dir (./data, see app/core/config.py) holds uploaded dataset
+      # files - without this, `docker compose up --build`/`down` wipes them
+      # even though db_data (the Postgres row describing each dataset)
+      # survives, since only the container's throwaway layer held the file.
+      - backend_data:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -107,3 +113,4 @@ services:
 
 volumes:
   db_data:
+  backend_data:

@@ -18,6 +18,7 @@ from app.api.routes import (
     computer_vision,
     data_chat,
     datasets,
+    device_tokens,
     downtime,
     downtime_tracking,
     forecasts,
@@ -149,6 +150,7 @@ app.include_router(work_centers.router)
 app.include_router(computer_vision.router, dependencies=[Depends(require_feature("computer_vision"))])
 app.include_router(data_chat.router, dependencies=[Depends(require_feature("data_chat"))])
 app.include_router(alerts.router)
+app.include_router(device_tokens.router)
 app.include_router(cbm.router, dependencies=[Depends(require_feature("predictive"))])
 
 

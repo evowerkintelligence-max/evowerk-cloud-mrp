@@ -537,7 +537,7 @@ export function PurchaseOrdersPanel() {
         <Dialog open={confirmSubmit} onClose={() => setConfirmSubmit(false)} title="Submit purchase order?">
           <p className="text-sm text-muted-foreground">
             PO-{poDetail.data.po_number} will move to <strong>Submitted</strong> and its lines can no
-            longer be edited.
+            longer be edited. If the supplier has an email on file, we'll send them the PO.
           </p>
           <div className="flex justify-end gap-2 pt-4">
             <Button variant="secondary" onClick={() => setConfirmSubmit(false)}>

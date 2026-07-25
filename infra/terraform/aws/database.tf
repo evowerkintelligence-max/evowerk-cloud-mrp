@@ -8,6 +8,16 @@ resource "random_password" "db_password" {
   special = false
 }
 
+# A fixed-at-create suffix, not timestamp(): timestamp() re-evaluates on
+# every plan/apply, which would make final_snapshot_identifier below show a
+# diff forever even when nothing changed. random_id is generated once and
+# stays in state, so it only rotates when this whole environment's state is
+# torn down and recreated - which is exactly when a stale snapshot from a
+# prior teardown could otherwise collide.
+resource "random_id" "final_snapshot_suffix" {
+  byte_length = 4
+}
+
 resource "aws_db_instance" "postgres" {
   identifier     = "${local.name_prefix}-db"
   engine         = "postgres"
@@ -27,8 +37,10 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
 
-  backup_retention_period   = var.db_backup_retention_period
-  final_snapshot_identifier = "${local.name_prefix}-final-snapshot"
+  backup_retention_period = var.db_backup_retention_period
+  # Suffixed so repeated destroy/recreate cycles on this test env don't
+  # collide with a snapshot name left over from a previous teardown.
+  final_snapshot_identifier = "${local.name_prefix}-final-snapshot-${random_id.final_snapshot_suffix.hex}"
   skip_final_snapshot       = false
   deletion_protection       = var.db_deletion_protection
 

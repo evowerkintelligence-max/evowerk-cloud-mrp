@@ -53,18 +53,22 @@ Two new routes in `api/routes/forecasts.py`:
 
 **`GET /forecasts/suggested`** (auth: `get_current_user`, same as the per-item route)
 Query params: `horizon_days` (default 30, validated 1..365, same rule as the per-item route).
-Response: list of per-item suggestions with weekly points:
+Response: the suggestion window plus per-item suggestions with weekly points. The window fields exist so the client labels conflicts against exactly the dates the accept route will delete in, instead of re-deriving them from its own clock:
 
 ```json
-[
-  {
-    "item_id": "...", "item_sku": "...", "item_name": "...",
-    "method_used": "exp_smoothing", "history_points": 14,
-    "points": [
-      { "period_start": "2026-07-26", "quantity": "70.0", "lower": "51.2", "upper": "88.8" }
-    ]
-  }
-]
+{
+  "window_start": "2026-07-26",
+  "window_end": "2026-08-24",
+  "items": [
+    {
+      "item_id": "...", "item_sku": "...", "item_name": "...",
+      "method_used": "exp_smoothing", "history_points": 14,
+      "points": [
+        { "period_start": "2026-07-26", "quantity": "70.0", "lower": "51.2", "upper": "88.8" }
+      ]
+    }
+  ]
+}
 ```
 
 Same field names as `SuggestedForecastResponse`; the docstring states points are weekly buckets, not days. The per-item daily route stays as is.

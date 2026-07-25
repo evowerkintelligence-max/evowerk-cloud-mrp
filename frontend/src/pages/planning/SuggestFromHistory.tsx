@@ -43,8 +43,15 @@ interface AcceptResponse {
 }
 
 const METHOD_LABEL: Record<string, string> = {
-  moving_avg: "moving average",
-  exp_smoothing: "exp. smoothing",
+  moving_avg: "steady usage",
+  exp_smoothing: "recent trend",
+};
+
+const METHOD_EXPLANATION: Record<string, string> = {
+  moving_avg:
+    "Based on the average of recent usage. Used when there isn't enough history yet to detect a trend.",
+  exp_smoothing:
+    "Based on recent usage, weighted so the newest weeks count more. Adapts faster when usage is trending up or down.",
 };
 
 export function SuggestFromHistoryCard() {
@@ -150,6 +157,7 @@ export function SuggestFromHistoryCard() {
               max="365"
               value={horizonDays}
               onChange={(e) => setHorizonDays(e.target.value)}
+              title="How many days ahead to project demand. Longer horizons mean more weeks of suggestions."
             />
           </Field>
           <div>
@@ -188,11 +196,15 @@ export function SuggestFromHistoryCard() {
                   <TR>
                     <TH>Accept?</TH>
                     <TH>Item</TH>
-                    <TH>Method</TH>
+                    <TH title="How the projection was calculated: steady usage (simple average) or recent trend (weights newer weeks more).">
+                      Method
+                    </TH>
                     <TH>History</TH>
                     <TH>Week starting</TH>
                     <TH>Quantity</TH>
-                    <TH>Range</TH>
+                    <TH title="The range of likely demand. A narrower range means the history gives a more confident projection.">
+                      Range
+                    </TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -229,7 +241,13 @@ export function SuggestFromHistoryCard() {
                               )}
                             </TD>
                             <TD rowSpan={s.points.length}>
-                              <Badge variant="neutral">
+                              <Badge
+                                variant="neutral"
+                                title={
+                                  METHOD_EXPLANATION[s.method_used] ??
+                                  "How this projection was calculated."
+                                }
+                              >
                                 {METHOD_LABEL[s.method_used] ?? s.method_used}
                               </Badge>
                             </TD>
@@ -237,10 +255,10 @@ export function SuggestFromHistoryCard() {
                           </>
                         )}
                         <TD>{p.period_start}</TD>
-                        <TD className="font-semibold">{fmt(Number(p.quantity))}</TD>
+                        <TD className="font-semibold">{fmt(Math.round(Number(p.quantity)))}</TD>
                         <TD className="text-muted-foreground">
                           {p.lower !== null && p.upper !== null
-                            ? `${fmt(Number(p.lower))} to ${fmt(Number(p.upper))}`
+                            ? `${fmt(Math.round(Number(p.lower)))} to ${fmt(Math.round(Number(p.upper)))}`
                             : "—"}
                         </TD>
                       </TR>
@@ -249,6 +267,10 @@ export function SuggestFromHistoryCard() {
                 </TBody>
               </Table>
             </TableWrap>
+            <p className="text-sm text-muted-foreground">
+              Checked items will be added as forecasts. If an item already has forecasts in this date
+              range, accepting it replaces those rows so demand isn't counted twice.
+            </p>
             <Button onClick={onAccept} loading={accept.isPending}>
               Accept {checkedIds.length} selected item{checkedIds.length === 1 ? "" : "s"}
             </Button>

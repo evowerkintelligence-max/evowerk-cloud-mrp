@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,6 +101,26 @@ class BulkSuggestedResponse(BaseModel):
     # Same per-item shape as the single-item route, but points are weekly
     # buckets (see services.demand_forecasting.bucket_weekly), not days.
     items: list[SuggestedForecastResponse]
+
+
+class AcceptSuggestedRequest(BaseModel):
+    item_ids: list[str]
+    horizon_days: int = DEFAULT_HORIZON_DAYS
+
+
+class SkippedSuggestion(BaseModel):
+    item_id: str
+    item_sku: str
+
+
+class AcceptSuggestedResponse(BaseModel):
+    items: int  # items actually written
+    deleted: int
+    created: int
+    updated: int
+    # Requested items that had no consumption history at accept time; their
+    # existing forecast rows are left untouched.
+    skipped: list[SkippedSuggestion]
 
 
 class MrpPlanResponse(BaseModel):
@@ -467,6 +487,112 @@ async def list_suggested_forecasts(
         window_start=as_of + timedelta(days=1),
         window_end=as_of + timedelta(days=horizon_days),
         items=[_suggestion_to_response(s) for s in suggestions],
+    )
+
+
+MAX_ACCEPT_ITEMS = 500
+
+
+@router.post("/suggested/accept", response_model=AcceptSuggestedResponse)
+async def accept_suggested_forecasts(
+    body: AcceptSuggestedRequest,
+    current: CurrentUser = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn weekly suggestions into DemandForecast rows, server-authoritative:
+    quantities are recomputed here, never taken from the client. For each item
+    every existing row inside the suggestion window is deleted first. That is
+    mandatory, not a convenience: as_of moves daily, so bucket boundaries
+    shift, and plain upsert would leave yesterday's rows behind at the old
+    boundaries, silently double-counting demand in MRP. Whole request is
+    atomic, same as /forecasts/import."""
+    if not body.item_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No item_ids provided")
+    if len(body.item_ids) > MAX_ACCEPT_ITEMS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"At most {MAX_ACCEPT_ITEMS} items per accept"
+        )
+    if body.horizon_days <= 0 or body.horizon_days > 365:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_days must be between 1 and 365")
+
+    parsed = list(dict.fromkeys(_parse_item_id(raw) for raw in body.item_ids))
+
+    sku_by_id = {
+        row.id: row.sku
+        for row in (
+            await db.execute(
+                select(Item.id, Item.sku).where(Item.org_id == current.org_id, Item.id.in_(parsed))
+            )
+        ).all()
+    }
+    missing = set(parsed) - set(sku_by_id)
+    if missing:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"Unknown item(s) for this org: {', '.join(str(m) for m in missing)}",
+        )
+
+    as_of = datetime.now(timezone.utc).date()
+    window_start = as_of + timedelta(days=1)
+    window_end = as_of + timedelta(days=body.horizon_days)
+    suggestions = {
+        s.item_id: s
+        for s in await compute_weekly_suggestions(
+            db, current.org_id, horizon_days=body.horizon_days, as_of=as_of, item_ids=set(parsed)
+        )
+    }
+
+    written = deleted = created = updated = 0
+    skipped: list[SkippedSuggestion] = []
+    for iid in parsed:
+        sugg = suggestions.get(iid)
+        if sugg is None:
+            skipped.append(SkippedSuggestion(item_id=str(iid), item_sku=sku_by_id[iid]))
+            continue
+        result = await db.execute(
+            delete(DemandForecast).where(
+                DemandForecast.org_id == current.org_id,
+                DemandForecast.item_id == iid,
+                DemandForecast.period_start >= window_start,
+                DemandForecast.period_start <= window_end,
+            )
+        )
+        deleted += result.rowcount
+        notes = f"from history ({sugg.method_used}, {sugg.history_points} days)"
+        for p in sugg.points:
+            _, was_created = await _upsert_forecast(
+                db,
+                org_id=current.org_id,
+                item_id=iid,
+                period_start=p.period_start,
+                quantity=Decimal(str(round(p.yhat, 4))),
+                notes=notes,
+                source="suggested",
+                created_by=current.id,
+            )
+            if was_created:
+                created += 1
+            else:
+                updated += 1
+        written += 1
+
+    await log_event(
+        db,
+        action="forecast.suggested_accepted",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        metadata={
+            "items": written,
+            "deleted": deleted,
+            "created": created,
+            "updated": updated,
+            "skipped": len(skipped),
+            "horizon_days": body.horizon_days,
+        },
+    )
+    await db.commit()
+    return AcceptSuggestedResponse(
+        items=written, deleted=deleted, created=created, updated=updated, skipped=skipped
     )
 
 

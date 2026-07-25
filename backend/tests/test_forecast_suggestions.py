@@ -165,3 +165,177 @@ async def test_bulk_suggested_validates_horizon(client, test_engine):
     headers = {"Authorization": f"Bearer {token}"}
     assert (await client.get("/forecasts/suggested?horizon_days=0", headers=headers)).status_code == 400
     assert (await client.get("/forecasts/suggested?horizon_days=366", headers=headers)).status_code == 400
+
+
+async def _seed_three_day_history(client, test_engine, reg, token, sku="RAW-1"):
+    """Item with 3 non-zero days: moving average of 3/day. With
+    horizon_days=10 the weekly suggestion is [21, 9]."""
+    item = await _create_item(client, token, sku=sku)
+    location_id = await _default_location_id(client, token)
+    await _insert_consumption(
+        test_engine,
+        org_id=reg["org_id"],
+        item_id=item["id"],
+        location_id=location_id,
+        created_by=reg["user_id"],
+        qty_by_day_offset={0: 7, 1: 7, 2: 7},
+    )
+    return item
+
+
+async def test_accept_writes_suggested_rows(client, test_engine):
+    reg, token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _seed_three_day_history(client, test_engine, reg, token)
+
+    res = await client.post(
+        "/forecasts/suggested/accept",
+        json={"item_ids": [item["id"]], "horizon_days": 10},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body == {"items": 1, "deleted": 0, "created": 2, "updated": 0, "skipped": []}
+
+    rows = (await client.get(f"/forecasts?item_id={item['id']}", headers=headers)).json()
+    assert len(rows) == 2
+    assert {r["source"] for r in rows} == {"suggested"}
+    assert {r["notes"] for r in rows} == {"from history (moving_avg, 3 days)"}
+    assert sorted(Decimal(str(r["quantity"])) for r in rows) == [Decimal("9"), Decimal("21")]
+
+
+async def test_accept_replaces_in_window_rows_only(client, test_engine):
+    reg, token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _seed_three_day_history(client, test_engine, reg, token)
+
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    in_window = await client.post(
+        "/forecasts",
+        json={"item_id": item["id"], "period_start": tomorrow, "quantity": "999"},
+        headers=headers,
+    )
+    assert in_window.status_code == 200
+    outside = await client.post(
+        "/forecasts",
+        json={"item_id": item["id"], "period_start": "2035-01-01", "quantity": "555"},
+        headers=headers,
+    )
+    assert outside.status_code == 200
+
+    res = await client.post(
+        "/forecasts/suggested/accept",
+        json={"item_ids": [item["id"]], "horizon_days": 10},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["deleted"] == 1  # the manual row at tomorrow, inside the window
+    assert body["created"] == 2
+
+    rows = (await client.get(f"/forecasts?item_id={item['id']}", headers=headers)).json()
+    by_period = {r["period_start"]: r for r in rows}
+    assert "2035-01-01" in by_period  # out-of-window manual row untouched
+    assert by_period["2035-01-01"]["source"] == "manual"
+    assert len(rows) == 3  # 2 suggested + 1 far-future manual
+
+
+async def test_accept_rerun_same_day_is_stable(client, test_engine):
+    reg, token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _seed_three_day_history(client, test_engine, reg, token)
+    payload = {"item_ids": [item["id"]], "horizon_days": 10}
+
+    first = (await client.post("/forecasts/suggested/accept", json=payload, headers=headers)).json()
+    assert first["created"] == 2
+    second = (await client.post("/forecasts/suggested/accept", json=payload, headers=headers)).json()
+    # Same as_of: the rerun replaces its own rows, never accumulates them.
+    assert second["deleted"] == 2
+    assert second["created"] + second["updated"] == 2
+    rows = (await client.get(f"/forecasts?item_id={item['id']}", headers=headers)).json()
+    assert len(rows) == 2
+
+
+async def test_accept_skips_no_history_item_without_deleting(client, test_engine):
+    reg, token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    bare = await _create_item(client, token, sku="RAW-9")
+
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    keep = await client.post(
+        "/forecasts",
+        json={"item_id": bare["id"], "period_start": tomorrow, "quantity": "42"},
+        headers=headers,
+    )
+    assert keep.status_code == 200
+
+    res = await client.post(
+        "/forecasts/suggested/accept",
+        json={"item_ids": [bare["id"]], "horizon_days": 10},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["items"] == 0 and body["deleted"] == 0 and body["created"] == 0
+    assert body["skipped"] == [{"item_id": bare["id"], "item_sku": "RAW-9"}]
+
+    rows = (await client.get(f"/forecasts?item_id={bare['id']}", headers=headers)).json()
+    assert len(rows) == 1  # the manual row survived
+
+
+async def test_accept_validation_and_permissions(client, test_engine):
+    reg, token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    org_id = reg["org_id"]
+
+    # empty item_ids
+    assert (
+        await client.post(
+            "/forecasts/suggested/accept", json={"item_ids": []}, headers=headers
+        )
+    ).status_code == 400
+    # bad horizon
+    item = await _create_item(client, token, sku="RAW-5")
+    assert (
+        await client.post(
+            "/forecasts/suggested/accept",
+            json={"item_ids": [item["id"]], "horizon_days": 0},
+            headers=headers,
+        )
+    ).status_code == 400
+    # unknown item for this org
+    assert (
+        await client.post(
+            "/forecasts/suggested/accept",
+            json={"item_ids": [str(uuid_module.uuid4())]},
+            headers=headers,
+        )
+    ).status_code == 404
+
+    # writes are owner-only
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="member2@example.com",
+                hashed_password=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    login = await client.post("/auth/login", json={"email": "member2@example.com", "password": PASSWORD})
+    member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    assert (
+        await client.post(
+            "/forecasts/suggested/accept",
+            json={"item_ids": [item["id"]]},
+            headers=member_headers,
+        )
+    ).status_code == 403
+    # but the review payload is readable by any member
+    assert (await client.get("/forecasts/suggested", headers=member_headers)).status_code == 200

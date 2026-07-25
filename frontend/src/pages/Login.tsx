@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import { AuthLayout } from "@/components/AuthLayout";
@@ -15,8 +15,38 @@ export function Login() {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [providers, setProviders] = useState({ google: false, microsoft: false });
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
   const setTokens = useAuthStore((s) => s.setTokens);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch("/auth/providers")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => data && setProviders(data))
+      .catch(() => {});
+  }, []);
+
+  async function onResendVerification() {
+    if (!email) {
+      setError("Enter your email above first, then resend the verification link.");
+      return;
+    }
+    setResendState("sending");
+    // The endpoint always returns 202 regardless of whether the account
+    // exists or is already verified, so there's nothing to branch on -
+    // a network failure gets the same "sent" state as a real send.
+    try {
+      await fetch("/auth/request-verify-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+    } catch {
+      // ignored - see above
+    }
+    setResendState("sent");
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -107,26 +137,46 @@ export function Login() {
           {mfaRequired ? "Verify" : "Log in"}
         </Button>
       </form>
-      <div className="mt-6 space-y-2">
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-border" />
+      {resendState === "sent" ? (
+        <Alert variant="success" className="mt-4">
+          Check your email — if that account exists and isn't verified yet, a new verification link is on its way.
+        </Alert>
+      ) : (
+        <button
+          type="button"
+          onClick={onResendVerification}
+          disabled={resendState === "sending"}
+          className="mt-4 block w-full text-center text-xs font-medium text-primary hover:underline disabled:opacity-50"
+        >
+          Resend verification email
+        </button>
+      )}
+      {(providers.google || providers.microsoft) && (
+        <div className="mt-6 space-y-2">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
+            </div>
           </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
-          </div>
+          {providers.google && (
+            <a href="/auth/google/authorize" className="block">
+              <Button type="button" variant="outline" className="w-full">
+                Continue with Google
+              </Button>
+            </a>
+          )}
+          {providers.microsoft && (
+            <a href="/auth/microsoft/authorize" className="block">
+              <Button type="button" variant="outline" className="w-full">
+                Continue with Microsoft
+              </Button>
+            </a>
+          )}
         </div>
-        <a href="/auth/google/authorize" className="block">
-          <Button type="button" variant="outline" className="w-full">
-            Continue with Google
-          </Button>
-        </a>
-        <a href="/auth/microsoft/authorize" className="block">
-          <Button type="button" variant="outline" className="w-full">
-            Continue with Microsoft
-          </Button>
-        </a>
-      </div>
+      )}
     </AuthLayout>
   );
 }

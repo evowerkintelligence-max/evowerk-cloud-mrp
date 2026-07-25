@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tests.conftest import drain_background_tasks
+
 pytestmark = pytest.mark.asyncio
 
 PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit
@@ -97,6 +99,87 @@ async def test_po_full_lifecycle(client):
     )
     assert full_receive.status_code == 200
     assert full_receive.json()["status"] == "received"
+
+
+async def test_po_submit_emails_supplier(client, monkeypatch):
+    sent = {}
+
+    async def fake_send_email(to, subject, body):
+        sent["to"] = to
+        sent["subject"] = subject
+        sent["body"] = body
+
+    monkeypatch.setattr("app.api.routes.purchase_orders.send_email", fake_send_email)
+
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)
+    supplier = await _create_supplier(client, token)
+
+    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
+    po_data = po.json()
+    await client.patch(
+        f"/purchase-orders/{po_data['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    submit = await client.post(f"/purchase-orders/{po_data['id']}/submit", headers=headers)
+    assert submit.status_code == 200
+    await drain_background_tasks()
+
+    assert sent["to"] == "sales@acmemetals.example"
+    assert sent["subject"] == f"Purchase Order #{po_data['po_number']}"
+    assert item["sku"] in sent["body"]
+
+
+async def test_po_submit_skips_email_when_supplier_has_no_email(client, monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("send_email should not be called when supplier has no email")
+
+    monkeypatch.setattr("app.api.routes.purchase_orders.send_email", fail_if_called)
+
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)
+    supplier_res = await client.post(
+        "/suppliers", json={"name": "NoEmail Co"}, headers=headers
+    )
+    supplier = supplier_res.json()
+
+    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
+    po_data = po.json()
+    await client.patch(
+        f"/purchase-orders/{po_data['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    submit = await client.post(f"/purchase-orders/{po_data['id']}/submit", headers=headers)
+    assert submit.status_code == 200
+
+
+async def test_po_submit_skips_email_when_supplier_email_is_whitespace(client, monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("send_email should not be called for a whitespace-only email")
+
+    monkeypatch.setattr("app.api.routes.purchase_orders.send_email", fail_if_called)
+
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    item = await _create_item(client, token)
+    supplier_res = await client.post(
+        "/suppliers", json={"name": "WhitespaceEmail Co", "email": "   "}, headers=headers
+    )
+    supplier = supplier_res.json()
+
+    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
+    po_data = po.json()
+    await client.patch(
+        f"/purchase-orders/{po_data['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    submit = await client.post(f"/purchase-orders/{po_data['id']}/submit", headers=headers)
+    assert submit.status_code == 200
 
 
 async def test_over_receipt_rejected(client):

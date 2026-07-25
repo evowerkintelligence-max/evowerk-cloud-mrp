@@ -13,12 +13,15 @@ os.environ.setdefault("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
 # without this, every test run leaves orphaned files under ./data.
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="evowerk-test-data-"))
 
+import asyncio
+
 import fakeredis.aioredis as fakeredis
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.core import background as background_module
 from app.core import redis_client
 from app.db import session as db_session_module
 from app.db.base import Base
@@ -31,6 +34,7 @@ from app.models import (  # noqa: F401 - register models
     bom,
     dashboard,
     dataset,
+    device_token,
     downtime_tracking,
     forecast,
     inventory,
@@ -59,6 +63,15 @@ from app.models import (  # noqa: F401 - register models
 )
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+
+async def drain_background_tasks() -> None:
+    """Routes that use app.core.background.fire_and_forget (password reset,
+    verification emails, PO-submit notifications) don't await the scheduled
+    coroutine, so the response can return before it finishes - tests
+    asserting its side effect need to wait for it explicitly instead of
+    relying on it having finished by request-return."""
+    await asyncio.gather(*background_module._background_tasks)
 
 
 @pytest_asyncio.fixture

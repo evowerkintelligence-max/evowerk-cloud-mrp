@@ -14,6 +14,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     audit,
     bom,
     dataset,
+    device_token,
     forecast,
     inventory,
     inventory_snapshot,

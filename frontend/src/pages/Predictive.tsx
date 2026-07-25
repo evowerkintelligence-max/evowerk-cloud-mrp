@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Radio } from "lucide-react";
 import { apiFetch } from "@/api/client";
@@ -12,7 +13,7 @@ import { MachineDetail } from "./predictive/MachineDetail";
 
 interface FleetMachine {
   machine: string;
-  status: "learning" | "active";
+  status: "learning" | "active" | "unmapped";
   risk_level: "high" | "medium" | "low" | "unknown";
   failure_probability_30d: number | null;
   active_anomalies: number;
@@ -31,7 +32,9 @@ const RISK_VARIANT: Record<string, "danger" | "warning" | "success" | "neutral">
   high: "danger", medium: "warning", low: "success", unknown: "neutral",
 };
 
-const STATUS_LABEL: Record<string, string> = { learning: "Learning baseline", active: "Active" };
+const STATUS_LABEL: Record<string, string> = {
+  learning: "Learning baseline", active: "Active", unmapped: "Needs sensor mapping",
+};
 
 function ScheduleTable() {
   const qc = useQueryClient();
@@ -100,6 +103,7 @@ function ScheduleTable() {
 
 export function Predictive() {
   const [selectedMachine, setSelectedMachine] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const fleet = useQuery<{ machines: FleetMachine[] }>({
     queryKey: ["cbm-fleet"],
@@ -147,20 +151,35 @@ export function Predictive() {
                   </TR>
                 </THead>
                 <TBody>
-                  {fleet.data?.machines.map((m) => (
-                    <TR key={m.machine} className="cursor-pointer" onClick={() => setSelectedMachine(m.machine)}>
-                      <TD className="font-medium">{m.machine}</TD>
-                      <TD className="text-muted-foreground">{STATUS_LABEL[m.status] ?? m.status}</TD>
-                      <TD>
-                        <Badge variant={RISK_VARIANT[m.risk_level] ?? "neutral"}>{m.risk_level}</Badge>
-                      </TD>
-                      <TD>{m.failure_probability_30d != null ? `${(m.failure_probability_30d * 100).toFixed(1)}%` : "—"}</TD>
-                      <TD>{m.active_anomalies}</TD>
-                      <TD className="text-muted-foreground">
-                        {m.last_reading_at ? new Date(m.last_reading_at).toLocaleString() : "No readings yet"}
-                      </TD>
-                    </TR>
-                  ))}
+                  {fleet.data?.machines.map((m) => {
+                    const isUnmapped = m.status === "unmapped";
+                    return (
+                      <TR
+                        key={m.machine}
+                        className={isUnmapped ? undefined : "cursor-pointer"}
+                        onClick={isUnmapped ? undefined : () => setSelectedMachine(m.machine)}
+                      >
+                        <TD className="font-medium">{m.machine}</TD>
+                        <TD className="text-muted-foreground">{STATUS_LABEL[m.status] ?? m.status}</TD>
+                        <TD>
+                          <Badge variant={RISK_VARIANT[m.risk_level] ?? "neutral"}>{m.risk_level}</Badge>
+                        </TD>
+                        <TD>{m.failure_probability_30d != null ? `${(m.failure_probability_30d * 100).toFixed(1)}%` : "—"}</TD>
+                        <TD>{m.active_anomalies}</TD>
+                        <TD className="text-muted-foreground">
+                          {isUnmapped ? (
+                            <Button size="sm" variant="outline" onClick={() => navigate("/realtime")}>
+                              Configure
+                            </Button>
+                          ) : m.last_reading_at ? (
+                            new Date(m.last_reading_at).toLocaleString()
+                          ) : (
+                            "No readings yet"
+                          )}
+                        </TD>
+                      </TR>
+                    );
+                  })}
                 </TBody>
               </Table>
             </TableWrap>

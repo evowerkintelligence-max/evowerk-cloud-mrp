@@ -11,6 +11,16 @@ class Settings(BaseSettings):
     env: str = "dev"
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp"
+    # SQLAlchemy's own defaults (pool_size=5, max_overflow=10 -> 15 total) are
+    # sized for a dev laptop, not real concurrent traffic - a modest load test
+    # (50 concurrent requests against a single backend instance) exhausted
+    # the pool within its 30s checkout timeout and 500'd, surfacing to users
+    # as a generic "Login failed" on whatever request happened to lose the
+    # race. Raised well above the old defaults; still comfortably under a
+    # single db.t4g.micro RDS instance's ~112-connection ceiling (see AWS's
+    # default parameter-group formula) with one backend task.
+    db_pool_size: int = 20
+    db_max_overflow: int = 30
 
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"

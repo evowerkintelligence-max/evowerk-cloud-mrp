@@ -41,6 +41,17 @@ _refresh_rate_limit = rate_limit("refresh", settings.rate_limit_refresh_per_5min
 _mfa_verify_rate_limit = rate_limit("mfa_verify", settings.rate_limit_mfa_verify_per_5min, 300)
 
 
+@router.get("/providers")
+async def auth_providers() -> dict[str, bool]:
+    """Which OAuth providers are configured - lets the frontend hide login
+    buttons for providers that would otherwise 404 (see main.py's conditional
+    oauth.router include, which uses the same settings)."""
+    return {
+        "google": bool(settings.google_oauth_client_id),
+        "microsoft": bool(settings.microsoft_oauth_client_id),
+    }
+
+
 class RegisterResponse(UserRead):
     # org_id/user_id kept alongside the standard UserRead fields: several
     # other test modules' _register_and_login() helpers read reg["org_id"]/

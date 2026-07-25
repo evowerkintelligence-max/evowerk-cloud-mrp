@@ -16,6 +16,7 @@ from app.api.routes import (
     computer_vision,
     data_chat,
     datasets,
+    device_tokens,
     downtime,
     downtime_tracking,
     forecasts,
@@ -144,6 +145,7 @@ app.include_router(work_centers.router)
 app.include_router(computer_vision.router)
 app.include_router(data_chat.router)
 app.include_router(alerts.router)
+app.include_router(device_tokens.router)
 app.include_router(cbm.router)
 
 

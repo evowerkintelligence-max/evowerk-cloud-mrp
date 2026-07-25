@@ -49,6 +49,26 @@ resource "aws_iam_role" "ecs_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
 }
 
+# Required for ECS Exec (enable_execute_command on the backend service) -
+# the SSM agent sidecar Fargate injects uses this to open the exec channel.
+data "aws_iam_policy_document" "ecs_exec" {
+  statement {
+    actions = [
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_exec" {
+  name   = "${local.name_prefix}-ecs-exec"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ecs_exec.json
+}
+
 data "aws_iam_policy_document" "ses_send" {
   count = var.ses_from_email != "" ? 1 : 0
   statement {

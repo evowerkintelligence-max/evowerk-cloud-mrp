@@ -231,6 +231,9 @@ resource "aws_ecs_service" "backend" {
   task_definition = aws_ecs_task_definition.backend.arn
   desired_count   = 1
   launch_type     = "FARGATE"
+  # ponytail: exec access for one-off ops (staff-account seeding etc), turn
+  # off once ECS Exec isn't needed day-to-day.
+  enable_execute_command = true
 
   network_configuration {
     subnets         = aws_subnet.private[*].id

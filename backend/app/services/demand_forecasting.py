@@ -73,6 +73,30 @@ class DemandForecastResult:
     points: list[ForecastPoint]
 
 
+def bucket_weekly(points: list[ForecastPoint], bucket_days: int = 7) -> list[ForecastPoint]:
+    """Aggregate consecutive daily points into bucket_days-wide buckets.
+
+    Bucket quantity is the sum of the daily yhat values; the last bucket may
+    cover fewer than bucket_days days and sums only what it has. Bounds sum
+    linearly because the forecast is a flat level: a level error repeats
+    identically every day, so daily errors are fully correlated and interval
+    widths add. If any day in a bucket lacks bounds the bucket has none.
+    """
+    buckets: list[ForecastPoint] = []
+    for i in range(0, len(points), bucket_days):
+        chunk = points[i : i + bucket_days]
+        has_bounds = all(p.lower is not None and p.upper is not None for p in chunk)
+        buckets.append(
+            ForecastPoint(
+                period_start=chunk[0].period_start,
+                yhat=sum(p.yhat for p in chunk),
+                lower=sum(p.lower for p in chunk) if has_bounds else None,
+                upper=sum(p.upper for p in chunk) if has_bounds else None,
+            )
+        )
+    return buckets
+
+
 def _series_for_item(daily: dict[date, Decimal], lookback_days: int, as_of: date) -> list[float]:
     """Oldest -> newest daily demand over the trailing lookback window,
     zero-filled for days with no recorded consumption - same convention as

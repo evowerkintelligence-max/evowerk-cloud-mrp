@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { SendToReportButton, fmt } from "./analytics/shared";
+import { SuggestFromHistoryCard } from "./planning/SuggestFromHistory";
 
 interface ItemResponse {
   id: string;
@@ -263,6 +264,8 @@ export function Planning() {
           </TableWrap>
         </CardContent>
       </Card>
+
+      <SuggestFromHistoryCard />
 
       <Card>
         <CardHeader>

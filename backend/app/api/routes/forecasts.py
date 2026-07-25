@@ -17,7 +17,11 @@ from app.middleware.audit import log_event
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.models.procurement import PurchaseOrder, Supplier, PurchaseOrderLine
-from app.services.demand_forecasting import DEFAULT_HORIZON_DAYS, compute_demand_forecast
+from app.services.demand_forecasting import (
+    DEFAULT_HORIZON_DAYS,
+    compute_demand_forecast,
+    compute_weekly_suggestions,
+)
 from app.services.mrp import MrpPlanLine, compute_build_plan, compute_mrp_plan, resolve_horizon
 from app.services.pricing import latest_unit_prices
 
@@ -86,6 +90,17 @@ class SuggestedForecastResponse(BaseModel):
     # confidence signal for how much this projection should be trusted.
     history_points: int
     points: list[SuggestedForecastPoint]
+
+
+class BulkSuggestedResponse(BaseModel):
+    # Suggestion window, inclusive both ends: [as_of + 1, as_of + horizon_days].
+    # The accept route deletes existing rows in exactly this window, so the
+    # client can label "replaces N rows" from the same dates it displays.
+    window_start: date
+    window_end: date
+    # Same per-item shape as the single-item route, but points are weekly
+    # buckets (see services.demand_forecasting.bucket_weekly), not days.
+    items: list[SuggestedForecastResponse]
 
 
 class MrpPlanResponse(BaseModel):
@@ -177,6 +192,25 @@ def _to_response(fc: DemandForecast, item: Item) -> ForecastResponse:
         source=fc.source,
         notes=fc.notes,
         updated_at=fc.updated_at,
+    )
+
+
+def _suggestion_to_response(s) -> SuggestedForecastResponse:
+    return SuggestedForecastResponse(
+        item_id=str(s.item_id),
+        item_sku=s.item_sku,
+        item_name=s.item_name,
+        method_used=s.method_used,
+        history_points=s.history_points,
+        points=[
+            SuggestedForecastPoint(
+                period_start=p.period_start,
+                quantity=Decimal(str(round(p.yhat, 4))),
+                lower=Decimal(str(round(p.lower, 4))) if p.lower is not None else None,
+                upper=Decimal(str(round(p.upper, 4))) if p.upper is not None else None,
+            )
+            for p in s.points
+        ],
     )
 
 
@@ -413,6 +447,27 @@ async def delete_forecast(
         target=str(forecast_id),
     )
     await db.commit()
+
+
+@router.get("/suggested", response_model=BulkSuggestedResponse)
+async def list_suggested_forecasts(
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Weekly-bucketed, read-only demand suggestions for every item with
+    consumption history, for review before POST /forecasts/suggested/accept."""
+    if horizon_days <= 0 or horizon_days > 365:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_days must be between 1 and 365")
+    as_of = datetime.now(timezone.utc).date()
+    suggestions = await compute_weekly_suggestions(
+        db, current.org_id, horizon_days=horizon_days, as_of=as_of
+    )
+    return BulkSuggestedResponse(
+        window_start=as_of + timedelta(days=1),
+        window_end=as_of + timedelta(days=horizon_days),
+        items=[_suggestion_to_response(s) for s in suggestions],
+    )
 
 
 @router.get("/suggested/{item_id}", response_model=SuggestedForecastResponse)

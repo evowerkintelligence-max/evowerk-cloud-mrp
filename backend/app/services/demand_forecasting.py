@@ -108,20 +108,16 @@ def _series_for_item(daily: dict[date, Decimal], lookback_days: int, as_of: date
     ]
 
 
-async def compute_demand_forecast(
-    db: AsyncSession,
-    org_id: uuid.UUID,
+def _forecast_from_daily(
     item_id: uuid.UUID,
+    daily: dict[date, Decimal],
     *,
-    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    horizon_days: int = DEFAULT_HORIZON_DAYS,
+    lookback_days: int,
+    horizon_days: int,
+    as_of: date,
 ) -> DemandForecastResult:
-    """Data-driven demand projection for one item, for the caller to review
-    before turning it into an actual DemandForecast (upsert_forecast) -
-    read-only and side-effect-free, same boundary as inventory analytics."""
-    as_of = datetime.now(timezone.utc).date()
-    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-    daily = (await daily_consumption_by_item(db, org_id, since, item_ids={item_id})).get(item_id, {})
+    """The per-item math shared by compute_demand_forecast (one item, its own
+    history query) and compute_weekly_suggestions (all items, one bulk query)."""
     values = _series_for_item(daily, lookback_days, as_of)
     non_zero_days = sum(1 for v in values if v > 0)
 
@@ -156,3 +152,96 @@ async def compute_demand_forecast(
         )
 
     return DemandForecastResult(item_id=item_id, method_used=method, history_points=non_zero_days, points=points)
+
+
+async def compute_demand_forecast(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    item_id: uuid.UUID,
+    *,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+) -> DemandForecastResult:
+    """Data-driven demand projection for one item, for the caller to review
+    before turning it into an actual DemandForecast (upsert_forecast) -
+    read-only and side-effect-free, same boundary as inventory analytics."""
+    as_of = datetime.now(timezone.utc).date()
+    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    daily = (await daily_consumption_by_item(db, org_id, since, item_ids={item_id})).get(item_id, {})
+    return _forecast_from_daily(
+        item_id, daily, lookback_days=lookback_days, horizon_days=horizon_days, as_of=as_of
+    )
+
+
+@dataclass
+class ItemWeeklySuggestion:
+    item_id: uuid.UUID
+    item_sku: str
+    item_name: str
+    method_used: str
+    history_points: int
+    points: list[ForecastPoint]  # weekly buckets, not days
+
+
+async def compute_weekly_suggestions(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    as_of: date | None = None,
+    item_ids: set[uuid.UUID] | None = None,
+) -> list[ItemWeeklySuggestion]:
+    """Weekly-bucketed suggestions for every item with consumption history
+    (or the given subset). One bulk history query, then the same per-item math
+    as compute_demand_forecast, then bucket_weekly. Items whose history is
+    empty in the lookback window are omitted entirely: no history means no
+    suggestion, not a zero suggestion.
+
+    as_of is injectable so a route can compute one date and share it between
+    this projection and its own delete window.
+    """
+    # ponytail: in-request loop over items; move to a background job if org
+    # catalogs reach tens of thousands of items
+    if as_of is None:
+        as_of = datetime.now(timezone.utc).date()
+    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    daily_all = await daily_consumption_by_item(db, org_id, since, item_ids=item_ids)
+    if not daily_all:
+        return []
+
+    from sqlalchemy import select
+
+    from app.models.bom import Item
+
+    items = {
+        item.id: item
+        for item in (
+            await db.execute(select(Item).where(Item.org_id == org_id, Item.id.in_(daily_all.keys())))
+        )
+        .scalars()
+        .all()
+    }
+
+    suggestions: list[ItemWeeklySuggestion] = []
+    for iid, daily in daily_all.items():
+        item = items.get(iid)
+        if item is None:
+            continue
+        result = _forecast_from_daily(
+            iid, daily, lookback_days=lookback_days, horizon_days=horizon_days, as_of=as_of
+        )
+        if result.method_used == "no_data":
+            continue
+        suggestions.append(
+            ItemWeeklySuggestion(
+                item_id=iid,
+                item_sku=item.sku,
+                item_name=item.name,
+                method_used=result.method_used,
+                history_points=result.history_points,
+                points=bucket_weekly(result.points),
+            )
+        )
+    suggestions.sort(key=lambda s: s.item_sku)
+    return suggestions

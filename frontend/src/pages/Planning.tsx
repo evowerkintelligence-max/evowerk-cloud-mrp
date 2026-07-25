@@ -14,6 +14,7 @@ import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { SendToReportButton, fmt } from "./analytics/shared";
 import { SuggestFromHistoryCard } from "./planning/SuggestFromHistory";
+import { ImportForecastsCsvSection } from "./planning/ImportForecastsCsv";
 
 interface ItemResponse {
   id: string;
@@ -262,6 +263,8 @@ export function Planning() {
               </TBody>
             </Table>
           </TableWrap>
+
+          <ImportForecastsCsvSection items={items.data ?? []} />
         </CardContent>
       </Card>
 

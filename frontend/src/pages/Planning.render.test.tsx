@@ -96,6 +96,14 @@ describe("Planning grid", () => {
     expect(html).toContain("Everything is covered");
   });
 
+  it("colours a missing row red and an in-stock row green", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    const pumpRow = html.slice(html.indexOf("Coolant pump"), html.indexOf("Housing kit"));
+    const housingRow = html.slice(html.indexOf("Housing kit"));
+    expect(pumpRow).toContain("text-destructive");
+    expect(housingRow).toContain("text-success");
+  });
+
   it("invites the user to add a bill of materials when there is nothing to plan", () => {
     const html = render((qc) =>
       qc.setQueryData(["planning-grid"], {

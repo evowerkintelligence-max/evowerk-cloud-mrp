@@ -41,7 +41,7 @@ export function Planning() {
     <div>
       <PageHeader
         title="Planning"
-        description="Type how many you plan to make. Red means materials are missing."
+        description="Type how many you plan to make. Green is in stock, amber is on the way, red is missing."
       />
 
       {grid.isError && <Alert variant="destructive">{(grid.error as Error).message}</Alert>}
@@ -64,7 +64,7 @@ export function Planning() {
                 <TR>
                   <TH>Product</TH>
                   <TH>Planned</TH>
-                  <TH>In stock</TH>
+                  <TH>On hand</TH>
                   <TH>Materials</TH>
                   <TH>Ready by</TH>
                 </TR>
@@ -80,7 +80,7 @@ export function Planning() {
                       <Input
                         type="number"
                         min="0"
-                        step="1"
+                        step="0.0001"
                         className="w-24 text-right"
                         aria-label={`Planned quantity for ${product.item_name}`}
                         defaultValue={trimQty(product.planned_qty)}
@@ -97,7 +97,7 @@ export function Planning() {
                         </span>
                       )}
                     </TD>
-                    <TD>{product.ready_by ?? "—"}</TD>
+                    <TD>{product.ready_by ?? "Not scheduled"}</TD>
                   </TR>
                 ))}
               </TBody>

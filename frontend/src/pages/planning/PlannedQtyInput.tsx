@@ -49,9 +49,14 @@ export function PlannedQtyInput({
     },
     onError: (e: Error) => {
       // The server refused this value, so the row must stop showing a number
-      // it never actually saved. Revert to what the server last accepted.
-      setQty(trimQty(product.planned_qty));
-      setNeededBy(product.needed_by ?? "");
+      // it never actually saved. Revert to what the server last accepted,
+      // unless the user has already re-armed the scheduler with a newer edit
+      // (same guard the prop-sync effect below uses), or this overwrites
+      // whatever they are currently typing.
+      if (!scheduler.current?.isPending()) {
+        setQty(trimQty(product.planned_qty));
+        setNeededBy(product.needed_by ?? "");
+      }
       onError(`${product.item_name}: ${e.message}`);
     },
   });
@@ -82,7 +87,7 @@ export function PlannedQtyInput({
   useEffect(() => () => flush(), []);
 
   if (readOnly) {
-    return <span aria-label={`Planned quantity for ${product.item_sku}`}>{qty}</span>;
+    return <span>{qty}</span>;
   }
 
   return (
@@ -117,6 +122,11 @@ export function PlannedQtyInput({
           size="sm"
           disabled={save.isPending}
           aria-label={`Use suggested quantity for ${product.item_sku}`}
+          // Keep focus on the input through mousedown so no blur (and no
+          // flush) fires before the click lands. Without this, save.isPending
+          // flips true a few ms after the flush and disables this button
+          // before mouseup, so the click is dropped and the chip is stuck.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             // Clear the pending timer first: without this, the keystroke the
             // user typed just before clicking still fires after the debounce

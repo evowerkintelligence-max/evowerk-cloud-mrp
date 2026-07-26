@@ -32,9 +32,7 @@ function summaryLine(summary: PlanningGridResponse["summary"]): string {
 export function Planning() {
   const [error, setError] = useState<string | null>(null);
   const currentUser = useCurrentUser();
-  // Fail open while the role is still loading (matches the input the user
-  // already saw); fail closed only once we know for certain it's a member.
-  const canEdit = !currentUser.data || currentUser.data.role === "owner" || currentUser.data.role === "manager";
+  const canEdit = currentUser.data?.role === "owner" || currentUser.data?.role === "manager";
   const grid = useQuery<PlanningGridResponse>({
     queryKey: ["planning-grid"],
     queryFn: async () => {

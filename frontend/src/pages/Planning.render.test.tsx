@@ -42,6 +42,10 @@ const GRID = {
 
 function render(seed: (qc: QueryClient) => void = () => {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // Default to an editable role so the existing tests (written before the
+  // read-only role check existed) keep exercising the editable grid; the
+  // read-only test below overrides this with a member role.
+  qc.setQueryData(["org-me"], { role: "owner" });
   seed(qc);
   return renderToString(
     createElement(
@@ -151,5 +155,13 @@ describe("Planning grid", () => {
   it("shows the needed-by date next to the quantity", () => {
     const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
     expect(html).toContain('value="2026-08-12"');
+  });
+
+  it("renders the planned quantity as plain text for a member, not an input", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], GRID);
+      qc.setQueryData(["org-me"], { role: "member" });
+    });
+    expect(html).not.toContain("<input");
   });
 });

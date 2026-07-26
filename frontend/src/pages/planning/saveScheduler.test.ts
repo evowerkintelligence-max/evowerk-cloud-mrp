@@ -60,6 +60,36 @@ describe("createSaveScheduler", () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  it("re-arms correctly after a flush and fires the newer payload", () => {
+    const save = vi.fn();
+    const scheduler = createSaveScheduler(save, DELAY);
+
+    scheduler.schedule({ qty: "1" });
+    scheduler.flush();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ qty: "1" });
+
+    scheduler.schedule({ qty: "2" });
+    expect(save).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(DELAY);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith({ qty: "2" });
+  });
+
+  it("flush after several re-schedules carries the latest payload, not an earlier one", () => {
+    const save = vi.fn();
+    const scheduler = createSaveScheduler(save, DELAY);
+
+    scheduler.schedule({ qty: "1" });
+    scheduler.schedule({ qty: "12" });
+    scheduler.schedule({ qty: "120" });
+    scheduler.flush();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ qty: "120" });
+  });
+
   it("flush is a no-op when nothing is pending", () => {
     const save = vi.fn();
     const scheduler = createSaveScheduler(save, DELAY);

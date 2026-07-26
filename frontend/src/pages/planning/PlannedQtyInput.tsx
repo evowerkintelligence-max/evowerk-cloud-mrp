@@ -5,12 +5,46 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { trimQty, type GridProduct } from "./types";
 import { createSaveScheduler, type SaveScheduler } from "./saveScheduler";
+import { shouldWarnBeforeCollapse } from "./collapseWarning";
 
 // Long enough that typing "120" saves once rather than three times, short
 // enough that the colours update while the user is still looking at the row.
 const SAVE_DEBOUNCE_MS = 600;
 
 type SavePayload = { quantity: string; needed_by: string | null };
+
+/** The prompt shown instead of saving when a product planned across more
+ * than one date would collapse to a single date. The decision of whether to
+ * show this lives in collapseWarning.ts; this is only the copy and buttons,
+ * kept as its own component so it can be render-tested with plain props. */
+export function CollapseConfirm({
+  bucketCount,
+  pending,
+  onConfirm,
+  onCancel,
+}: {
+  bucketCount: number;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="space-y-1 rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
+      <p>
+        This plan is spread across {bucketCount} dates. Saving one number will replace all of
+        them with a single date. This cannot be undone.
+      </p>
+      <div className="flex gap-2">
+        <Button type="button" size="sm" disabled={pending} onClick={onConfirm}>
+          Save one date
+        </Button>
+        <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function PlannedQtyInput({
   product,
@@ -26,6 +60,10 @@ export function PlannedQtyInput({
   const queryClient = useQueryClient();
   const [qty, setQty] = useState(trimQty(product.planned_qty));
   const [neededBy, setNeededBy] = useState(product.needed_by ?? "");
+  const [confirmingCollapse, setConfirmingCollapse] = useState(false);
+  // Sticky for the life of this row: once the user has agreed to collapse
+  // the multi-date plan, further edits in this session should not ask again.
+  const collapseConfirmed = useRef(false);
   const scheduler = useRef<SaveScheduler<SavePayload> | null>(null);
 
   const save = useMutation({
@@ -75,7 +113,31 @@ export function PlannedQtyInput({
   }, [product.planned_qty, product.needed_by]);
 
   function scheduleSave(nextQty: string, nextDate: string) {
-    scheduler.current!.schedule({ quantity: nextQty || "0", needed_by: nextDate || null });
+    const quantity = nextQty || "0";
+    const needed_by = nextDate || null;
+
+    if (Number(quantity) > 0 && !needed_by && product.planned_bucket_count === 0) {
+      // Nothing planned yet and no date given: the server will reject this
+      // with a 400, so don't send it. The date field's own hint below asks
+      // for a date instead, and saves as soon as one is picked.
+      scheduler.current!.cancel();
+      return;
+    }
+
+    if (
+      shouldWarnBeforeCollapse({
+        plannedBucketCount: product.planned_bucket_count,
+        quantityChanged: trimQty(quantity) !== trimQty(product.planned_qty),
+        alreadyConfirmed: collapseConfirmed.current,
+      })
+    ) {
+      scheduler.current!.cancel();
+      setConfirmingCollapse(true);
+      return;
+    }
+
+    setConfirmingCollapse(false);
+    scheduler.current!.schedule({ quantity, needed_by });
   }
 
   // No save button on this screen, so a pending edit must never be silently
@@ -89,6 +151,11 @@ export function PlannedQtyInput({
   if (readOnly) {
     return <span>{qty}</span>;
   }
+
+  // Nothing planned for this product yet, and the user has typed a quantity
+  // above 0 with no date chosen: the row must not silently fail to save.
+  const dateRequired = Number(qty) > 0 && !neededBy && product.planned_bucket_count === 0;
+  const dateHintId = `needed-by-hint-${product.item_id}`;
 
   return (
     <div className="space-y-1">
@@ -109,6 +176,8 @@ export function PlannedQtyInput({
         type="date"
         className="w-36"
         aria-label={`Needed by for ${product.item_sku}`}
+        aria-invalid={dateRequired}
+        aria-describedby={dateRequired ? dateHintId : undefined}
         value={neededBy}
         onChange={(e) => {
           setNeededBy(e.target.value);
@@ -116,6 +185,27 @@ export function PlannedQtyInput({
         }}
         onBlur={flush}
       />
+      {dateRequired && (
+        <p id={dateHintId} className="text-xs text-warning">
+          Pick a date to save this quantity.
+        </p>
+      )}
+      {confirmingCollapse && (
+        <CollapseConfirm
+          bucketCount={product.planned_bucket_count}
+          pending={save.isPending}
+          onConfirm={() => {
+            collapseConfirmed.current = true;
+            setConfirmingCollapse(false);
+            save.mutate({ quantity: qty || "0", needed_by: neededBy || null });
+          }}
+          onCancel={() => {
+            setConfirmingCollapse(false);
+            setQty(trimQty(product.planned_qty));
+            setNeededBy(product.needed_by ?? "");
+          }}
+        />
+      )}
       {Number(product.planned_qty) <= 0 && product.suggested_qty !== null && (
         <Button
           variant="ghost"
@@ -134,6 +224,11 @@ export function PlannedQtyInput({
             scheduler.current!.cancel();
             const suggested = trimQty(product.suggested_qty as string);
             setQty(suggested);
+            if (Number(suggested) > 0 && !neededBy && product.planned_bucket_count === 0) {
+              // Same rule as typing: nothing planned yet needs a date before
+              // this can be saved. The hint below the date field takes over.
+              return;
+            }
             save.mutate({ quantity: suggested, needed_by: neededBy || null });
           }}
         >

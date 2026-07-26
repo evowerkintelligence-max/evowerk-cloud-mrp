@@ -90,6 +90,9 @@ export function Planning() {
 
       {grid.data && grid.data.products.length > 0 && (
         <>
+          <p className="mb-1 text-xs text-muted-foreground">
+            This covers {grid.data.horizon_start} to {grid.data.horizon_end}.
+          </p>
           <p className="mb-4 text-sm font-medium">{summaryLine(grid.data.summary)}</p>
           <TableWrap>
             <Table>

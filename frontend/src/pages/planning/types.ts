@@ -21,6 +21,9 @@ export interface GridProduct {
   item_name: string;
   planned_qty: string;
   needed_by: string | null;
+  /** How many separate dated rows make up planned_qty: 0 nothing planned,
+   * 1 normal, more than 1 only for an imported or legacy plan. */
+  planned_bucket_count: number;
   on_hand: string;
   materials_status: "in_stock" | "arriving" | "missing";
   missing_materials: string[];

@@ -4,6 +4,7 @@ import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Planning } from "./Planning";
+import { CollapseConfirm } from "./planning/PlannedQtyInput";
 
 const GRID = {
   horizon_start: "2026-07-26",
@@ -15,6 +16,7 @@ const GRID = {
       item_name: "Coolant pump",
       planned_qty: "50.0000",
       needed_by: "2026-08-12",
+      planned_bucket_count: 1,
       on_hand: "8.0000",
       materials_status: "missing",
       missing_materials: ["ALU-6061", "SEAL-V2"],
@@ -28,6 +30,7 @@ const GRID = {
       item_name: "Housing kit",
       planned_qty: "200.0000",
       needed_by: "2026-08-30",
+      planned_bucket_count: 1,
       on_hand: "240.0000",
       materials_status: "in_stock",
       missing_materials: [],
@@ -128,6 +131,7 @@ describe("Planning grid", () => {
             ...GRID.products[0],
             planned_qty: "0.0000",
             needed_by: null,
+            planned_bucket_count: 0,
             suggested_qty: "60.0000",
           },
         ],
@@ -155,6 +159,50 @@ describe("Planning grid", () => {
   it("shows the needed-by date next to the quantity", () => {
     const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
     expect(html).toContain('value="2026-08-12"');
+  });
+
+  it("states the period the grid covers", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).toContain("2026-07-26 to 2026-10-24");
+  });
+
+  it("asks for a date when a quantity is typed on a product with nothing planned yet", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [
+          {
+            ...GRID.products[0],
+            planned_qty: "50.0000",
+            needed_by: null,
+            planned_bucket_count: 0,
+            suggested_qty: null,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Pick a date to save this quantity");
+    expect(html).toContain('aria-invalid="true"');
+  });
+
+  it("does not ask for a date once a product already has a plan", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).not.toContain("Pick a date to save this quantity");
+  });
+
+  it("warns before collapsing a plan spread across several dates", () => {
+    const html = renderToString(
+      createElement(CollapseConfirm, {
+        bucketCount: 13,
+        pending: false,
+        onConfirm: () => {},
+        onCancel: () => {},
+      }),
+    )
+      .split("<!-- -->")
+      .join("");
+    expect(html).toContain("spread across 13 dates");
+    expect(html).toContain("cannot be undone");
   });
 
   it("renders the planned quantity as plain text for a member, not an input", () => {

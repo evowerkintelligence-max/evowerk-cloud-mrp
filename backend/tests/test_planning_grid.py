@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.security import hash_password
 from app.models.inventory import InventoryTransaction
 from app.models.user import User
-from app.services.planning_grid import DEFAULT_NEEDED_BY_DAYS, GRID_HORIZON_DAYS
+from app.services.planning_grid import GRID_HORIZON_DAYS
 
 pytestmark = pytest.mark.asyncio
 
@@ -75,7 +75,12 @@ async def _create_active_bom(client, token, produced_item, lines):
 
 
 async def _plan(client, token, item, qty, needed_by=None):
-    """Set the grid's planned quantity for an item."""
+    """Set the grid's planned quantity for an item. Defaults needed_by to two
+    weeks out for tests that plan for the first time and don't care about the
+    date - the endpoint itself no longer invents one, so callers that only
+    want a quantity in place still need to supply something."""
+    if needed_by is None and Decimal(str(qty)) > 0:
+        needed_by = str(_today() + timedelta(days=14))
     body = {"quantity": str(qty)}
     if needed_by is not None:
         body["needed_by"] = needed_by
@@ -118,14 +123,15 @@ async def test_forecasted_item_without_bom_gets_a_row(client):
     token = await _register_and_login(client)
     widget = await _create_item(client, token, "WIDGET-1")
 
-    await _plan(client, token, widget, 10)
+    today = datetime.now(timezone.utc).date()
+    needed_by = str(today + timedelta(days=10))
+    await _plan(client, token, widget, 10, needed_by=needed_by)
     grid = await _grid(client, token)
 
     row = _product(grid, "WIDGET-1")
     assert row["planned_qty"] == "10.0000"
     assert Decimal(row["on_hand"]) == Decimal(0)
-    today = datetime.now(timezone.utc).date()
-    assert row["needed_by"] == (today + timedelta(days=DEFAULT_NEEDED_BY_DAYS)).isoformat()
+    assert row["needed_by"] == needed_by
 
 
 async def test_missing_when_a_component_is_short(client):
@@ -270,7 +276,7 @@ async def test_manager_can_set_planned_quantity(client, test_engine):
 
     res = await client.put(
         f"/planning/grid/{widget['id']}",
-        json={"quantity": "10"},
+        json={"quantity": "10", "needed_by": str(_today() + timedelta(days=10))},
         headers={"Authorization": f"Bearer {manager_token}"},
     )
     assert res.status_code == 200, res.text
@@ -682,14 +688,86 @@ async def test_zero_clears_the_plan(client):
     assert cleared["needed_by"] is None
 
 
-async def test_quantity_defaults_to_two_weeks_out(client):
+async def test_quantity_with_no_date_and_no_existing_plan_is_rejected(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "10"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 400
+    assert "date" in res.json()["detail"].lower()
+
+
+async def test_quantity_edit_without_a_date_reuses_the_existing_plan_date(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    needed_by = str(_today() + timedelta(days=9))
+    await _plan(client, token, widget, 10, needed_by=needed_by)
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "25"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["planned_qty"] == "25.0000"
+    assert body["needed_by"] == needed_by
+
+
+async def test_zero_with_no_date_still_clears_the_plan(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "0"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["planned_qty"] == "0.0000"
+    assert res.json()["needed_by"] is None
+
+
+async def test_planned_bucket_count_is_one_for_a_normally_planned_item(client):
     token = await _register_and_login(client)
     widget = await _create_item(client, token, "WIDGET-1")
 
     await _plan(client, token, widget, 10)
     grid = await _grid(client, token)
 
-    assert _product(grid, "WIDGET-1")["needed_by"] == str(_today() + timedelta(days=14))
+    assert _product(grid, "WIDGET-1")["planned_bucket_count"] == 1
+
+
+async def test_planned_bucket_count_is_more_than_one_for_a_multi_row_plan(client):
+    """An imported or legacy forecast can be spread across several dated rows
+    inside the window - the frontend needs the count so it can warn before
+    editing the quantity collapses them into one."""
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    headers = {"Authorization": f"Bearer {token}"}
+    first = str(_today() + timedelta(days=7))
+    second = str(_today() + timedelta(days=14))
+    for period, qty in [(first, "5"), (second, "8")]:
+        res = await client.post(
+            "/forecasts",
+            json={"item_id": widget["id"], "period_start": period, "quantity": qty},
+            headers=headers,
+        )
+        assert res.status_code == 200, res.text
+
+    grid = await _grid(client, token)
+
+    row = _product(grid, "WIDGET-1")
+    assert row["planned_bucket_count"] == 2
+    assert row["planned_qty"] == "13.0000"
+    assert row["needed_by"] == first
 
 
 async def test_negative_quantity_is_rejected(client):

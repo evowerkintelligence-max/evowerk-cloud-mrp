@@ -25,10 +25,6 @@ GRID_HORIZON_DAYS = 90
 # suggestion, so a row for it could never be anything but empty.
 CONSUMPTION_LOOKBACK_DAYS = DEFAULT_LOOKBACK_DAYS
 
-# Where a typed quantity lands when the user does not pick a date. Two weeks is
-# far enough out that most purchased parts can still arrive in time.
-DEFAULT_NEEDED_BY_DAYS = 14
-
 _STATUS_RANK = {"missing": 0, "arriving": 1, "in_stock": 2}
 
 
@@ -42,6 +38,11 @@ class GridProduct:
     planned_qty: Decimal
     # Earliest forecast period inside the window, None when planned_qty is 0.
     needed_by: date | None
+    # How many separate forecast rows inside the window make up planned_qty.
+    # 0 when nothing is planned, 1 for the normal single-date case, more than
+    # 1 only for an imported or legacy plan spread across several dates - the
+    # frontend needs this to warn before collapsing them into one on edit.
+    planned_bucket_count: int
     on_hand: Decimal
     # in_stock | arriving | missing, judged over the components reachable from
     # this product through active BOMs (or the product itself when it has none).
@@ -148,6 +149,7 @@ async def compute_planning_grid(
                 DemandForecast.item_id,
                 func.sum(DemandForecast.quantity),
                 func.min(DemandForecast.period_start),
+                func.count(DemandForecast.id),
             )
             .where(
                 DemandForecast.org_id == org_id,
@@ -157,7 +159,9 @@ async def compute_planning_grid(
             .group_by(DemandForecast.item_id)
         )
     ).all()
-    planned = {item_id: (qty, first) for item_id, qty, first in forecast_rows}
+    planned = {
+        item_id: (qty, first, count) for item_id, qty, first, count in forecast_rows
+    }
 
     produced = set(children)
     components = {child for kids in children.values() for child, _ in kids}
@@ -190,7 +194,7 @@ async def compute_planning_grid(
         item = items.get(product_id)
         if item is None:
             continue
-        qty, first_period = planned.get(product_id, (Decimal(0), None))
+        qty, first_period, bucket_count = planned.get(product_id, (Decimal(0), None, 0))
         evaluation = _reachable_components(product_id, children) or {product_id}
 
         missing_materials: list[str] = []
@@ -244,6 +248,7 @@ async def compute_planning_grid(
                 item_name=item.name,
                 planned_qty=qty,
                 needed_by=first_period,
+                planned_bucket_count=bucket_count,
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,

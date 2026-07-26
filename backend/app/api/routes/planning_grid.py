@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
@@ -15,7 +15,6 @@ from app.middleware.audit import log_event
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.services.planning_grid import (
-    DEFAULT_NEEDED_BY_DAYS,
     GridProduct,
     compute_planning_grid,
     resolve_grid_window,
@@ -45,6 +44,7 @@ class GridProductResponse(BaseModel):
     item_name: str
     planned_qty: Decimal
     needed_by: date | None
+    planned_bucket_count: int
     on_hand: Decimal
     materials_status: str
     missing_materials: list[str]
@@ -84,6 +84,7 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         item_name=product.item_name,
         planned_qty=product.planned_qty,
         needed_by=product.needed_by,
+        planned_bucket_count=product.planned_bucket_count,
         on_hand=product.on_hand,
         materials_status=product.materials_status,
         missing_materials=product.missing_materials,
@@ -179,12 +180,34 @@ async def set_planned_quantity(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "That quantity is too large. Please enter a smaller number.")
     item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     horizon_start, horizon_end = resolve_grid_window()
-    needed_by = body.needed_by or horizon_start + timedelta(days=DEFAULT_NEEDED_BY_DAYS)
-    if not horizon_start <= needed_by <= horizon_end:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Pick a date between {horizon_start} and {horizon_end}",
-        )
+
+    needed_by = body.needed_by
+    if body.quantity > 0:
+        if needed_by is None:
+            # No date typed: reuse whatever date the item is already planned
+            # against inside the window, rather than inventing one. Editing
+            # the quantity on an already-planned row must not demand a date
+            # the user already gave.
+            needed_by = (
+                await db.execute(
+                    select(func.min(DemandForecast.period_start)).where(
+                        DemandForecast.org_id == current.org_id,
+                        DemandForecast.item_id == item_id,
+                        DemandForecast.period_start >= horizon_start,
+                        DemandForecast.period_start <= horizon_end,
+                    )
+                )
+            ).scalar_one_or_none()
+            if needed_by is None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Pick the date you need these by.",
+                )
+        if not horizon_start <= needed_by <= horizon_end:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Pick a date between {horizon_start} and {horizon_end}",
+            )
 
     deleted = await db.execute(
         delete(DemandForecast).where(
@@ -213,7 +236,7 @@ async def set_planned_quantity(
         target=str(item_id),
         metadata={
             "quantity": str(body.quantity),
-            "needed_by": needed_by.isoformat(),
+            "needed_by": needed_by.isoformat() if needed_by else None,
             "rows_replaced": deleted.rowcount,
         },
     )
@@ -230,6 +253,7 @@ async def set_planned_quantity(
         item_name=item.name,
         planned_qty=Decimal("0.0000"),
         needed_by=None,
+        planned_bucket_count=0,
         on_hand=Decimal("0.0000"),
         materials_status="in_stock",
         missing_materials=[],

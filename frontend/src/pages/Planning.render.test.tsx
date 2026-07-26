@@ -231,4 +231,35 @@ describe("Planning grid", () => {
     });
     expect(html).not.toContain("To buy for the plan above");
   });
+
+  it("hides the engine detail until the row is expanded", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [
+          {
+            ...GRID.products[0],
+            detail: [
+              {
+                item_id: "p-1",
+                item_sku: "PUMP-A2",
+                item_name: "Coolant pump",
+                is_manufactured: true,
+                gross_demand: "50.0000",
+                on_hand: "8.0000",
+                on_order: "0.0000",
+                on_draft: "0.0000",
+                net_requirement: "42.0000",
+                suggested_order_quantity: "42.0000",
+                need_by_date: "2026-08-12",
+                suggested_order_date: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Show working");
+    expect(html).not.toContain("Still needed");
+  });
 });

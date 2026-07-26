@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarRange } from "lucide-react";
 import { apiFetch } from "../api/client";
@@ -7,9 +7,11 @@ import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { PlannedQtyInput } from "./planning/PlannedQtyInput";
+import { ProductDetail } from "./planning/ProductDetail";
 import { ToBuyPanel } from "./planning/ToBuyPanel";
 import {
   materialsStatusLabel,
@@ -32,6 +34,7 @@ function summaryLine(summary: PlanningGridResponse["summary"]): string {
 
 export function Planning() {
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const currentUser = useCurrentUser();
   const canEdit = currentUser.data?.role === "owner" || currentUser.data?.role === "manager";
   // POST /mrp/generate-pos is gated to owner only on the backend (stricter
@@ -78,37 +81,61 @@ export function Planning() {
                   <TH>On hand</TH>
                   <TH>Materials</TH>
                   <TH>Ready by</TH>
+                  <TH className="text-right">Detail</TH>
                 </TR>
               </THead>
               <TBody>
-                {grid.data.products.map((product) => (
-                  <TR key={product.item_id}>
-                    <TD>
-                      <span className="font-medium">{product.item_name}</span>
-                      <span className="block text-xs text-muted-foreground">{product.item_sku}</span>
-                    </TD>
-                    <TD>
-                      <PlannedQtyInput
-                        product={product}
-                        onError={setError}
-                        onSaved={() => setError(null)}
-                        readOnly={!canEdit}
-                      />
-                    </TD>
-                    <TD>{trimQty(product.on_hand)}</TD>
-                    <TD>
-                      <Badge variant={materialsStatusVariant(product.materials_status)}>
-                        {materialsStatusLabel(product)}
-                      </Badge>
-                      {product.missing_materials.length > 0 && (
-                        <span className="block text-xs text-muted-foreground">
-                          {product.missing_materials.join(", ")}
-                        </span>
+                {grid.data.products.map((product) => {
+                  const isExpanded = expanded === product.item_id;
+                  return (
+                    <Fragment key={product.item_id}>
+                      <TR>
+                        <TD>
+                          <span className="font-medium">{product.item_name}</span>
+                          <span className="block text-xs text-muted-foreground">{product.item_sku}</span>
+                        </TD>
+                        <TD>
+                          <PlannedQtyInput
+                            product={product}
+                            onError={setError}
+                            onSaved={() => setError(null)}
+                            readOnly={!canEdit}
+                          />
+                        </TD>
+                        <TD>{trimQty(product.on_hand)}</TD>
+                        <TD>
+                          <Badge variant={materialsStatusVariant(product.materials_status)}>
+                            {materialsStatusLabel(product)}
+                          </Badge>
+                          {product.missing_materials.length > 0 && (
+                            <span className="block text-xs text-muted-foreground">
+                              {product.missing_materials.join(", ")}
+                            </span>
+                          )}
+                        </TD>
+                        <TD>{product.ready_by ?? "Not scheduled"}</TD>
+                        <TD className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-expanded={isExpanded}
+                            aria-label={`${isExpanded ? "Hide" : "Show"} working for ${product.item_name}`}
+                            onClick={() => setExpanded(isExpanded ? null : product.item_id)}
+                          >
+                            {isExpanded ? "Hide working" : "Show working"}
+                          </Button>
+                        </TD>
+                      </TR>
+                      {isExpanded && (
+                        <TR>
+                          <TD colSpan={6}>
+                            <ProductDetail lines={product.detail} />
+                          </TD>
+                        </TR>
                       )}
-                    </TD>
-                    <TD>{product.ready_by ?? "Not scheduled"}</TD>
-                  </TR>
-                ))}
+                    </Fragment>
+                  );
+                })}
               </TBody>
             </Table>
           </TableWrap>

@@ -80,7 +80,7 @@ server {
     # backend prefix, so a non-browser client there correctly reaches the
     # backend instead - only list a route here if nothing in app/main.py
     # would ever answer it.
-    location ~ ^/(|login|register|forgot-password|reset-password|verify-email|oauth|mfa|procurement|warehouse|planning|sql-editor|ask|runs|report-builder|mfg-forecast)(/|$) {
+    location ~ ^/(|login|register|forgot-password|reset-password|verify-email|oauth|mfa|procurement|warehouse|sql-editor|ask|runs|report-builder|mfg-forecast)(/|$) {
         try_files /index.html =404;
     }
 

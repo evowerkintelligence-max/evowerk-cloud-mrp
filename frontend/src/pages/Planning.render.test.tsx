@@ -133,7 +133,18 @@ describe("Planning grid", () => {
   });
 
   it("does not offer a suggestion once a quantity is planned", () => {
-    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [
+          {
+            ...GRID.products[0],
+            planned_qty: "50.0000",
+            suggested_qty: "60.0000",
+          },
+        ],
+      }),
+    );
     expect(html).not.toContain("from history");
   });
 

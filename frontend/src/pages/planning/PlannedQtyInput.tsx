@@ -4,34 +4,35 @@ import { apiFetch } from "../../api/client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { trimQty, type GridProduct } from "./types";
+import { createSaveScheduler, type SaveScheduler } from "./saveScheduler";
 
 // Long enough that typing "120" saves once rather than three times, short
 // enough that the colours update while the user is still looking at the row.
 const SAVE_DEBOUNCE_MS = 600;
 
+type SavePayload = { quantity: string; needed_by: string | null };
+
 export function PlannedQtyInput({
   product,
   onError,
+  onSaved,
+  readOnly,
 }: {
   product: GridProduct;
   onError: (message: string) => void;
+  onSaved: () => void;
+  readOnly: boolean;
 }) {
   const queryClient = useQueryClient();
   const [qty, setQty] = useState(trimQty(product.planned_qty));
   const [neededBy, setNeededBy] = useState(product.needed_by ?? "");
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // The row can be re-fetched under us (another save, another user). Adopt the
-  // server's value unless the user is mid-edit, which the pending timer marks.
-  useEffect(() => {
-    if (timer.current === null) {
-      setQty(trimQty(product.planned_qty));
-      setNeededBy(product.needed_by ?? "");
-    }
-  }, [product.planned_qty, product.needed_by]);
+  const scheduler = useRef<SaveScheduler<SavePayload> | null>(null);
 
   const save = useMutation({
-    mutationFn: async (next: { quantity: string; needed_by: string | null }) => {
+    // Serializes mutations for this row: two rapid edits queue rather than
+    // race, so an older save can never land after a newer one.
+    scope: { id: product.item_id },
+    mutationFn: async (next: SavePayload) => {
       const res = await apiFetch(`/planning/grid/${product.item_id}`, {
         method: "PUT",
         body: JSON.stringify(next),
@@ -42,21 +43,47 @@ export function PlannedQtyInput({
       }
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["planning-grid"] }),
-    onError: (e: Error) => onError(e.message),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["planning-grid"] });
+      onSaved();
+    },
+    onError: (e: Error) => {
+      // The server refused this value, so the row must stop showing a number
+      // it never actually saved. Revert to what the server last accepted.
+      setQty(trimQty(product.planned_qty));
+      setNeededBy(product.needed_by ?? "");
+      onError(`${product.item_name}: ${e.message}`);
+    },
   });
 
-  function scheduleSave(nextQty: string, nextDate: string) {
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      save.mutate({ quantity: nextQty || "0", needed_by: nextDate || null });
-    }, SAVE_DEBOUNCE_MS);
+  if (scheduler.current === null) {
+    scheduler.current = createSaveScheduler<SavePayload>((next) => save.mutate(next), SAVE_DEBOUNCE_MS);
   }
 
-  useEffect(() => () => {
-    if (timer.current !== null) clearTimeout(timer.current);
-  }, []);
+  // The row can be re-fetched under us (another save, another user). Adopt the
+  // server's value unless the user is mid-edit, which a pending save marks.
+  useEffect(() => {
+    if (!scheduler.current?.isPending()) {
+      setQty(trimQty(product.planned_qty));
+      setNeededBy(product.needed_by ?? "");
+    }
+  }, [product.planned_qty, product.needed_by]);
+
+  function scheduleSave(nextQty: string, nextDate: string) {
+    scheduler.current!.schedule({ quantity: nextQty || "0", needed_by: nextDate || null });
+  }
+
+  // No save button on this screen, so a pending edit must never be silently
+  // discarded: flush it (save now) instead of just cancelling the timer.
+  function flush() {
+    scheduler.current!.flush();
+  }
+
+  useEffect(() => () => flush(), []);
+
+  if (readOnly) {
+    return <span aria-label={`Planned quantity for ${product.item_sku}`}>{qty}</span>;
+  }
 
   return (
     <div className="space-y-1">
@@ -65,28 +92,36 @@ export function PlannedQtyInput({
         min="0"
         step="0.0001"
         className="w-24 text-right"
-        aria-label={`Planned quantity for ${product.item_name}`}
+        aria-label={`Planned quantity for ${product.item_sku}`}
         value={qty}
         onChange={(e) => {
           setQty(e.target.value);
           scheduleSave(e.target.value, neededBy);
         }}
+        onBlur={flush}
       />
       <Input
         type="date"
         className="w-36"
-        aria-label={`Needed by for ${product.item_name}`}
+        aria-label={`Needed by for ${product.item_sku}`}
         value={neededBy}
         onChange={(e) => {
           setNeededBy(e.target.value);
           scheduleSave(qty, e.target.value);
         }}
+        onBlur={flush}
       />
       {Number(product.planned_qty) <= 0 && product.suggested_qty !== null && (
         <Button
           variant="ghost"
           size="sm"
+          disabled={save.isPending}
+          aria-label={`Use suggested quantity for ${product.item_sku}`}
           onClick={() => {
+            // Clear the pending timer first: without this, the keystroke the
+            // user typed just before clicking still fires after the debounce
+            // and overwrites the suggestion this click just accepted.
+            scheduler.current!.cancel();
             const suggested = trimQty(product.suggested_qty as string);
             setQty(suggested);
             save.mutate({ quantity: suggested, needed_by: neededBy || null });

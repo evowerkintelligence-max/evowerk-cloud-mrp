@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarRange } from "lucide-react";
 import { apiFetch } from "../api/client";
+import { useCurrentUser } from "@/lib/currentUser";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,10 @@ function summaryLine(summary: PlanningGridResponse["summary"]): string {
 
 export function Planning() {
   const [error, setError] = useState<string | null>(null);
+  const currentUser = useCurrentUser();
+  // Fail open while the role is still loading (matches the input the user
+  // already saw); fail closed only once we know for certain it's a member.
+  const canEdit = !currentUser.data || currentUser.data.role === "owner" || currentUser.data.role === "manager";
   const grid = useQuery<PlanningGridResponse>({
     queryKey: ["planning-grid"],
     queryFn: async () => {
@@ -80,7 +85,12 @@ export function Planning() {
                       <span className="block text-xs text-muted-foreground">{product.item_sku}</span>
                     </TD>
                     <TD>
-                      <PlannedQtyInput product={product} onError={setError} />
+                      <PlannedQtyInput
+                        product={product}
+                        onError={setError}
+                        onSaved={() => setError(null)}
+                        readOnly={!canEdit}
+                      />
                     </TD>
                     <TD>{trimQty(product.on_hand)}</TD>
                     <TD>

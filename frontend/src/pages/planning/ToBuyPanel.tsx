@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../../api/client";
@@ -7,11 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { trimQty, type GridToBuy } from "./types";
-
-interface GeneratePosResult {
-  created: { po_id: string; po_number: number; supplier_name: string; line_count: number }[];
-  unassigned: { item_id: string; item_sku: string }[];
-}
+import { describeOrderResult, type GeneratePosResult } from "./orderResult";
 
 const URGENCY_DOT: Record<GridToBuy["urgency"], string> = {
   overdue: "bg-destructive",
@@ -36,15 +33,32 @@ export function ToBuyPanel({ rows, canOrder }: { rows: GridToBuy[]; canOrder: bo
       return (await res.json()) as GeneratePosResult;
     },
     onSuccess: () => {
+      justOrdered.current = true;
       queryClient.invalidateQueries({ queryKey: ["planning-grid"] });
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
     },
   });
 
-  if (rows.length === 0) return null;
+  // A successful order empties `rows` (the drafted quantities count as
+  // incoming supply), so the result block must survive that refetch - that's
+  // the one rows change we deliberately ignore. Any other change to `rows`
+  // (e.g. the user edits a planned quantity and shortfalls repopulate) means
+  // the on-screen result is stale and should not sit next to a fresh list.
+  const justOrdered = useRef(false);
+  const rowsKey = rows.map((row) => row.item_id).join("|");
+  useEffect(() => {
+    if (justOrdered.current) {
+      justOrdered.current = false;
+      return;
+    }
+    order.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowsKey]);
 
-  const result = order.data;
   const error = order.error as Error | null;
+  const result = describeOrderResult(order.data);
+
+  if (rows.length === 0 && !result && !error) return null;
 
   return (
     <Card className="mt-8">
@@ -58,26 +72,28 @@ export function ToBuyPanel({ rows, canOrder }: { rows: GridToBuy[]; canOrder: bo
       </CardHeader>
       <CardContent className="space-y-3">
         {error && <Alert variant="destructive">{error.message}</Alert>}
-        <ul className="space-y-2">
-          {rows.map((row) => (
-            <li key={row.item_id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="flex items-center gap-2">
-                <span className={cn("size-2 rounded-full", URGENCY_DOT[row.urgency])} aria-hidden />
-                <span className="font-medium">{row.item_name}</span>
-                <span className="text-xs text-muted-foreground">{row.item_sku}</span>
-              </span>
-              <span className="text-muted-foreground">
-                {row.supplier_name
-                  ? `order ${trimQty(row.quantity)} from ${row.supplier_name}`
-                  : `order ${trimQty(row.quantity)}, no supplier set`}
-                {row.order_by ? ` · by ${row.order_by}` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {rows.length > 0 && (
+          <ul className="space-y-2">
+            {rows.map((row) => (
+              <li key={row.item_id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="flex items-center gap-2">
+                  <span className={cn("size-2 rounded-full", URGENCY_DOT[row.urgency])} aria-hidden />
+                  <span className="font-medium">{row.item_name}</span>
+                  <span className="text-xs text-muted-foreground">{row.item_sku}</span>
+                </span>
+                <span className="text-muted-foreground">
+                  {row.supplier_name
+                    ? `order ${trimQty(row.quantity)} from ${row.supplier_name}`
+                    : `order ${trimQty(row.quantity)}, no supplier set`}
+                  {row.order_by ? ` · by ${row.order_by}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
         {result && (
           <div className="space-y-2 rounded-lg border border-border p-4">
-            {result.created.length > 0 ? (
+            {result.created.length > 0 && (
               <ul className="space-y-1 text-sm">
                 {result.created.map((po) => (
                   <li key={po.po_id} className="flex items-center gap-2">
@@ -86,22 +102,26 @@ export function ToBuyPanel({ rows, canOrder }: { rows: GridToBuy[]; canOrder: bo
                   </li>
                 ))}
               </ul>
-            ) : (
+            )}
+            {result.showEmptyCreatedMessage && (
               <p className="text-sm text-muted-foreground">Nothing to order.</p>
             )}
-            {result.unassigned.length > 0 && (
+            {result.showUnassignedWarning && (
               <Alert variant="warning">
-                No supplier set for: {result.unassigned.map((u) => u.item_sku).join(", ")}. Set one
+                No supplier set for:{" "}
+                {result.unassigned.map((u) => `${u.item_name} (${u.item_sku})`).join(", ")}. Set one
                 under <Link to="/items" className="underline">Items</Link> and order again.
               </Alert>
             )}
-            <p className="text-sm text-muted-foreground">
-              Review and send them under{" "}
-              <Link to="/procurement" className="text-primary hover:underline">
-                Procurement
-              </Link>
-              .
-            </p>
+            {result.showProcurementPointer && (
+              <p className="text-sm text-muted-foreground">
+                Review and send them under{" "}
+                <Link to="/procurement" className="text-primary hover:underline">
+                  Procurement
+                </Link>
+                .
+              </p>
+            )}
           </div>
         )}
       </CardContent>

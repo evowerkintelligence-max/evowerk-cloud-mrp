@@ -214,6 +214,16 @@ describe("Planning grid", () => {
     expect(html).not.toContain("Order all missing materials");
   });
 
+  it("shows a manager the to-buy list but not the order button", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], { ...GRID, to_buy: TO_BUY });
+      qc.setQueryData(["org-me"], { role: "manager", adjust_approval_threshold: "0" });
+    });
+    expect(html).toContain("To buy for the plan above");
+    expect(html).toContain("Viton seal kit");
+    expect(html).not.toContain("Order all missing materials");
+  });
+
   it("hides the to-buy panel when there is nothing to buy", () => {
     const html = render((qc) => {
       qc.setQueryData(["planning-grid"], GRID);

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
+from app.models.procurement import Supplier
 from app.services.mrp import compute_mrp_plan, load_bom_children, load_on_hand
 
 # The grid never shows a horizon control - a non-technical user should not have
@@ -39,6 +40,32 @@ class GridProduct:
     # this product through active BOMs (or the product itself when it has none).
     materials_status: str
     missing_materials: list[str]
+    # Earliest date the planned quantity can actually be finished: today when
+    # every component is on the shelf, otherwise today plus the longest lead
+    # time among the components that must still arrive. None when nothing is
+    # planned. POs do not carry a promised delivery date yet, so an already
+    # -ordered component is assumed to take its full lead time again - the
+    # honest pessimistic read until PO dates exist.
+    ready_by: date | None
+
+
+_URGENCY_RANK = {"overdue": 0, "soon": 1, "later": 2}
+
+# An order date inside this many days is "soon" - near enough that the user
+# should act on this visit rather than the next one.
+SOON_DAYS = 7
+
+
+@dataclass
+class GridToBuy:
+    item_id: uuid.UUID
+    item_sku: str
+    item_name: str
+    # Already rounded up to the item's minimum order quantity by the engine.
+    quantity: Decimal
+    supplier_name: str | None
+    order_by: date | None
+    urgency: str  # overdue | soon | later
 
 
 @dataclass
@@ -46,6 +73,7 @@ class PlanningGrid:
     horizon_start: date
     horizon_end: date
     products: list[GridProduct]
+    to_buy: list[GridToBuy]
 
 
 def resolve_grid_window(as_of: date | None = None) -> tuple[date, date]:
@@ -116,7 +144,9 @@ async def compute_planning_grid(
     components = {child for kids in children.values() for child, _ in kids}
     product_ids = (produced - components) | set(planned)
     if not product_ids:
-        return PlanningGrid(horizon_start=horizon_start, horizon_end=horizon_end, products=[])
+        return PlanningGrid(
+            horizon_start=horizon_start, horizon_end=horizon_end, products=[], to_buy=[]
+        )
 
     wanted = product_ids | set(by_item)
     items = {
@@ -138,19 +168,24 @@ async def compute_planning_grid(
 
         missing_materials: list[str] = []
         arriving = False
+        ready_by = horizon_start
         for component_id in evaluation:
             line = by_item.get(component_id)
-            # A manufactured sub-assembly's net_requirement is a build
-            # instruction, not a material anyone has to order - its own
-            # components are already in this same evaluation set, so its
-            # shortfall gets judged there instead. Only a purchased line's
-            # shortfall can turn the product red.
+            # A sub-assembly's own shortfall is a build instruction, not a
+            # material anyone has to order, and the parts it is built from are
+            # already in this same set. Only purchased lines set the colour and
+            # the date, so a product whose every buyable part is on the shelf
+            # reads green even when a sub-assembly still has to be built.
             if line is None or line.is_manufactured:
                 continue
+            component = items.get(component_id)
+            lead_days = (component.lead_time_days or 0) if component is not None else 0
             if line.net_requirement > 0:
                 missing_materials.append(line.item_sku)
+                ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
             elif line.on_hand < line.gross_demand:
                 arriving = True
+                ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
         missing_materials.sort()
 
         if missing_materials:
@@ -170,8 +205,51 @@ async def compute_planning_grid(
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,
+                ready_by=ready_by if qty > 0 else None,
             )
         )
 
-    products.sort(key=lambda p: (_STATUS_RANK[p.materials_status], p.item_sku))
-    return PlanningGrid(horizon_start=horizon_start, horizon_end=horizon_end, products=products)
+    supplier_names = {
+        supplier.id: supplier.name
+        for supplier in (
+            await db.execute(select(Supplier).where(Supplier.org_id == org_id))
+        )
+        .scalars()
+        .all()
+    }
+    to_buy: list[GridToBuy] = []
+    for line in plan:
+        if line.is_manufactured or line.suggested_order_quantity <= 0:
+            continue
+        line_item = items.get(uuid.UUID(line.item_id))
+        supplier_name = None
+        if line_item is not None and line_item.preferred_supplier_id is not None:
+            supplier_name = supplier_names.get(line_item.preferred_supplier_id)
+        order_by = line.suggested_order_date
+        if order_by is None:
+            urgency = "later"
+        elif order_by < horizon_start:
+            urgency = "overdue"
+        elif order_by <= horizon_start + timedelta(days=SOON_DAYS):
+            urgency = "soon"
+        else:
+            urgency = "later"
+        to_buy.append(
+            GridToBuy(
+                item_id=uuid.UUID(line.item_id),
+                item_sku=line.item_sku,
+                item_name=line.item_name,
+                quantity=line.suggested_order_quantity,
+                supplier_name=supplier_name,
+                order_by=order_by,
+                urgency=urgency,
+            )
+        )
+    to_buy.sort(key=lambda b: (_URGENCY_RANK[b.urgency], b.order_by or date.max, b.item_sku))
+
+    products.sort(
+        key=lambda p: (_STATUS_RANK[p.materials_status], p.ready_by or date.max, p.item_sku)
+    )
+    return PlanningGrid(
+        horizon_start=horizon_start, horizon_end=horizon_end, products=products, to_buy=to_buy
+    )

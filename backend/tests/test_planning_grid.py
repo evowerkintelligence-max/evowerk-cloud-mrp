@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -318,3 +318,99 @@ async def test_grid_is_org_scoped(client):
     grid_b = await _grid(client, token_b)
 
     assert grid_b["products"] == []
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+async def test_ready_by_is_todays_date_plus_the_longest_lead_time(client):
+    token = await _register_and_login(client)
+    fast = await _create_item(client, token, "FAST-1", lead_time_days=3)
+    slow = await _create_item(client, token, "SLOW-1", lead_time_days=21)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(fast, 1), (slow, 1)])
+
+    await _plan(client, token, pump, 10)
+    grid = await _grid(client, token)
+
+    assert _product(grid, "PUMP-A2")["ready_by"] == str(_today() + timedelta(days=21))
+
+
+async def test_ready_by_is_today_when_everything_is_in_stock(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2", lead_time_days=30)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await client.post(
+        f"/inventory/{seal['id']}/adjust",
+        json={"quantity": "500", "reason_code": "found_stock"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    await _plan(client, token, pump, 10)
+    grid = await _grid(client, token)
+
+    assert _product(grid, "PUMP-A2")["ready_by"] == str(_today())
+
+
+async def test_ready_by_is_null_when_nothing_is_planned(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+
+    grid = await _grid(client, token)
+
+    assert _product(grid, "PUMP-A2")["ready_by"] is None
+
+
+async def test_to_buy_lists_shortfalls_with_supplier_and_urgency(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await client.post("/suppliers", json={"name": "Sealtech"}, headers=headers)
+    seal = await _create_item(client, token, "SEAL-V2", lead_time_days=5, min_order_qty=1000)
+    patch = await client.patch(
+        f"/items/{seal['id']}",
+        json={"preferred_supplier_id": supplier.json()["id"]},
+        headers=headers,
+    )
+    assert patch.status_code == 200, patch.text
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+
+    await _plan(client, token, pump, 50, needed_by=str(_today() + timedelta(days=8)))
+    grid = await _grid(client, token)
+
+    assert len(grid["to_buy"]) == 1
+    row = grid["to_buy"][0]
+    assert row["item_sku"] == "SEAL-V2"
+    assert row["supplier_name"] == "Sealtech"
+    assert row["quantity"] == "1000.0000", "min order quantity must round the order up"
+    assert row["order_by"] == str(_today() + timedelta(days=3))
+    assert row["urgency"] == "soon"
+
+
+async def test_to_buy_marks_a_past_order_date_overdue(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2", lead_time_days=30)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+
+    await _plan(client, token, pump, 10, needed_by=str(_today() + timedelta(days=5)))
+    grid = await _grid(client, token)
+
+    assert grid["to_buy"][0]["urgency"] == "overdue"
+    assert grid["to_buy"][0]["supplier_name"] is None
+
+
+async def test_to_buy_excludes_manufactured_items(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+
+    await _plan(client, token, pump, 10)
+    grid = await _grid(client, token)
+
+    assert [row["item_sku"] for row in grid["to_buy"]] == ["SEAL-V2"]

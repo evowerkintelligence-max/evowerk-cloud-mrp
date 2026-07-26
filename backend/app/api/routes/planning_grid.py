@@ -32,6 +32,17 @@ class GridProductResponse(BaseModel):
     on_hand: Decimal
     materials_status: str
     missing_materials: list[str]
+    ready_by: date | None
+
+
+class GridToBuyResponse(BaseModel):
+    item_id: str
+    item_sku: str
+    item_name: str
+    quantity: Decimal
+    supplier_name: str | None
+    order_by: date | None
+    urgency: str
 
 
 class GridSummaryResponse(BaseModel):
@@ -44,6 +55,7 @@ class PlanningGridResponse(BaseModel):
     horizon_start: date
     horizon_end: date
     products: list[GridProductResponse]
+    to_buy: list[GridToBuyResponse]
     summary: GridSummaryResponse
 
 
@@ -57,6 +69,7 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         on_hand=product.on_hand,
         materials_status=product.materials_status,
         missing_materials=product.missing_materials,
+        ready_by=product.ready_by,
     )
 
 
@@ -72,6 +85,18 @@ async def get_planning_grid(
         horizon_start=grid.horizon_start,
         horizon_end=grid.horizon_end,
         products=[_product_to_response(p) for p in grid.products],
+        to_buy=[
+            GridToBuyResponse(
+                item_id=str(row.item_id),
+                item_sku=row.item_sku,
+                item_name=row.item_name,
+                quantity=row.quantity,
+                supplier_name=row.supplier_name,
+                order_by=row.order_by,
+                urgency=row.urgency,
+            )
+            for row in grid.to_buy
+        ],
         summary=GridSummaryResponse(
             missing=sum(1 for p in grid.products if p.materials_status == "missing"),
             arriving=sum(1 for p in grid.products if p.materials_status == "arriving"),
@@ -130,4 +155,5 @@ async def set_planned_quantity(
         on_hand=Decimal(0),
         materials_status="in_stock",
         missing_materials=[],
+        ready_by=None,
     )

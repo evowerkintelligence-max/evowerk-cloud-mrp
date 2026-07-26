@@ -440,3 +440,91 @@ async def test_to_buy_excludes_manufactured_items(client):
     grid = await _grid(client, token)
 
     assert [row["item_sku"] for row in grid["to_buy"]] == ["SEAL-V2"]
+
+
+async def test_detail_carries_the_product_and_its_components(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+
+    await _plan(client, token, pump, 50)
+    grid = await _grid(client, token)
+
+    detail = _product(grid, "PUMP-A2")["detail"]
+    assert [line["item_sku"] for line in detail] == ["PUMP-A2", "SEAL-V2"]
+    assert detail[0]["is_manufactured"] is True
+    # Compare the number, not its string form: BOM explosion multiplies through
+    # quantity * (1 + scrap_pct/100), so the engine's Decimal carries more
+    # places than a DB-round-tripped value would.
+    assert Decimal(detail[1]["gross_demand"]) == Decimal("100")
+    assert Decimal(detail[1]["net_requirement"]) == Decimal("100")
+
+
+async def test_detail_is_empty_when_nothing_is_planned(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+
+    grid = await _grid(client, token)
+
+    assert _product(grid, "PUMP-A2")["detail"] == []
+
+
+async def test_suggested_qty_is_absent_without_consumption_history(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    await _plan(client, token, widget, 5)
+
+    grid = await _grid(client, token)
+
+    assert _product(grid, "WIDGET-1")["suggested_qty"] is None
+
+
+async def test_suggested_qty_is_offered_only_while_nothing_is_planned(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    widget = await _create_item(client, token, "WIDGET-1")
+    await client.post(
+        f"/inventory/{widget['id']}/adjust",
+        json={"quantity": "1000", "reason_code": "found_stock"},
+        headers=headers,
+    )
+    for _ in range(10):
+        consume = await client.post(
+            f"/inventory/{widget['id']}/consume", json={"quantity": "7"}, headers=headers
+        )
+        assert consume.status_code == 200, consume.text
+
+    grid = await _grid(client, token)
+    suggested = _product(grid, "WIDGET-1")["suggested_qty"]
+    assert suggested is not None and Decimal(suggested) > 0
+
+    await _plan(client, token, widget, 5)
+    grid_after = await _grid(client, token)
+    assert _product(grid_after, "WIDGET-1")["suggested_qty"] is None
+
+
+async def test_a_bom_component_with_consumption_history_still_does_not_get_its_own_row(client):
+    """Consumption history widens which items count as products, but a
+    component of an active BOM must never surface as one - it is still
+    reachable only through its parent's row."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-V2")
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    await client.post(
+        f"/inventory/{seal['id']}/adjust",
+        json={"quantity": "1000", "reason_code": "found_stock"},
+        headers=headers,
+    )
+    consume = await client.post(
+        f"/inventory/{seal['id']}/consume", json={"quantity": "7"}, headers=headers
+    )
+    assert consume.status_code == 200, consume.text
+
+    grid = await _grid(client, token)
+
+    assert {row["item_sku"] for row in grid["products"]} == {"PUMP-A2"}

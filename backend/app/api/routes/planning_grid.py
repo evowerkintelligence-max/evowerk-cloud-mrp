@@ -23,6 +23,21 @@ from app.services.planning_grid import (
 router = APIRouter(prefix="/planning", tags=["planning"])
 
 
+class GridDetailLineResponse(BaseModel):
+    item_id: str
+    item_sku: str
+    item_name: str
+    is_manufactured: bool
+    gross_demand: Decimal
+    on_hand: Decimal
+    on_order: Decimal
+    on_draft: Decimal
+    net_requirement: Decimal
+    suggested_order_quantity: Decimal
+    need_by_date: date | None
+    suggested_order_date: date | None
+
+
 class GridProductResponse(BaseModel):
     item_id: str
     item_sku: str
@@ -33,6 +48,8 @@ class GridProductResponse(BaseModel):
     materials_status: str
     missing_materials: list[str]
     ready_by: date | None
+    suggested_qty: Decimal | None
+    detail: list[GridDetailLineResponse]
 
 
 class GridToBuyResponse(BaseModel):
@@ -70,6 +87,24 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         materials_status=product.materials_status,
         missing_materials=product.missing_materials,
         ready_by=product.ready_by,
+        suggested_qty=product.suggested_qty,
+        detail=[
+            GridDetailLineResponse(
+                item_id=line.item_id,
+                item_sku=line.item_sku,
+                item_name=line.item_name,
+                is_manufactured=line.is_manufactured,
+                gross_demand=line.gross_demand,
+                on_hand=line.on_hand,
+                on_order=line.on_order,
+                on_draft=line.on_draft,
+                net_requirement=line.net_requirement,
+                suggested_order_quantity=line.suggested_order_quantity,
+                need_by_date=line.need_by_date,
+                suggested_order_date=line.suggested_order_date,
+            )
+            for line in product.detail
+        ],
     )
 
 
@@ -156,4 +191,6 @@ async def set_planned_quantity(
         materials_status="in_stock",
         missing_materials=[],
         ready_by=None,
+        suggested_qty=None,
+        detail=[],
     )

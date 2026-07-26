@@ -11,12 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.models.procurement import Supplier
-from app.services.mrp import compute_mrp_plan, load_bom_children, load_on_hand
+from app.services.demand_forecasting import compute_weekly_suggestions
+from app.services.demand_history import daily_consumption_by_item
+from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, load_on_hand
 
 # The grid never shows a horizon control - a non-technical user should not have
 # to pick one. 90 days matches the engine default (services.mrp.resolve_horizon),
 # so the grid and a raw /mrp/plan call agree.
 GRID_HORIZON_DAYS = 90
+
+# How far back a consumed item counts as something the user still plans. Longer
+# than the suggestion engine's own lookback would surface long-dead SKUs.
+CONSUMPTION_LOOKBACK_DAYS = 90
 
 # Where a typed quantity lands when the user does not pick a date. Two weeks is
 # far enough out that most purchased parts can still arrive in time.
@@ -47,6 +53,13 @@ class GridProduct:
     # already-ordered component is assumed to take its full lead time again -
     # the honest pessimistic read until PO dates exist.
     ready_by: date | None
+    # What history says this product's demand will be over the window, offered
+    # only when the user has not planned anything yet - a hint to accept, never
+    # a silent write. None when there is no consumption history to learn from.
+    suggested_qty: Decimal | None
+    # The engine's own numbers for this product and its components, shown when
+    # the user expands the row. The only place MRP vocabulary stays visible.
+    detail: list[MrpPlanLine]
 
 
 _URGENCY_RANK = {"overdue": 0, "soon": 1, "later": 2}
@@ -142,7 +155,12 @@ async def compute_planning_grid(
 
     produced = set(children)
     components = {child for kids in children.values() for child, _ in kids}
-    product_ids = (produced - components) | set(planned)
+    consumed = set(
+        await daily_consumption_by_item(
+            db, org_id, datetime.now(timezone.utc) - timedelta(days=CONSUMPTION_LOOKBACK_DAYS)
+        )
+    )
+    product_ids = ((produced | consumed) - components) | set(planned)
     if not product_ids:
         return PlanningGrid(
             horizon_start=horizon_start, horizon_end=horizon_end, products=[], to_buy=[]
@@ -195,6 +213,11 @@ async def compute_planning_grid(
         else:
             status = "in_stock"
 
+        detail = sorted(
+            (by_item[i] for i in {product_id, *evaluation} if i in by_item),
+            key=lambda ln: (ln.item_id != str(product_id), ln.item_sku),
+        )
+
         products.append(
             GridProduct(
                 item_id=product_id,
@@ -206,8 +229,24 @@ async def compute_planning_grid(
                 materials_status=status,
                 missing_materials=missing_materials,
                 ready_by=ready_by if qty > 0 else None,
+                suggested_qty=None,
+                detail=detail,
             )
         )
+
+    unplanned = {p.item_id for p in products if p.planned_qty <= 0}
+    if unplanned:
+        suggestions = await compute_weekly_suggestions(
+            db, org_id, horizon_days=GRID_HORIZON_DAYS, as_of=horizon_start, item_ids=unplanned
+        )
+        suggested_by_item = {
+            suggestion.item_id: Decimal(str(round(sum(p.yhat for p in suggestion.points), 4)))
+            for suggestion in suggestions
+        }
+        for product in products:
+            suggested = suggested_by_item.get(product.item_id)
+            if suggested is not None and suggested > 0:
+                product.suggested_qty = suggested
 
     supplier_names = {
         supplier.id: supplier.name

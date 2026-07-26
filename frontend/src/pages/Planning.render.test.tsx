@@ -164,4 +164,61 @@ describe("Planning grid", () => {
     });
     expect(html).not.toContain("<input");
   });
+
+  const TO_BUY = [
+    {
+      item_id: "m-1",
+      item_sku: "SEAL-V2",
+      item_name: "Viton seal kit",
+      quantity: "84.0000",
+      supplier_name: "Sealtech",
+      order_by: "2026-07-29",
+      urgency: "overdue" as const,
+    },
+    {
+      item_id: "m-2",
+      item_sku: "FAST-M8",
+      item_name: "M8 fastener",
+      quantity: "5000.0000",
+      supplier_name: null,
+      order_by: "2026-09-02",
+      urgency: "later" as const,
+    },
+  ];
+
+  it("lists what to buy with supplier and order-by date", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], { ...GRID, to_buy: TO_BUY });
+      qc.setQueryData(["org-me"], { role: "owner", adjust_approval_threshold: "0" });
+    });
+    expect(html).toContain("To buy for the plan above");
+    expect(html).toContain("Viton seal kit");
+    expect(html).toContain("order 84 from Sealtech");
+    expect(html).toContain("2026-07-29");
+    expect(html).toContain("no supplier set");
+  });
+
+  it("shows the order button to owners", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], { ...GRID, to_buy: TO_BUY });
+      qc.setQueryData(["org-me"], { role: "owner", adjust_approval_threshold: "0" });
+    });
+    expect(html).toContain("Order all missing materials");
+  });
+
+  it("hides the order button from non-owners", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], { ...GRID, to_buy: TO_BUY });
+      qc.setQueryData(["org-me"], { role: "operator", adjust_approval_threshold: "0" });
+    });
+    expect(html).not.toContain("Order all missing materials");
+  });
+
+  it("hides the to-buy panel when there is nothing to buy", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], GRID);
+      qc.setQueryData(["org-me"], { role: "owner", adjust_approval_threshold: "0" });
+    });
+    expect(html).not.toContain("To buy for the plan above");
+  });
 });

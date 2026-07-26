@@ -10,6 +10,7 @@ import { Alert } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { PlannedQtyInput } from "./planning/PlannedQtyInput";
+import { ToBuyPanel } from "./planning/ToBuyPanel";
 import {
   materialsStatusLabel,
   materialsStatusVariant,
@@ -33,6 +34,10 @@ export function Planning() {
   const [error, setError] = useState<string | null>(null);
   const currentUser = useCurrentUser();
   const canEdit = currentUser.data?.role === "owner" || currentUser.data?.role === "manager";
+  // POST /mrp/generate-pos is gated to owner only on the backend (stricter
+  // than the manager-allowed quantity edit above), so this check is deliberately
+  // narrower than canEdit.
+  const canOrder = currentUser.data?.role === "owner";
   const grid = useQuery<PlanningGridResponse>({
     queryKey: ["planning-grid"],
     queryFn: async () => {
@@ -107,6 +112,7 @@ export function Planning() {
               </TBody>
             </Table>
           </TableWrap>
+          <ToBuyPanel rows={grid.data.to_buy} canOrder={canOrder} />
         </>
       )}
     </div>

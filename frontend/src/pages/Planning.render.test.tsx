@@ -262,4 +262,9 @@ describe("Planning grid", () => {
     expect(html).toContain("Show working");
     expect(html).not.toContain("Still needed");
   });
+
+  it("keeps CSV import available behind a button", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).toContain("Import from CSV");
+  });
 });

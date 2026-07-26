@@ -10,6 +10,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { ImportForecastsCsvSection } from "./planning/ImportForecastsCsv";
 import { PlannedQtyInput } from "./planning/PlannedQtyInput";
 import { ProductDetail } from "./planning/ProductDetail";
 import { ToBuyPanel } from "./planning/ToBuyPanel";
@@ -35,6 +36,7 @@ function summaryLine(summary: PlanningGridResponse["summary"]): string {
 export function Planning() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
   const currentUser = useCurrentUser();
   const canEdit = currentUser.data?.role === "owner" || currentUser.data?.role === "manager";
   // POST /mrp/generate-pos is gated to owner only on the backend (stricter
@@ -50,12 +52,29 @@ export function Planning() {
     },
   });
 
+  const items = useQuery<{ id: string; sku: string }[]>({
+    queryKey: ["items"],
+    enabled: showImport,
+    queryFn: async () => {
+      const res = await apiFetch("/items");
+      if (!res.ok) throw new Error("Failed to load items");
+      return res.json();
+    },
+  });
+
   return (
     <div>
       <PageHeader
         title="Planning"
         description="Type how many you plan to make. Green is in stock, amber is on the way, red is missing."
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => setShowImport((v) => !v)}>
+            Import from CSV
+          </Button>
+        }
       />
+
+      {showImport && <ImportForecastsCsvSection items={items.data ?? []} />}
 
       {grid.isError && <Alert variant="destructive">{(grid.error as Error).message}</Alert>}
       {error && <Alert variant="destructive">{error}</Alert>}

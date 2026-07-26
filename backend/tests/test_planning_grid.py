@@ -552,6 +552,95 @@ async def test_consumed_only_item_without_a_suggestion_gets_no_row(client, test_
     assert "SEAL-V2" not in {row["item_sku"] for row in grid["products"]}
 
 
+async def test_setting_a_quantity_replaces_the_previous_one(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    await _plan(client, token, widget, 10, needed_by=str(_today() + timedelta(days=5)))
+    await _plan(client, token, widget, 25, needed_by=str(_today() + timedelta(days=30)))
+    grid = await _grid(client, token)
+
+    row = _product(grid, "WIDGET-1")
+    assert row["planned_qty"] == "25.0000", "the window must hold one number, not a running total"
+    assert row["needed_by"] == str(_today() + timedelta(days=30))
+
+
+async def test_zero_clears_the_plan(client):
+    """WIDGET-1 has no BOM and no consumption history, so clearing its plan to
+    0 drops its only claim to a grid row: check the write's own response
+    (the fallback row shape), not a follow-up read of the grid."""
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    await _plan(client, token, widget, 10)
+
+    cleared = await _plan(client, token, widget, 0)
+
+    assert cleared["planned_qty"] == "0.0000"
+    assert cleared["needed_by"] is None
+
+
+async def test_quantity_defaults_to_two_weeks_out(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    await _plan(client, token, widget, 10)
+    grid = await _grid(client, token)
+
+    assert _product(grid, "WIDGET-1")["needed_by"] == str(_today() + timedelta(days=14))
+
+
+async def test_negative_quantity_is_rejected(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "-5"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 400
+
+
+async def test_date_outside_the_window_is_rejected(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "5", "needed_by": str(_today() + timedelta(days=400))},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 400
+
+
+async def test_unknown_item_is_rejected(client):
+    token = await _register_and_login(client)
+
+    res = await client.put(
+        "/planning/grid/00000000-0000-0000-0000-000000000000",
+        json={"quantity": "5"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 404
+
+
+async def test_another_orgs_item_cannot_be_planned(client):
+    token_a = await _register_and_login(client)
+    widget = await _create_item(client, token_a, "WIDGET-1")
+    token_b = await _register_and_login(client, email="other@example.com", org_name="Other")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "5"},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+
+    assert res.status_code == 404
+
+
 async def test_a_bom_component_with_consumption_history_still_does_not_get_its_own_row(client):
     """Consumption history widens which items count as products, but a
     component of an active BOM must never surface as one - it is still

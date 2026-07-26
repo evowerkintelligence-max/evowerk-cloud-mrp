@@ -4,13 +4,14 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
+from app.middleware.audit import log_event
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.services.planning_grid import (
@@ -152,11 +153,30 @@ async def set_planned_quantity(
     current: CurrentUser = Depends(require_role("owner", "manager")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Set how many of this product the user plans to make. Implemented in
-    Task 4; this stub writes the forecast row the grid reads back."""
+    """Set how many of this product the user plans to make, and when they need
+    it. The only write the planning screen makes.
+
+    Owner or manager, matching the other planning-level writes: this replaces a
+    whole window of forecasts, so a read-only member typing 0 must not be able
+    to wipe an imported forecast. Reading the grid stays open to everyone.
+
+    The window holds exactly one number per item: this replaces whatever was
+    there rather than adding to it, because the input is a single box the user
+    overwrites, not a ledger of buckets. The delete and the insert share one
+    transaction so a failed write can never leave the item with no plan at all.
+    Quantity 0 means "not making these right now" and clears the item.
+    """
+    if body.quantity < 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Quantity cannot be negative")
     item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     horizon_start, horizon_end = resolve_grid_window()
     needed_by = body.needed_by or horizon_start + timedelta(days=DEFAULT_NEEDED_BY_DAYS)
+    if not horizon_start <= needed_by <= horizon_end:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Pick a date between {horizon_start} and {horizon_end}",
+        )
+
     await db.execute(
         delete(DemandForecast).where(
             DemandForecast.org_id == current.org_id,
@@ -176,18 +196,27 @@ async def set_planned_quantity(
                 created_by=current.id,
             )
         )
+    await log_event(
+        db,
+        action="forecast.planned_via_grid",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(item_id),
+    )
     await db.commit()
+
     grid = await compute_planning_grid(db, current.org_id)
     for product in grid.products:
         if product.item_id == item_id:
             return _product_to_response(product)
+    # Cleared to zero and the item has no BOM, so it is no longer a product row.
     return GridProductResponse(
         item_id=str(item_id),
         item_sku=item.sku,
         item_name=item.name,
-        planned_qty=Decimal(0),
+        planned_qty=Decimal("0.0000"),
         needed_by=None,
-        on_hand=Decimal(0),
+        on_hand=Decimal("0.0000"),
         materials_status="in_stock",
         missing_materials=[],
         ready_by=None,

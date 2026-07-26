@@ -114,4 +114,31 @@ describe("Planning grid", () => {
     );
     expect(html).toContain("Add a bill of materials to start planning");
   });
+
+  it("offers the history suggestion when nothing is planned", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [
+          {
+            ...GRID.products[0],
+            planned_qty: "0.0000",
+            needed_by: null,
+            suggested_qty: "60.0000",
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Use 60 from history");
+  });
+
+  it("does not offer a suggestion once a quantity is planned", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).not.toContain("from history");
+  });
+
+  it("shows the needed-by date next to the quantity", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).toContain('value="2026-08-12"');
+  });
 });

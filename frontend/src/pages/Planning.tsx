@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarRange } from "lucide-react";
 import { apiFetch } from "../api/client";
@@ -5,9 +6,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { PlannedQtyInput } from "./planning/PlannedQtyInput";
 import {
   materialsStatusLabel,
   materialsStatusVariant,
@@ -28,6 +29,7 @@ function summaryLine(summary: PlanningGridResponse["summary"]): string {
 }
 
 export function Planning() {
+  const [error, setError] = useState<string | null>(null);
   const grid = useQuery<PlanningGridResponse>({
     queryKey: ["planning-grid"],
     queryFn: async () => {
@@ -45,6 +47,7 @@ export function Planning() {
       />
 
       {grid.isError && <Alert variant="destructive">{(grid.error as Error).message}</Alert>}
+      {error && <Alert variant="destructive">{error}</Alert>}
       {grid.isLoading && <Skeleton className="h-40 w-full" />}
 
       {grid.data && grid.data.products.length === 0 && (
@@ -77,14 +80,7 @@ export function Planning() {
                       <span className="block text-xs text-muted-foreground">{product.item_sku}</span>
                     </TD>
                     <TD>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.0001"
-                        className="w-24 text-right"
-                        aria-label={`Planned quantity for ${product.item_name}`}
-                        defaultValue={trimQty(product.planned_qty)}
-                      />
+                      <PlannedQtyInput product={product} onError={setError} />
                     </TD>
                     <TD>{trimQty(product.on_hand)}</TD>
                     <TD>

@@ -892,7 +892,12 @@ Inside the per-product loop, replace the status block with one that also tracks 
         ready_by = horizon_start
         for component_id in evaluation:
             line = by_item.get(component_id)
-            if line is None:
+            # A sub-assembly's own shortfall is a build instruction, not a
+            # material anyone has to order, and the parts it is built from are
+            # already in this same set. Only purchased lines set the colour and
+            # the date, so a product whose every buyable part is on the shelf
+            # reads green even when a sub-assembly still has to be built.
+            if line is None or line.is_manufactured:
                 continue
             component = items.get(component_id)
             lead_days = (component.lead_time_days or 0) if component is not None else 0
@@ -1051,8 +1056,11 @@ async def test_detail_carries_the_product_and_its_components(client):
     detail = _product(grid, "PUMP-A2")["detail"]
     assert [line["item_sku"] for line in detail] == ["PUMP-A2", "SEAL-V2"]
     assert detail[0]["is_manufactured"] is True
-    assert detail[1]["gross_demand"] == "100.0000"
-    assert detail[1]["net_requirement"] == "100.0000"
+    # Compare the number, not its string form: BOM explosion multiplies through
+    # quantity * (1 + scrap_pct/100), so the engine's Decimal carries more
+    # places than a DB-round-tripped value would.
+    assert Decimal(detail[1]["gross_demand"]) == Decimal("100")
+    assert Decimal(detail[1]["net_requirement"]) == Decimal("100")
 
 
 async def test_detail_is_empty_when_nothing_is_planned(client):
@@ -1114,7 +1122,37 @@ In `backend/app/services/planning_grid.py`, extend the imports:
 
 ```python
 from app.services.demand_forecasting import compute_weekly_suggestions
+from app.services.demand_history import daily_consumption_by_item
 ```
+
+First widen the product-row rule so a suggestion has a row to land on. An item
+the user consumes but has never planned (a purchased good sold as-is) is
+currently invisible until someone types a quantity, which is exactly the
+typing the suggestion exists to avoid. Items that are components of an active
+BOM stay excluded, so raw materials never surface as products:
+
+```python
+    consumed = set(
+        await daily_consumption_by_item(
+            db, org_id, datetime.now(timezone.utc) - timedelta(days=CONSUMPTION_LOOKBACK_DAYS)
+        )
+    )
+    product_ids = ((produced | consumed) - components) | set(planned)
+```
+
+with this constant beside `GRID_HORIZON_DAYS`:
+
+```python
+# How far back a consumed item counts as something the user still plans. Longer
+# than the suggestion engine's own lookback would surface long-dead SKUs.
+CONSUMPTION_LOOKBACK_DAYS = 90
+```
+
+`daily_consumption_by_item(db, org_id, since)` lives in
+`app.services.demand_history` and returns `dict[item_id, dict[date, Decimal]]`,
+merged across both the lot-tracked and non-lot-tracked ledgers. It is the same
+helper `compute_weekly_suggestions` builds on, so an item with a suggestion
+always has a row.
 
 Add the two fields to `GridProduct`, after `ready_by`:
 
@@ -1345,11 +1383,15 @@ In `backend/app/api/routes/planning_grid.py`, replace the whole `set_planned_qua
 async def set_planned_quantity(
     item_id: uuid.UUID,
     body: GridPlanRequest,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_role("owner", "manager")),
     db: AsyncSession = Depends(get_db),
 ):
     """Set how many of this product the user plans to make, and when they need
     it. The only write the planning screen makes.
+
+    Owner or manager, matching the other planning-level writes: this replaces a
+    whole window of forecasts, so a read-only member typing 0 must not be able
+    to wipe an imported forecast. Reading the grid stays open to everyone.
 
     The window holds exactly one number per item: this replaces whatever was
     there rather than adding to it, because the input is a single box the user
@@ -1421,8 +1463,12 @@ Add the imports this needs:
 ```python
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.api.deps import require_role
 from app.middleware.audit import log_event
 ```
+
+Note: `require_role("owner", "manager")` is already in place from the Task 1
+fix wave, so this step keeps it rather than introducing it.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 

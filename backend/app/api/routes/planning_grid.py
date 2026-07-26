@@ -165,9 +165,16 @@ async def set_planned_quantity(
     overwrites, not a ledger of buckets. The delete and the insert share one
     transaction so a failed write can never leave the item with no plan at all.
     Quantity 0 means "not making these right now" and clears the item.
+
+    The clear only reaches forecasts inside the current window: a forecast
+    imported for a date beyond it survives, and as the window rolls forward
+    it can slide back into view, making the item reappear with a plan the
+    user believed they had already deleted.
     """
     if body.quantity < 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Quantity cannot be negative")
+    if body.quantity >= 100_000_000:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "That quantity is too large. Please enter a smaller number.")
     item = await get_or_404(db, Item, current.org_id, item_id, "Item not found")
     horizon_start, horizon_end = resolve_grid_window()
     needed_by = body.needed_by or horizon_start + timedelta(days=DEFAULT_NEEDED_BY_DAYS)

@@ -244,6 +244,38 @@ async def test_member_cannot_set_planned_quantity(client, test_engine):
     assert read.status_code == 200
 
 
+async def test_manager_can_set_planned_quantity(client, test_engine):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    me = await client.get("/orgs/me", headers={"Authorization": f"Bearer {token}"})
+    org_id = me.json()["id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        manager = User(
+            org_id=uuid.UUID(org_id),
+            email="manager@example.com",
+            hashed_password=hash_password(PASSWORD),
+            role="manager",
+            is_active=True,
+        )
+        session.add(manager)
+        await session.commit()
+
+    login = await client.post(
+        "/auth/login", json={"email": "manager@example.com", "password": PASSWORD}
+    )
+    assert login.status_code == 200
+    manager_token = login.json()["access_token"]
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "10"},
+        headers={"Authorization": f"Bearer {manager_token}"},
+    )
+    assert res.status_code == 200, res.text
+
+
 async def test_grid_window_is_fixed_90_days_from_today(client):
     token = await _register_and_login(client)
     widget = await _create_item(client, token, "WIDGET-1")
@@ -602,6 +634,19 @@ async def test_negative_quantity_is_rejected(client):
     assert res.status_code == 400
 
 
+async def test_oversized_quantity_is_rejected(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "100000000"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 400
+
+
 async def test_date_outside_the_window_is_rejected(client):
     token = await _register_and_login(client)
     widget = await _create_item(client, token, "WIDGET-1")
@@ -609,6 +654,52 @@ async def test_date_outside_the_window_is_rejected(client):
     res = await client.put(
         f"/planning/grid/{widget['id']}",
         json={"quantity": "5", "needed_by": str(_today() + timedelta(days=400))},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 400
+
+
+async def test_needed_by_of_today_is_accepted(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    plan = await _plan(client, token, widget, 5, needed_by=str(_today()))
+
+    assert plan["needed_by"] == str(_today())
+
+
+async def test_needed_by_at_the_end_of_the_horizon_is_accepted(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    edge = _today() + timedelta(days=GRID_HORIZON_DAYS)
+
+    plan = await _plan(client, token, widget, 5, needed_by=str(edge))
+
+    assert plan["needed_by"] == str(edge)
+
+
+async def test_needed_by_before_today_is_rejected(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "5", "needed_by": str(_today() - timedelta(days=1))},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 400
+
+
+async def test_needed_by_one_day_past_the_horizon_is_rejected(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    past_edge = _today() + timedelta(days=GRID_HORIZON_DAYS + 1)
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "5", "needed_by": str(past_edge)},
         headers={"Authorization": f"Bearer {token}"},
     )
 

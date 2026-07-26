@@ -173,7 +173,7 @@ async def test_sub_assembly_shortfall_does_not_turn_the_product_red(client):
     missing with SUB-1 listed."""
     token = await _register_and_login(client)
     seal = await _create_item(client, token, "SEAL-V2")
-    sub = await _create_item(client, token, "SUB-1")
+    sub = await _create_item(client, token, "SUB-1", lead_time_days=45)
     pump = await _create_item(client, token, "PUMP-A2")
     await _create_active_bom(client, token, sub, [(seal, 2)])
     await _create_active_bom(client, token, pump, [(sub, 1)])
@@ -196,6 +196,9 @@ async def test_sub_assembly_shortfall_does_not_turn_the_product_red(client):
     row = _product(grid, "PUMP-A2")
     assert row["materials_status"] == "in_stock"
     assert row["missing_materials"] == []
+    # SUB-1's 45-day lead time must not leak into ready_by: it is manufactured,
+    # so only the buyable SEAL-V2 (fully stocked) can set the date.
+    assert row["ready_by"] == str(_today())
 
 
 async def test_member_cannot_set_planned_quantity(client, test_engine):
@@ -318,6 +321,7 @@ async def test_grid_is_org_scoped(client):
     grid_b = await _grid(client, token_b)
 
     assert grid_b["products"] == []
+    assert grid_b["to_buy"] == []
 
 
 def _today() -> date:
@@ -342,11 +346,13 @@ async def test_ready_by_is_today_when_everything_is_in_stock(client):
     seal = await _create_item(client, token, "SEAL-V2", lead_time_days=30)
     pump = await _create_item(client, token, "PUMP-A2")
     await _create_active_bom(client, token, pump, [(seal, 1)])
-    await client.post(
+    adj = await client.post(
         f"/inventory/{seal['id']}/adjust",
         json={"quantity": "500", "reason_code": "found_stock"},
         headers={"Authorization": f"Bearer {token}"},
     )
+    assert adj.status_code == 200, adj.text
+    assert adj.json()["applied"] is True
 
     await _plan(client, token, pump, 10)
     grid = await _grid(client, token)
@@ -402,6 +408,26 @@ async def test_to_buy_marks_a_past_order_date_overdue(client):
 
     assert grid["to_buy"][0]["urgency"] == "overdue"
     assert grid["to_buy"][0]["supplier_name"] is None
+
+
+async def test_to_buy_urgency_boundary_is_soon_at_7_days_and_later_at_8(client):
+    token = await _register_and_login(client)
+    seal_soon = await _create_item(client, token, "SEAL-SOON", lead_time_days=0)
+    pump_soon = await _create_item(client, token, "PUMP-SOON")
+    await _create_active_bom(client, token, pump_soon, [(seal_soon, 1)])
+    seal_later = await _create_item(client, token, "SEAL-LATER", lead_time_days=0)
+    pump_later = await _create_item(client, token, "PUMP-LATER")
+    await _create_active_bom(client, token, pump_later, [(seal_later, 1)])
+
+    await _plan(client, token, pump_soon, 10, needed_by=str(_today() + timedelta(days=7)))
+    await _plan(client, token, pump_later, 10, needed_by=str(_today() + timedelta(days=8)))
+    grid = await _grid(client, token)
+
+    by_sku = {row["item_sku"]: row for row in grid["to_buy"]}
+    assert by_sku["SEAL-SOON"]["order_by"] == str(_today() + timedelta(days=7))
+    assert by_sku["SEAL-SOON"]["urgency"] == "soon"
+    assert by_sku["SEAL-LATER"]["order_by"] == str(_today() + timedelta(days=8))
+    assert by_sku["SEAL-LATER"]["urgency"] == "later"
 
 
 async def test_to_buy_excludes_manufactured_items(client):

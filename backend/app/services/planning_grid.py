@@ -43,9 +43,9 @@ class GridProduct:
     # Earliest date the planned quantity can actually be finished: today when
     # every component is on the shelf, otherwise today plus the longest lead
     # time among the components that must still arrive. None when nothing is
-    # planned. POs do not carry a promised delivery date yet, so an already
-    # -ordered component is assumed to take its full lead time again - the
-    # honest pessimistic read until PO dates exist.
+    # planned. POs do not carry a promised delivery date yet, so an
+    # already-ordered component is assumed to take its full lead time again -
+    # the honest pessimistic read until PO dates exist.
     ready_by: date | None
 
 

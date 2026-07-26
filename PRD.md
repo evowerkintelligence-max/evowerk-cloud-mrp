@@ -4,7 +4,7 @@
 
 ## 1. Summary
 
-EvoWerk Cloud MRP is a multi-tenant, cloud-hosted manufacturing system covering BOM/recipe management, MRP planning, procurement, inventory and lot tracking, demand forecasting, shop-floor analytics, quality/RCA, predictive maintenance, and BI. The core is industry-agnostic; industry-specific customization (pharma, food, auto, etc.) is designed to layer on later, config-driven, per customer.
+EvoWerk Cloud MRP is a multi-tenant, cloud-hosted manufacturing system covering BOM/recipe management, MRP planning, procurement, inventory and lot tracking, demand forecasting, shop-floor analytics, quality/RCA, predictive maintenance, and BI. The core platform is OEE/downtime/BI; MRP planning (BOM, procurement, netted-vs-gross explosion) and predictive maintenance (CBM/RUL) are separate paid add-on modules on top of it — see §3a for tiering. The core is industry-agnostic; industry-specific customization (pharma, food, auto, etc.) is designed to layer on later, config-driven, per customer.
 
 It is a separate product/codebase from EvoWerk's desktop app (NovaEdgeElectron) — no code is shared beyond common pip packages for core math (data cleaning, OEE calc, forecasting).
 
@@ -18,19 +18,22 @@ One system that turns live shop-floor, inventory, and demand data directly into 
 
 ## 3a. Go-to-market phasing (added 2026-07-23)
 
-**Phase 1 — manufacturing startups.** First customers are newer manufacturing operations, not legacy plants — machines young enough to speak OPC-UA/MQTT natively, which is what makes the premium tier below deliverable on day one instead of blocked on a hardware-connectivity gap. Sold in two tiers:
-- **Core**: OEE, downtime, MRP, report builder, AI data chat — the wedge, priced to undercut sensor-hardware-vendor incumbents (e.g. TeepTrak) on a like-for-like OEE/downtime feature set.
-- **Premium add-on**: AutoML + predictive maintenance (CBM/RUL). Depends on live sensor ingestion, already supported for OPC-UA/MQTT-capable equipment via the connectors in §6 ("Data integrations") and the CBM/RUL services (`backend/app/services/cbm.py`, `backend/app/services/rul.py`). Remaining friction is per-customer PLC/controller onboarding, not a missing capability.
+**Phase 1 — manufacturing startups.** First customers are newer manufacturing operations, not legacy plants — machines young enough to speak OPC-UA/MQTT natively, which is what makes the predictive-maintenance add-on below deliverable on day one instead of blocked on a hardware-connectivity gap. Sold in three tiers:
+- **Core**: OEE, downtime, report builder, AI data chat — the wedge, priced to undercut sensor-hardware-vendor incumbents (e.g. TeepTrak) on a like-for-like OEE/downtime feature set.
+- **MRP add-on**: BOMs/recipes, procurement, netted-vs-gross MRP explosion, inventory/lot tracking, demand forecasting — sold separately from Core, for customers who need planning/procurement on top of shop-floor visibility. Pricing not yet set.
+- **Predictive-maintenance add-on**: AutoML + predictive maintenance (CBM/RUL). Depends on live sensor ingestion, already supported for OPC-UA/MQTT-capable equipment via the connectors in §6 ("Data integrations") and the CBM/RUL services (`backend/app/services/cbm.py`, `backend/app/services/rul.py`). Remaining friction is per-customer PLC/controller onboarding, not a missing capability.
 
 **Core pricing.** Flat per-org base covering up to 5 machines, plus per-machine overage beyond that:
 - **Founding cohort (first 10 customers):** $100-150/month base, +$30/machine beyond 5.
 - **Standard (customer 11+):** $150-200/month base, +$30/machine beyond 5.
 
-Undercuts the realistic alternative a Core buyer is otherwise paying for — a standalone OEE/downtime tool (Evocon ~$149/mo, Mingo ~$80/machine/mo) stacked with a standalone MRP tool (MRPeasy ~$245-345/mo for a 5-person shop) — while bundling both into one subscription.
+Undercuts the realistic alternative a Core buyer is otherwise paying for — a standalone OEE/downtime tool (Evocon ~$149/mo, Mingo ~$80/machine/mo). Add the MRP add-on and the combined price still needs to be checked against a standalone MRP tool (MRPeasy ~$245-345/mo for a 5-person shop) once MRP add-on pricing is set.
 
 **Phase 2 — horizontal expansion beyond manufacturing.** Once Phase 1 has traction, extend the existing inventory + demand-forecasting engine into a standalone offering for industries with no shop floor at all (distribution, wholesale, retail) — sold on inventory analysis and sales/demand trend forecasting, without OEE/downtime/MRP, carrying over the report builder and AI data chat from Phase 1 (already industry-agnostic BI, not manufacturing-specific). This is distinct from the industry-specific customization layers in §10 (pharma/food/auto), which extend the manufacturing core for manufacturing customers; Phase 2 is a different buyer with a different core product. Not yet scoped in detail — sequenced after Phase 1 traction, not concurrent with it.
 
 **Differentiation.** Dedicated inventory tools (Cin7, Fishbowl, Zoho Inventory) mostly stop at tracking and reorder points; demand forecasting and waste/loss-trend analysis are usually a separate BI tool or spreadsheet the customer bolts on themselves. Phase 2 sells the bundle as one product instead of three — inventory tracking, demand/loss-trend forecasting, and report builder + AI data chat on top, where competitors ship at most the first. Vocabulary translates per vertical — the manufacturing "scrap" concept (loss/waste trend against a baseline) becomes shrinkage (retail), spoilage (food/perishables), or return-rate (distribution) — same underlying analysis, different label per customer segment.
+
+**Mobile app.** A mobile companion app is in development — not yet in this repo, not yet scoped in this PRD. Shop-floor/plant-ops personas (§4) are the likely first users given they're on the floor rather than at a desk; scope, platform, and feature parity with the web app are undecided.
 
 ## 4. Users
 
@@ -58,7 +61,7 @@ Organized by feature area. Each maps to a backend router (`backend/app/api/route
 - Email flows: password reset and email verification, provider-agnostic interface with an SES backend — a deployment with no `ses_from_email` configured gets reset/verification links logged instead of emailed (fine for test/eval use, not for production without SES set up).
 - Append-only audit log — enforced at the Postgres trigger level, not just app discipline.
 
-### MRP core
+### MRP core (add-on)
 - BOMs/recipes with revisioning, unit conversion on BOM lines.
 - Netted-vs-gross MRP explosion.
 - Build calculator.
@@ -87,7 +90,7 @@ Organized by feature area. Each maps to a backend router (`backend/app/api/route
 - Root-cause cases with fishbone-style cause trees and CAPA actions.
 - Computer vision: image-based defect/PPE detection via Gemini vision.
 
-### Predictive maintenance
+### Predictive maintenance (add-on)
 - Machine risk scoring and maintenance scheduling.
 
 ### Simulation

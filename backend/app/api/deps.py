@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_token
 from app.db.base import Base
 from app.db.session import get_db
+from app.models.staff import StaffAccount
+from app.models.tenant import Org
 from app.models.user import User
 
 ModelT = TypeVar("ModelT", bound=Base)
@@ -58,6 +60,56 @@ def require_role(*roles: str):
         return current
 
     return _check
+
+
+def require_feature(key: str):
+    async def _check(
+        current: CurrentUser = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> CurrentUser:
+        org_features = (
+            await db.execute(select(Org.enabled_features).where(Org.id == current.org_id))
+        ).scalar_one()
+        if key not in org_features:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Not included in your plan")
+        return current
+
+    return _check
+
+
+class StaffSession:
+    def __init__(self, staff: StaffAccount):
+        self.id = staff.id
+        self.employee_id = staff.employee_id
+
+
+async def get_current_staff(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> StaffSession:
+    credentials_error = HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "staff_access":
+            raise credentials_error
+        staff_id = uuid.UUID(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError) as exc:
+        raise credentials_error from exc
+
+    result = await db.execute(select(StaffAccount).where(StaffAccount.id == staff_id))
+    staff = result.scalar_one_or_none()
+    if staff is None:
+        raise credentials_error
+    return StaffSession(staff)
+
+
+# No roles/tiers among staff - one dependency is enough, but a distinct name
+# at call sites (admin.py) reads better than a bare get_current_staff there.
+require_staff_session = get_current_staff
 
 
 async def get_or_404(

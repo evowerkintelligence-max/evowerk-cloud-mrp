@@ -31,6 +31,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     sensor,
     shift_schedule,
     simulation,
+    staff,
     telemetry,
     tenant,
     user,

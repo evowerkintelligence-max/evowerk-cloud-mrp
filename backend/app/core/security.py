@@ -48,6 +48,17 @@ def create_access_token(*, user_id: str, org_id: str) -> str:
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
+def create_staff_access_token(*, staff_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "sub": staff_id,
+        "type": "staff_access",
+        "iat": now,
+        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
 def create_mfa_pending_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {

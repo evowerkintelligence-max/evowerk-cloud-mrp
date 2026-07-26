@@ -20,18 +20,18 @@ pytest. No new dependencies.
 
 ## Global Constraints
 
-- No new tables — `Org.enabled_features` and `User.is_staff` are additive columns on existing models.
-- `POST /auth/register` is NOT deleted or gated — only its frontend route/link is removed (per the
+- No new tables - `Org.enabled_features` and `User.is_staff` are additive columns on existing models.
+- `POST /auth/register` is NOT deleted or gated - only its frontend route/link is removed (per the
   spec's Scope decision: ~90 test files depend on it for fixtures).
-- Backend feature keys and their frontend mirror must stay in sync — enforced by a test, not
+- Backend feature keys and their frontend mirror must stay in sync - enforced by a test, not
   documentation alone.
-- `enabled_features` is the only source of truth for what an org can access — no separate `plan`
+- `enabled_features` is the only source of truth for what an org can access - no separate `plan`
   label is stored anywhere.
-- `is_staff` is never settable through any endpoint in this plan — it's a DB-only flag.
+- `is_staff` is never settable through any endpoint in this plan - it's a DB-only flag.
 
 ---
 
-### Task 1: Data model — `Org.enabled_features`, `User.is_staff`
+### Task 1: Data model - `Org.enabled_features`, `User.is_staff`
 
 **Files:**
 - Modify: `backend/app/models/tenant.py` (add `enabled_features` to `Org`)
@@ -84,7 +84,7 @@ async def test_new_org_and_user_default_to_no_entitlements(client):
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run (from `backend/`): `pytest tests/test_org_features_migration.py -v`
-Expected: FAIL — `AttributeError: 'Org' object has no attribute 'enabled_features'` (the column
+Expected: FAIL - `AttributeError: 'Org' object has no attribute 'enabled_features'` (the column
 doesn't exist yet).
 
 - [ ] **Step 3: Add the columns to the models**
@@ -121,7 +121,7 @@ In `backend/app/models/user.py`, add this column to `User`, directly after `is_v
     is_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 ```
 
-(`Boolean` is already imported in `user.py` — no import change needed there.)
+(`Boolean` is already imported in `user.py` - no import change needed there.)
 
 - [ ] **Step 4: Create the migration**
 
@@ -173,7 +173,7 @@ Expected: PASS.
 - [ ] **Step 7: Run the full backend suite to check for regressions**
 
 Run (from `backend/`): `pytest -q`
-Expected: same pass count as before this change, plus the one new test — 0 new failures.
+Expected: same pass count as before this change, plus the one new test - 0 new failures.
 
 - [ ] **Step 8: Commit**
 
@@ -200,10 +200,10 @@ git commit -m "feat: add Org.enabled_features and User.is_staff columns"
   the existing `require_role(*roles)`. `OrgResponse.enabled_features: list[str]` and
   `OrgResponse.is_staff: bool` on both `/orgs/me` endpoints.
 - Note on scope: `predictive.router` and `cbm.router` are gated by the **same** key, `"predictive"`
-  — both back the single `/predictive` page (`Predictive.tsx` calls both `/predictive/*` and
+  - both back the single `/predictive` page (`Predictive.tsx` calls both `/predictive/*` and
   `/cbm/*`), so gating them under two different keys would let an org see half a working page.
   This is a deliberate correction of the design spec's registry table, which listed them as two
-  separate keys without tracing through that both routers serve one frontend route — see this
+  separate keys without tracing through that both routers serve one frontend route - see this
   plan's Self-Review Notes.
 
 - [ ] **Step 1: Write the failing test**
@@ -279,7 +279,7 @@ async def test_orgs_me_exposes_enabled_features_and_is_staff(client):
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run (from `backend/`): `pytest tests/test_feature_gating.py -v`
-Expected: FAIL — `GET /boms` returns 200 with no gating (test 1), and `/orgs/me`'s response has no
+Expected: FAIL - `GET /boms` returns 200 with no gating (test 1), and `/orgs/me`'s response has no
 `enabled_features`/`is_staff` keys (test 3, `KeyError`).
 
 - [ ] **Step 3: Create the feature registry**
@@ -355,7 +355,7 @@ async def require_staff(current: CurrentUser = Depends(get_current_user)) -> Cur
     return current
 ```
 
-Add the missing import at the top of `deps.py` — change:
+Add the missing import at the top of `deps.py` - change:
 
 ```python
 from app.models.user import User
@@ -470,7 +470,7 @@ class OrgResponse(BaseModel):
 ```
 
 Then update both `OrgResponse(...)` constructions (in `get_my_org` and `update_my_org`) to add the
-two new fields — in `get_my_org`, change:
+two new fields - in `get_my_org`, change:
 
 ```python
     return OrgResponse(
@@ -501,24 +501,24 @@ And the identical change to the `return OrgResponse(...)` at the end of `update_
 - [ ] **Step 7: Run the new tests to verify they pass**
 
 Run (from `backend/`): `pytest tests/test_feature_gating.py -v`
-Expected: PASS — 3 passed.
+Expected: PASS - 3 passed.
 
 - [ ] **Step 8: Run the full backend suite to check for regressions**
 
 Run (from `backend/`): `pytest -q`
-Expected: this is the step most likely to surface breakage — every existing test that registers an
+Expected: this is the step most likely to surface breakage - every existing test that registers an
 org and then calls a now-gated route (e.g. any BOM/OEE/downtime/etc. test) will start failing with
 403s, since fresh orgs default to `enabled_features=[]`. **If you see widespread 403 failures here,
 this is expected and must be fixed, not worked around**: the fix is a single addition to the
 shared test fixture pattern, not touching each failing test file individually. Add a helper to
 whichever conftest/shared fixture module those `_register_and_login()` copies commonly sit near
-(check `backend/tests/conftest.py` first), or — if no shared conftest hook exists — grant the
+(check `backend/tests/conftest.py` first), or - if no shared conftest hook exists - grant the
 `client` fixture's underlying test org every feature by default. Concretely: after confirming which
 tests fail, the most likely correct fix is granting `PREMIUM_FEATURES` (from
 `app.core.features`) to every org created during tests, either via a `conftest.py` fixture that
 runs after each `_register_and_login()`-style helper, or by changing the test database setup to
 default new orgs to full entitlements in the test environment only (never in production code).
-Do not hand-edit `enabled_features` in dozens of individual test files — find the one shared
+Do not hand-edit `enabled_features` in dozens of individual test files - find the one shared
 place and fix it there.
 
 - [ ] **Step 9: Commit**
@@ -528,7 +528,7 @@ git add backend/app/core/features.py backend/app/api/deps.py backend/app/main.py
 git commit -m "feat: add require_feature/require_staff and gate feature routers"
 ```
 
-If Step 8 required a conftest/fixture fix, include those files in this commit too — it's part of
+If Step 8 required a conftest/fixture fix, include those files in this commit too - it's part of
 making this task's change land without breaking the suite, not a separate task.
 
 ---
@@ -542,9 +542,9 @@ making this task's change land without breaking the suite, not a separate task.
 
 **Interfaces:**
 - Consumes: `require_staff` from `backend/app/api/deps.py` (Task 2). `UserCreate`, `UserManager`,
-  `get_user_manager` from `backend/app/core/users.py` (pre-existing — same imports `auth.py`
+  `get_user_manager` from `backend/app/core/users.py` (pre-existing - same imports `auth.py`
   already uses for `/auth/register`).
-- Produces: nothing consumed by a later backend task — Task 4/5/6 are frontend-only and just call
+- Produces: nothing consumed by a later backend task - Task 4/5/6 are frontend-only and just call
   these three endpoints by URL/shape.
 
 - [ ] **Step 1: Write the failing tests**
@@ -653,7 +653,7 @@ async def test_patch_unknown_customer_404s(client):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run (from `backend/`): `pytest tests/test_admin_customers.py -v`
-Expected: FAIL — `404 Not Found` on every request (no `/admin/*` routes exist yet).
+Expected: FAIL - `404 Not Found` on every request (no `/admin/*` routes exist yet).
 
 - [ ] **Step 3: Create `admin.py`**
 
@@ -777,7 +777,7 @@ async def update_customer_features(
 
 - [ ] **Step 4: Wire `admin.router` into `main.py`**
 
-In `backend/app/main.py`, add `admin` to the existing `from app.api.routes import (...)` block —
+In `backend/app/main.py`, add `admin` to the existing `from app.api.routes import (...)` block -
 alphabetically, directly after `ai_insights,`:
 
 ```python
@@ -795,17 +795,17 @@ app.include_router(admin.router)
 ```
 
 (Its own `dependencies=[Depends(require_staff)]`, set on the `APIRouter` itself in Step 3, is what
-actually gates every route under it — nothing extra needed at the `include_router()` call site.)
+actually gates every route under it - nothing extra needed at the `include_router()` call site.)
 
 - [ ] **Step 5: Run the new tests to verify they pass**
 
 Run (from `backend/`): `pytest tests/test_admin_customers.py -v`
-Expected: PASS — 4 passed.
+Expected: PASS - 4 passed.
 
 - [ ] **Step 6: Run the full backend suite to check for regressions**
 
 Run (from `backend/`): `pytest -q`
-Expected: same pass count as after Task 2's Step 8, plus these 4 new tests — 0 new failures.
+Expected: same pass count as after Task 2's Step 8, plus these 4 new tests - 0 new failures.
 
 - [ ] **Step 7: Commit**
 
@@ -823,7 +823,7 @@ git commit -m "feat: add staff-only /admin/customers endpoints"
 - Modify: `frontend/src/lib/nav.ts` (add `featureKey` to `NavItem` and to gated entries)
 - Modify: `frontend/src/components/AppShell.tsx` (filter `NAV_SECTIONS` by entitlement)
 - Test: `backend/tests/test_feature_registry_sync.py` (cross-checks the two registries stay in sync
-  — lives in `backend/tests` since it's the enforcement mechanism the design spec calls for, and
+  - lives in `backend/tests` since it's the enforcement mechanism the design spec calls for, and
   this repo's Python test suite is what CI already runs on every change to either file)
 
 **Interfaces:**
@@ -1060,10 +1060,10 @@ Then, directly after the `const match = findNavMatch(location.pathname);` line, 
   })).filter((section) => section.items.length > 0);
 ```
 
-Then change the two `NAV_SECTIONS.map((section, idx) => {` occurrences — there's one in the render
-(the sidebar `<nav>` block) — to `visibleSections.map((section, idx) => {`. (`ALL_NAV_ITEMS` and
+Then change the two `NAV_SECTIONS.map((section, idx) => {` occurrences - there's one in the render
+(the sidebar `<nav>` block) - to `visibleSections.map((section, idx) => {`. (`ALL_NAV_ITEMS` and
 `findNavMatch`, used elsewhere in this file for the command palette and breadcrumb, are left
-unfiltered on purpose — Task 6 revisits whether the command palette needs the same filter; out of
+unfiltered on purpose - Task 6 revisits whether the command palette needs the same filter; out of
 scope for this task, which only covers the sidebar.)
 
 - [ ] **Step 4: Write the registry-sync test**
@@ -1118,7 +1118,7 @@ git commit -m "feat: add frontend feature registry and gate the sidebar by entit
 - Modify: `frontend/src/App.tsx` (add `RequireFeature`/`RequireStaff`, wrap gated routes, remove
   `/register` route and its import)
 - Modify: `frontend/src/pages/Login.tsx` (remove the "sign up" link, if one exists)
-- Test: none (no component-render harness — manual verification, per repo convention)
+- Test: none (no component-render harness - manual verification, per repo convention)
 
 **Interfaces:**
 - Consumes: `NavItem.featureKey` pattern and the entitlement data shape from Task 4 (this task
@@ -1193,7 +1193,7 @@ function RequireStaff({ children }: { children: JSX.Element }) {
 }
 ```
 
-(This duplicates the `["org-me"]` query key from `AppShell.tsx` — TanStack Query dedupes identical
+(This duplicates the `["org-me"]` query key from `AppShell.tsx` - TanStack Query dedupes identical
 concurrent queries by key automatically, so this is a second consumer of the same cached fetch, not
 a second network request.)
 
@@ -1207,7 +1207,7 @@ Remove this line:
 
 Then wrap each gated route's `element` in `RequireFeature`. Replace the routes block from
 `<Route path="/boms" ...>` through `<Route path="/computer-vision" ...>` (i.e. every route this
-plan's registry gates — System routes `/integrations`, `/realtime`, `/runs`, `/alerts`, and the
+plan's registry gates - System routes `/integrations`, `/realtime`, `/runs`, `/alerts`, and the
 always-on `/items`, `/datasets*`, `/sql-editor`, `/bi*`, `/workflows*` stay exactly as they are)
 with:
 
@@ -1278,7 +1278,7 @@ to:
 ```
 
 If `Link` is no longer used elsewhere in this file after this change, remove its import too (check
-with `npx tsc -b --noEmit` in the next step — an unused import shows up as a build error, not a
+with `npx tsc -b --noEmit` in the next step - an unused import shows up as a build error, not a
 silent leftover).
 
 - [ ] **Step 4: Type-check**
@@ -1290,14 +1290,14 @@ lint/type error, remove that import too.
 - [ ] **Step 5: Manual smoke test in the browser**
 
 1. Start both dev servers (`.claude/launch.json` configurations `backend-dev` and `frontend`).
-2. Register a throwaway account directly via the backend (`POST /auth/register` — e.g. with
+2. Register a throwaway account directly via the backend (`POST /auth/register` - e.g. with
    `curl` or a REST client, since the UI no longer exposes signup), confirming it still works.
 3. Log in as that account. Confirm `/register` no longer has a link from the Login page, and that
    navigating to `/register` directly redirects or 404s per React Router's default (no matching
    `<Route>`).
 4. With `enabled_features: []` (the default), confirm the sidebar shows only always-on items
    (Dashboard, Items, Datasets, SQL Editor, BI Dashboards, Workflows, Run History, Report
-   Builder... wait, Report Builder is gated — confirm it does NOT show), and navigating directly to
+   Builder... wait, Report Builder is gated - confirm it does NOT show), and navigating directly to
    `/analytics/oee` shows the "Not included in your plan" state instead of the OEE page.
 5. Grant `oee` via direct DB update to `enabled_features`, refresh, confirm the OEE nav item now
    appears and `/analytics/oee` renders normally.
@@ -1318,7 +1318,7 @@ git commit -m "feat: gate routes behind RequireFeature, remove public registrati
 - Modify: `frontend/src/App.tsx` (lazy-import + route, wrapped in `RequireStaff`)
 - Modify: `frontend/src/lib/nav.ts` (add a staff-only nav entry)
 - Modify: `frontend/src/components/AppShell.tsx` (only show that nav entry when `is_staff`)
-- Test: none (no component-render harness — manual verification)
+- Test: none (no component-render harness - manual verification)
 
 **Interfaces:**
 - Consumes: `POST/GET/PATCH /admin/customers` (Task 3), `FEATURES`/`CORE_FEATURES`/
@@ -1337,7 +1337,7 @@ In `frontend/src/lib/nav.ts`, add a new section at the end of `NAV_SECTIONS` (af
   },
 ```
 
-(`Users` is already imported for the Shifts nav icon — no new icon import needed.)
+(`Users` is already imported for the Shifts nav icon - no new icon import needed.)
 
 - [ ] **Step 2: Hide the Staff section for non-staff users**
 
@@ -1610,7 +1610,7 @@ Expected: no new errors.
 1. Start both dev servers.
 2. Log in as a non-staff user, confirm no "Staff" section appears in the sidebar and navigating
    directly to `/admin/customers` redirects to `/` instead of showing the page.
-3. Flip `is_staff = true` directly in the DB for your test user, log in again (or refresh — the
+3. Flip `is_staff = true` directly in the DB for your test user, log in again (or refresh - the
    `["org-me"]` query should pick up the change on next fetch), confirm the "Staff" section and
    "Customers" link now appear.
 4. On the Customers page, create a new customer with only `oee` checked. Confirm it appears in the
@@ -1618,7 +1618,7 @@ Expected: no new errors.
 5. Click "Edit features" on that row, check `automl` too, save. Confirm the badge list updates to
    show both OEE and AutoML without a page reload.
 6. Log in as the new customer's owner account (its email/password reset link would have been
-   logged server-side, since `ses_from_email` is unset in dev — check backend logs for the token,
+   logged server-side, since `ses_from_email` is unset in dev - check backend logs for the token,
    or query the DB for the user and use `/auth/reset-password` directly with a manually-crafted
    token if easier) and confirm their sidebar shows exactly OEE and AutoML, nothing else.
 
@@ -1640,25 +1640,25 @@ git commit -m "feat: add staff-only Customers onboarding/management page"
   Task 4's registry-sync test covering the spec's explicit call for one.
 - **Deliberate deviation from the spec:** the spec's registry table listed `predictive` and `cbm`
   as two separate feature keys. Tracing the actual frontend routes (`App.tsx` has exactly one
-  `/predictive` route, no separate `/cbm` route — `Predictive.tsx` calls both APIs from the same
+  `/predictive` route, no separate `/cbm` route - `Predictive.tsx` calls both APIs from the same
   page) showed two keys would let an org's entitlement state disagree with itself (e.g. `cbm`
   granted but `predictive` not, showing half a broken page). This plan merges them into one
-  `"predictive"` key gating both `predictive.router` and `cbm.router` — noted inline in Task 2.
-  This is a plan-level correction, not an implementation shortcut — flagging per the requirement
+  `"predictive"` key gating both `predictive.router` and `cbm.router` - noted inline in Task 2.
+  This is a plan-level correction, not an implementation shortcut - flagging per the requirement
   that deviations from the spec be explicit.
-- **Test-suite regression risk:** Task 2 Step 8 is the plan's highest-risk step — gating ~24
+- **Test-suite regression risk:** Task 2 Step 8 is the plan's highest-risk step - gating ~24
   routers by default-empty entitlements will 403 every existing test that exercises a gated route
   through the standard `_register_and_login()` fixture pattern. The step includes explicit guidance
   (fix the shared fixture, not each failing file) rather than leaving this as a surprise; there was
   no way to know the exact fix location without running the suite, so it's written as a diagnostic
   step rather than a scripted one.
-- **Placeholder scan:** none — every step has complete, runnable code. Task 5 Step 3 (Login page
+- **Placeholder scan:** none - every step has complete, runnable code. Task 5 Step 3 (Login page
   edit) was initially written as a descriptive find-and-remove instruction before `Login.tsx` had
   been read; fixed during self-review to a literal before/after diff against the file's actual
   content.
 - **Type consistency:** `EntitlementResponse`/`OrgResponse` shapes match across Task 2 (backend
   `OrgResponse` gains `enabled_features`/`is_staff`), Task 4 (`AppShell.tsx`'s local `OrgResponse`
-  gains the same two fields), and Task 5 (`App.tsx`'s `EntitlementResponse` — a separate, smaller
+  gains the same two fields), and Task 5 (`App.tsx`'s `EntitlementResponse` - a separate, smaller
   local interface, since `App.tsx` only needs those two fields, not the full org shape). `Customer`
   (Task 6) matches `CustomerResponse` (Task 3) field-for-field. `FEATURES`/`CORE_FEATURES`/
   `PREMIUM_FEATURES` names and shapes match between `backend/app/core/features.py` (Task 2) and

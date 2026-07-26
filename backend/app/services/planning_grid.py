@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.models.procurement import Supplier
-from app.services.demand_forecasting import compute_weekly_suggestions
+from app.services.demand_forecasting import DEFAULT_LOOKBACK_DAYS, compute_weekly_suggestions
 from app.services.demand_history import daily_consumption_by_item
 from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, load_on_hand
 
@@ -20,9 +20,10 @@ from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, l
 # so the grid and a raw /mrp/plan call agree.
 GRID_HORIZON_DAYS = 90
 
-# How far back a consumed item counts as something the user still plans. Longer
-# than the suggestion engine's own lookback would surface long-dead SKUs.
-CONSUMPTION_LOOKBACK_DAYS = 90
+# How far back a consumed item counts as something the user still plans. Reuses
+# the suggestion engine's own lookback: an item outside it can never carry a
+# suggestion, so a row for it could never be anything but empty.
+CONSUMPTION_LOOKBACK_DAYS = DEFAULT_LOOKBACK_DAYS
 
 # Where a typed quantity lands when the user does not pick a date. Two weeks is
 # far enough out that most purchased parts can still arrive in time.
@@ -119,7 +120,9 @@ async def compute_planning_grid(
     that second half covers a purchased item sold as-is, which has no BOM but is
     still something the user plans. Sub-assemblies never get their own row: the
     engine handles them, and showing them would be exactly the disjointed detail
-    this screen exists to hide.
+    this screen exists to hide. Because only active BOMs are read, archiving a
+    BOM drops its materials out of `components` and, if they have consumption
+    history, promotes them straight to their own top-level rows.
 
     Status is judged over the components reachable from the product (or the
     product itself when it has no BOM, where "the material" is the thing you buy):
@@ -161,6 +164,9 @@ async def compute_planning_grid(
         )
     )
     product_ids = ((produced | consumed) - components) | set(planned)
+    # ids that only made the cut because of consumption history - not a
+    # produced top-level item, and not something the user has forecast.
+    consumed_only_ids = (consumed - components) - produced - set(planned)
     if not product_ids:
         return PlanningGrid(
             horizon_start=horizon_start, horizon_end=horizon_end, products=[], to_buy=[]
@@ -247,6 +253,16 @@ async def compute_planning_grid(
             suggested = suggested_by_item.get(product.item_id)
             if suggested is not None and suggested > 0:
                 product.suggested_qty = suggested
+
+    # A consumed-only item earns its row by having something to suggest;
+    # otherwise it is noise on a screen meant to be read at a glance - an
+    # empty green row with nothing planned, nothing missing, and nothing to
+    # offer.
+    products = [
+        p
+        for p in products
+        if p.item_id not in consumed_only_ids or p.suggested_qty is not None
+    ]
 
     supplier_names = {
         supplier.id: supplier.name

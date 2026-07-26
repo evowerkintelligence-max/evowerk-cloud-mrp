@@ -140,7 +140,12 @@ async def compute_planning_grid(
         arriving = False
         for component_id in evaluation:
             line = by_item.get(component_id)
-            if line is None:
+            # A manufactured sub-assembly's net_requirement is a build
+            # instruction, not a material anyone has to order - its own
+            # components are already in this same evaluation set, so its
+            # shortfall gets judged there instead. Only a purchased line's
+            # shortfall can turn the product red.
+            if line is None or line.is_manufactured:
                 continue
             if line.net_requirement > 0:
                 missing_materials.append(line.item_sku)

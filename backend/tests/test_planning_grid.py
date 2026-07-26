@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.core.security import hash_password
+from app.models.user import User
+from app.services.planning_grid import DEFAULT_NEEDED_BY_DAYS, GRID_HORIZON_DAYS
 
 pytestmark = pytest.mark.asyncio
 
@@ -111,7 +119,11 @@ async def test_forecasted_item_without_bom_gets_a_row(client):
     await _plan(client, token, widget, 10)
     grid = await _grid(client, token)
 
-    assert _product(grid, "WIDGET-1")["planned_qty"] == "10.0000"
+    row = _product(grid, "WIDGET-1")
+    assert row["planned_qty"] == "10.0000"
+    assert Decimal(row["on_hand"]) == Decimal(0)
+    today = datetime.now(timezone.utc).date()
+    assert row["needed_by"] == (today + timedelta(days=DEFAULT_NEEDED_BY_DAYS)).isoformat()
 
 
 async def test_missing_when_a_component_is_short(client):
@@ -152,6 +164,91 @@ async def test_in_stock_when_components_are_covered(client):
     assert row["materials_status"] == "in_stock"
     assert row["missing_materials"] == []
     assert grid["summary"]["in_stock"] == 1
+
+
+async def test_sub_assembly_shortfall_does_not_turn_the_product_red(client):
+    """A sub-assembly's own net_requirement is a build instruction, not a
+    material to order. PUMP-A2 has no stock and neither does SUB-1, but every
+    buyable part (SEAL-V2) is on the shelf, so the row must be in_stock, not
+    missing with SUB-1 listed."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")
+    sub = await _create_item(client, token, "SUB-1")
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, sub, [(seal, 2)])
+    await _create_active_bom(client, token, pump, [(sub, 1)])
+    headers = {"Authorization": f"Bearer {token}"}
+    # PUMP-A2 planned at 50 with no stock on either PUMP-A2 or SUB-1 nets a
+    # build requirement of 50 SUB-1, which explodes to 100 SEAL-V2 (qty_per 2).
+    # Stock SEAL-V2 well above that so it is genuinely covered, not just
+    # coincidentally enough.
+    adj = await client.post(
+        f"/inventory/{seal['id']}/adjust",
+        json={"quantity": "500", "reason_code": "found_stock"},
+        headers=headers,
+    )
+    assert adj.status_code == 200, adj.text
+    assert adj.json()["applied"] is True
+
+    await _plan(client, token, pump, 50)
+    grid = await _grid(client, token)
+
+    row = _product(grid, "PUMP-A2")
+    assert row["materials_status"] == "in_stock"
+    assert row["missing_materials"] == []
+
+
+async def test_member_cannot_set_planned_quantity(client, test_engine):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    me = await client.get("/orgs/me", headers={"Authorization": f"Bearer {token}"})
+    org_id = me.json()["id"]
+
+    # No invite flow exists yet to produce a non-owner user via the API, so
+    # construct one directly against the test DB, same as
+    # test_bom.test_rbac_blocks_non_owner_from_mutations.
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        member = User(
+            org_id=uuid.UUID(org_id),
+            email="member@example.com",
+            hashed_password=hash_password(PASSWORD),
+            role="member",
+            is_active=True,
+        )
+        session.add(member)
+        await session.commit()
+
+    login = await client.post(
+        "/auth/login", json={"email": "member@example.com", "password": PASSWORD}
+    )
+    assert login.status_code == 200
+    member_token = login.json()["access_token"]
+
+    res = await client.put(
+        f"/planning/grid/{widget['id']}",
+        json={"quantity": "0"},
+        headers={"Authorization": f"Bearer {member_token}"},
+    )
+    assert res.status_code == 403
+
+    # The grid itself stays open to everyone.
+    read = await client.get(
+        "/planning/grid", headers={"Authorization": f"Bearer {member_token}"}
+    )
+    assert read.status_code == 200
+
+
+async def test_grid_window_is_fixed_90_days_from_today(client):
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    await _plan(client, token, widget, 10)
+
+    grid = await _grid(client, token)
+
+    today = datetime.now(timezone.utc).date()
+    assert grid["horizon_start"] == today.isoformat()
+    assert grid["horizon_end"] == (today + timedelta(days=GRID_HORIZON_DAYS)).isoformat()
 
 
 async def test_arriving_when_a_component_is_only_covered_by_an_open_po(client):

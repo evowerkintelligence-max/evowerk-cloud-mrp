@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_or_404
+from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
@@ -89,7 +89,7 @@ class GridPlanRequest(BaseModel):
 async def set_planned_quantity(
     item_id: uuid.UUID,
     body: GridPlanRequest,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_role("owner", "manager")),
     db: AsyncSession = Depends(get_db),
 ):
     """Set how many of this product the user plans to make. Implemented in

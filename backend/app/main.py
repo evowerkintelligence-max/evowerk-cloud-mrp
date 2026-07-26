@@ -36,6 +36,7 @@ from app.api.routes import (
     oee,
     orgs,
     pace_tracking,
+    planning_grid,
     plant_summary,
     predictive,
     process_mining,
@@ -120,6 +121,7 @@ app.include_router(inventory_analytics.router, dependencies=[Depends(require_fea
 app.include_router(inventory.router, dependencies=[Depends(require_feature("warehouse"))])
 app.include_router(forecasts.router, dependencies=[Depends(require_feature("planning"))])
 app.include_router(forecasts.mrp_router, dependencies=[Depends(require_feature("planning"))])
+app.include_router(planning_grid.router, dependencies=[Depends(require_feature("planning"))])
 app.include_router(datasets.router)
 app.include_router(oee.router, dependencies=[Depends(require_feature("oee"))])
 app.include_router(pace_tracking.router, dependencies=[Depends(require_feature("pace_tracking"))])

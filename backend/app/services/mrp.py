@@ -77,7 +77,7 @@ async def _min_date_by_item(db: AsyncSession, query) -> dict[uuid.UUID, date]:
     return dict(result.all())
 
 
-async def _load_bom_children(
+async def load_bom_children(
     db: AsyncSession, org_id: uuid.UUID
 ) -> dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]]:
     """Manufacturing graph over ACTIVE BOMs only: produced item_id -> list of
@@ -99,6 +99,30 @@ async def _load_bom_children(
     for parent_id, child_id, qty, scrap_pct in rows.all():
         children[parent_id].append((child_id, qty * (1 + scrap_pct / 100)))
     return children
+
+
+async def load_on_hand(db: AsyncSession, org_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
+    """Total on-hand per item: active lot quantities for lot-tracked items plus
+    the general inventory_balances for everything else. The two are disjoint (an
+    item is one or the other - see Item.is_lot_tracked), so summing them is just
+    "whichever applies". on_hold lots are excluded: they can't be consumed, so
+    counting them would understate a real shortage.
+    """
+    on_hand = await _sum_by_item(
+        db,
+        select(Lot.item_id, func.sum(Lot.quantity_remaining))
+        .where(Lot.org_id == org_id, Lot.status == "active")
+        .group_by(Lot.item_id),
+    )
+    inventory_on_hand = await _sum_by_item(
+        db,
+        select(InventoryBalance.item_id, func.sum(InventoryBalance.quantity_on_hand))
+        .where(InventoryBalance.org_id == org_id)
+        .group_by(InventoryBalance.item_id),
+    )
+    for item_id, qty in inventory_on_hand.items():
+        on_hand[item_id] = on_hand.get(item_id, Decimal(0)) + qty
+    return on_hand
 
 
 def resolve_horizon(horizon_start: date | None, horizon_end: date | None) -> tuple[date, date]:
@@ -205,20 +229,7 @@ async def _explode_and_net(
         return []
     need_by = dict(seed_due) if seed_due else {}
 
-    on_hand = await _sum_by_item(
-        db,
-        select(Lot.item_id, func.sum(Lot.quantity_remaining))
-        .where(Lot.org_id == org_id, Lot.status == "active")
-        .group_by(Lot.item_id),
-    )
-    inventory_on_hand = await _sum_by_item(
-        db,
-        select(InventoryBalance.item_id, func.sum(InventoryBalance.quantity_on_hand))
-        .where(InventoryBalance.org_id == org_id)
-        .group_by(InventoryBalance.item_id),
-    )
-    for item_id, qty in inventory_on_hand.items():
-        on_hand[item_id] = on_hand.get(item_id, Decimal(0)) + qty
+    on_hand = await load_on_hand(db, org_id)
     on_order = await _sum_by_item(
         db,
         select(
@@ -239,7 +250,7 @@ async def _explode_and_net(
         .where(PurchaseOrder.org_id == org_id, PurchaseOrder.status == "draft")
         .group_by(PurchaseOrderLine.item_id),
     )
-    children = await _load_bom_children(db, org_id)
+    children = await load_bom_children(db, org_id)
 
     relevant: set[uuid.UUID] = set()
     stack = list(seed_gross.keys())
@@ -346,7 +357,7 @@ async def compute_build_plan(
     compute_mrp_plan uses) seeded from a single ad hoc quantity instead of
     demand forecasts - so it nets against real on-hand/on-order/on-draft
     stock exactly like planning does, and each component's own recipe-level
-    scrap_pct (see BomLine.scrap_pct / _load_bom_children) still applies.
+    scrap_pct (see BomLine.scrap_pct / load_bom_children) still applies.
 
     yield_loss_pct is a *different* scrap concept from BomLine.scrap_pct:
     it's the expected fraction of finished-good ATTEMPTS that fail entirely

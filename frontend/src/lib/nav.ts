@@ -7,7 +7,6 @@ import {
   Brain,
   CalendarRange,
   Camera,
-  Cog,
   Database,
   Factory,
   FileStack,
@@ -66,7 +65,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/lots", label: "Lots", icon: Boxes, keywords: ["batch", "traceability"], featureKey: "lots" },
       { to: "/warehouse", label: "Warehouse", icon: Warehouse, keywords: ["inventory", "stock", "on-hand", "on hand"], featureKey: "warehouse" },
       { to: "/planning", label: "Planning", icon: CalendarRange, keywords: ["mrp", "forecast", "demand", "what to do", "shortages", "materials"], featureKey: "planning" },
-      { to: "/production-setup", label: "Production Setup", icon: Cog, keywords: ["work centers", "workcenter", "machines", "equipment", "routings", "routing", "operations", "cells", "stations"] },
     ],
   },
   {

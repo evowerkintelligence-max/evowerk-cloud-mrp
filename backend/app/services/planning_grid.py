@@ -63,7 +63,7 @@ class GridProduct:
     detail: list[MrpPlanLine]
 
 
-_URGENCY_RANK = {"overdue": 0, "soon": 1, "later": 2}
+_URGENCY_RANK = {"overdue": 0, "unknown": 1, "soon": 2, "later": 3}
 
 # An order date inside this many days is "soon" - near enough that the user
 # should act on this visit rather than the next one.
@@ -79,7 +79,10 @@ class GridToBuy:
     quantity: Decimal
     supplier_name: str | None
     order_by: date | None
-    urgency: str  # overdue | soon | later
+    # overdue | unknown | soon | later. "unknown" is a component that must be
+    # ordered but has no lead time on file - not the same as "later", which
+    # means a lead time is known and there is comfortably enough runway.
+    urgency: str
 
 
 @dataclass
@@ -193,6 +196,10 @@ async def compute_planning_grid(
         missing_materials: list[str] = []
         arriving = False
         ready_by = horizon_start
+        # An arriving/missing component with no lead time on file makes the
+        # whole product's ready_by unknowable, not same-day: see
+        # Item.lead_time_days - null means "don't know", never zero.
+        unknown_lead = False
         for component_id in evaluation:
             line = by_item.get(component_id)
             # A sub-assembly's own shortfall is a build instruction, not a
@@ -203,13 +210,19 @@ async def compute_planning_grid(
             if line is None or line.is_manufactured:
                 continue
             component = items.get(component_id)
-            lead_days = (component.lead_time_days or 0) if component is not None else 0
+            lead_days = component.lead_time_days if component is not None else None
             if line.net_requirement > 0:
                 missing_materials.append(line.item_sku)
-                ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
+                if lead_days is None:
+                    unknown_lead = True
+                else:
+                    ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
             elif line.on_hand < line.gross_demand:
                 arriving = True
-                ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
+                if lead_days is None:
+                    unknown_lead = True
+                else:
+                    ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
         missing_materials.sort()
 
         if missing_materials:
@@ -234,7 +247,7 @@ async def compute_planning_grid(
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,
-                ready_by=ready_by if qty > 0 else None,
+                ready_by=None if qty <= 0 or unknown_lead else ready_by,
                 suggested_qty=None,
                 detail=detail,
             )
@@ -282,7 +295,10 @@ async def compute_planning_grid(
             supplier_name = supplier_names.get(line_item.preferred_supplier_id)
         order_by = line.suggested_order_date
         if order_by is None:
-            urgency = "later"
+            # No lead time on file for this item (see Item.lead_time_days):
+            # a real shortfall with an unknowable order date, not the least
+            # urgent thing on the list.
+            urgency = "unknown"
         elif order_by < horizon_start:
             urgency = "overdue"
         elif order_by <= horizon_start + timedelta(days=SOON_DAYS):

@@ -12,6 +12,9 @@ import { describeOrderResult, type GeneratePosResult } from "./orderResult";
 
 const URGENCY_DOT: Record<GridToBuy["urgency"], string> = {
   overdue: "bg-destructive",
+  // No lead time on file, so there is no real order-by date to judge against -
+  // shown distinctly from "later" so it never reads as the least urgent row.
+  unknown: "bg-accent",
   soon: "bg-warning",
   later: "bg-muted-foreground",
 };

@@ -36,7 +36,7 @@ export interface GridToBuy {
   quantity: string;
   supplier_name: string | null;
   order_by: string | null;
-  urgency: "overdue" | "soon" | "later";
+  urgency: "overdue" | "unknown" | "soon" | "later";
 }
 
 export interface PlanningGridResponse {

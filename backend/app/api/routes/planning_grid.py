@@ -156,9 +156,11 @@ async def set_planned_quantity(
     """Set how many of this product the user plans to make, and when they need
     it. The only write the planning screen makes.
 
-    Owner or manager, matching the other planning-level writes: this replaces a
-    whole window of forecasts, so a read-only member typing 0 must not be able
-    to wipe an imported forecast. Reading the grid stays open to everyone.
+    Owner or manager: planning is a shop-floor supervisor action, deliberately
+    broader than the owner-only forecast endpoints in forecasts.py. This
+    replaces a whole window of forecasts, so a read-only member typing 0 must
+    not be able to wipe an imported forecast. Reading the grid stays open to
+    everyone.
 
     The window holds exactly one number per item: this replaces whatever was
     there rather than adding to it, because the input is a single box the user
@@ -184,7 +186,7 @@ async def set_planned_quantity(
             f"Pick a date between {horizon_start} and {horizon_end}",
         )
 
-    await db.execute(
+    deleted = await db.execute(
         delete(DemandForecast).where(
             DemandForecast.org_id == current.org_id,
             DemandForecast.item_id == item_id,
@@ -209,6 +211,11 @@ async def set_planned_quantity(
         org_id=current.org_id,
         actor_user_id=current.id,
         target=str(item_id),
+        metadata={
+            "quantity": str(body.quantity),
+            "needed_by": needed_by.isoformat(),
+            "rows_replaced": deleted.rowcount,
+        },
     )
     await db.commit()
 

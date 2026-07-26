@@ -405,6 +405,50 @@ async def test_ready_by_is_null_when_nothing_is_planned(client):
     assert _product(grid, "PUMP-A2")["ready_by"] is None
 
 
+async def test_ready_by_is_null_when_a_short_component_has_no_lead_time_on_file(client):
+    """lead_time_days is nullable and null means "don't know", never a
+    same-day lead time (see Item.lead_time_days). A missing component with no
+    lead time on file must not render as ready today."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")  # lead_time_days left unset (None)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+
+    await _plan(client, token, pump, 50)
+    grid = await _grid(client, token)
+
+    row = _product(grid, "PUMP-A2")
+    assert row["materials_status"] == "missing"
+    assert row["ready_by"] is None
+
+
+async def test_ready_by_is_null_when_an_arriving_component_has_no_lead_time_on_file(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2")  # lead_time_days left unset (None)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await client.post("/suppliers", json={"name": "Sealtech"}, headers=headers)
+    po = await client.post(
+        "/purchase-orders", json={"supplier_id": supplier.json()["id"]}, headers=headers
+    )
+    po_id = po.json()["id"]
+    await client.patch(
+        f"/purchase-orders/{po_id}",
+        json=[{"item_id": seal["id"], "quantity_ordered": "500", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    submit = await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
+    assert submit.status_code == 200, submit.text
+
+    await _plan(client, token, pump, 50)
+    grid = await _grid(client, token)
+
+    row = _product(grid, "PUMP-A2")
+    assert row["materials_status"] == "arriving"
+    assert row["ready_by"] is None
+
+
 async def test_to_buy_lists_shortfalls_with_supplier_and_urgency(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -442,6 +486,33 @@ async def test_to_buy_marks_a_past_order_date_overdue(client):
 
     assert grid["to_buy"][0]["urgency"] == "overdue"
     assert grid["to_buy"][0]["supplier_name"] is None
+
+
+async def test_to_buy_urgency_is_unknown_when_the_component_has_no_lead_time_on_file(client):
+    """No lead time on file means no order-by date can be computed (see
+    Item.lead_time_days and mrp.suggested_order_date). That must not be
+    presented as "later" - the least urgent thing to buy - so it gets its own
+    urgency and is not sorted after a genuinely low-urgency item."""
+    token = await _register_and_login(client)
+    unknown_seal = await _create_item(client, token, "SEAL-UNKNOWN")  # lead_time_days left unset
+    unknown_pump = await _create_item(client, token, "PUMP-UNKNOWN")
+    await _create_active_bom(client, token, unknown_pump, [(unknown_seal, 1)])
+    later_seal = await _create_item(client, token, "SEAL-LATER", lead_time_days=0)
+    later_pump = await _create_item(client, token, "PUMP-LATER")
+    await _create_active_bom(client, token, later_pump, [(later_seal, 1)])
+
+    await _plan(client, token, unknown_pump, 10, needed_by=str(_today() + timedelta(days=30)))
+    await _plan(client, token, later_pump, 10, needed_by=str(_today() + timedelta(days=30)))
+    grid = await _grid(client, token)
+
+    by_sku = {row["item_sku"]: row for row in grid["to_buy"]}
+    assert by_sku["SEAL-UNKNOWN"]["order_by"] is None
+    assert by_sku["SEAL-UNKNOWN"]["urgency"] == "unknown"
+    assert by_sku["SEAL-LATER"]["urgency"] == "later"
+    skus_in_order = [row["item_sku"] for row in grid["to_buy"]]
+    assert skus_in_order.index("SEAL-UNKNOWN") < skus_in_order.index("SEAL-LATER"), (
+        "an unknown lead time must not sort after a known, low-urgency one"
+    )
 
 
 async def test_to_buy_urgency_boundary_is_soon_at_7_days_and_later_at_8(client):
@@ -754,3 +825,37 @@ async def test_a_bom_component_with_consumption_history_still_does_not_get_its_o
     grid = await _grid(client, token)
 
     assert {row["item_sku"] for row in grid["products"]} == {"PUMP-A2"}
+
+
+async def test_set_planned_quantity_audit_log_carries_quantity_needed_by_and_rows_replaced(
+    client, test_engine
+):
+    """The single delete-then-insert write this endpoint makes must be
+    reconstructible from the audit log alone, same as the bucket endpoint it
+    replaced (see forecasts.py)."""
+    from sqlalchemy import select
+
+    from app.models.audit import AuditLog
+
+    token = await _register_and_login(client)
+    widget = await _create_item(client, token, "WIDGET-1")
+    needed_by = str(_today() + timedelta(days=10))
+    await _plan(client, token, widget, 10, needed_by=needed_by)
+    await _plan(client, token, widget, 25, needed_by=str(_today() + timedelta(days=20)))
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(AuditLog).where(AuditLog.action == "forecast.planned_via_grid")
+            )
+        ).scalars().all()
+
+    events = sorted(rows, key=lambda r: r.created_at)
+    assert len(events) == 2
+    first, second = events
+    assert first.event_metadata["quantity"] == "10"
+    assert first.event_metadata["needed_by"] == needed_by
+    assert first.event_metadata["rows_replaced"] == 0, "nothing existed yet to replace"
+    assert second.event_metadata["quantity"] == "25"
+    assert second.event_metadata["rows_replaced"] == 1, "the previous plan's one row must be counted"

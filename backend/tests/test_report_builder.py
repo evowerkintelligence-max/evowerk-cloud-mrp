@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from app.services.reports import _excel_safe
@@ -442,6 +444,43 @@ async def test_kind_report_section_rejects_unknown_kind(client):
 
     res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
     assert res.status_code == 400
+
+
+async def test_kind_report_section_with_retired_kind_still_renders_other_sections(client, test_engine):
+    """A report saved before the "mrp-plan" export was retired still carries
+    it in its stored spec (KINDS no longer includes it). Rendering must skip
+    that one section rather than failing the whole report."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.models.report_spec import SavedReport
+
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/orgs/me", headers=headers)
+    org_id = me.json()["id"]
+    user_id = me.json()["user_id"]
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(
+            SavedReport(
+                org_id=uuid.UUID(org_id),
+                name="Old export",
+                sections=[
+                    {"type": "text", "title": "Notes", "text": "Still here"},
+                    {"type": "kind_report", "report_kind": "mrp-plan"},
+                ],
+                created_by=uuid.UUID(user_id),
+            )
+        )
+        await session.commit()
+
+    listed = await client.get("/reports/custom", headers=headers)
+    report_id = listed.json()[0]["id"]
+
+    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
+    assert res.status_code == 200, res.text
+    assert b"Still here" in res.content
 
 
 async def test_rca_case_section_renders_causes_and_actions(client):

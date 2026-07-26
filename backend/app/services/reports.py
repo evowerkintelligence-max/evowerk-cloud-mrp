@@ -50,6 +50,11 @@ from app.services.scenario import compare_lead_time_scenario
 BRAND = "EvoWerk Cloud MRP"
 
 KINDS = ("inventory-analytics", "rca", "scenario", "dataset")
+# Kinds that used to be in KINDS and can still show up in an old
+# saved_reports.spec / report_inbox_items.spec captured before removal (see
+# _resolve_kind_report_sections). Never add a kind here to bring it back -
+# these stay permanently unbuildable, only tolerated in stored specs.
+RETIRED_KINDS = ("mrp-plan",)
 FORMATS = {
     "csv": "text/csv",
     "html": "text/html; charset=utf-8",
@@ -595,6 +600,12 @@ async def _resolve_engine_sections(db: AsyncSession, current: CurrentUser, spec:
 
 
 async def _resolve_kind_report_sections(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> list[Section]:
+    if spec.report_kind in RETIRED_KINDS:
+        # A report saved before this kind was retired still carries it in its
+        # stored spec. Drop just this section rather than failing the whole
+        # report - the rest of the report is unaffected by one export that no
+        # longer exists.
+        return []
     if spec.report_kind not in KINDS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"report_kind must be one of {sorted(KINDS)}")
     params = spec.report_params or {}

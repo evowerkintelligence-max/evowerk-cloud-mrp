@@ -288,8 +288,8 @@ export function BuildCalculatorPanel() {
                 )}
                 {result.unassigned.length > 0 && (
                   <Alert variant="warning">
-                    No preferred supplier for: {result.unassigned.map((u) => u.item_sku).join(", ")}. Assign
-                    one under Items, or order manually from the Planning page.
+                    No supplier set for: {result.unassigned.map((u) => u.item_sku).join(", ")}. Set one under
+                    Items and order again.
                   </Alert>
                 )}
                 <p className="text-sm text-muted-foreground">

@@ -21,7 +21,7 @@ from app.models.lot import Lot, LotTransaction
 from app.models.work_order import WorkOrder, WorkOrderComponent, WorkOrderComponentLot
 from app.services.inventory import apply_inventory_delta
 from app.services.locations import location_code, resolve_location_id
-from app.services.lots import consume_lot_fefo
+from app.services.lots import consume_lot_fefo, find_or_create_lot, topup_lot
 from app.services.work_orders import (
     active_bom_id,
     blocking_job,
@@ -51,6 +51,17 @@ class WorkOrderCreateRequest(BaseModel):
     # click. Shares the create's transaction: a job that cannot be started is
     # not raised either.
     start_now: bool = False
+
+
+class WorkOrderFinishRequest(BaseModel):
+    quantity_good: Decimal
+    quantity_scrapped: Decimal = Decimal(0)
+    scrap_reason: str | None = None
+    # Required when the produced item is lot tracked and anything good came
+    # off the line, because that stock has to land in a named batch.
+    lot_number: str | None = None
+    # not_started | consumed, required only on an under-run.
+    remainder_disposition: str | None = None
 
 
 class WorkOrderUpdateRequest(BaseModel):
@@ -340,6 +351,106 @@ async def _shortfall_detail(
     return detail
 
 
+# max(2 x planned, planned + 10). A typo guard, not a business rule, which is
+# why it is fixed rather than configurable. The additive term matters more than
+# it looks: a plain doubling refuses a job planned for 1 that yielded 3,
+# routine on a prototype line, and would feel broken to exactly the shops least
+# able to work around it.
+def _over_run_ceiling(planned: Decimal) -> Decimal:
+    return max(planned * 2, planned + 10)
+
+
+async def _return_components(
+    db: AsyncSession, job: WorkOrder, current: CurrentUser, fraction: Decimal
+) -> dict[str, str]:
+    """Put `fraction` of what each component contributed back on the shelf.
+
+    Writes, never commits: the caller owns the transaction. Shared by the
+    under-run return and by cancelling a running job, so the two cannot drift
+    apart into two different ways of moving the same stock.
+    """
+    rows = (
+        await db.execute(
+            select(WorkOrderComponent, Item)
+            .join(Item, Item.id == WorkOrderComponent.item_id)
+            .where(WorkOrderComponent.org_id == current.org_id, WorkOrderComponent.wo_id == job.id)
+            .order_by(WorkOrderComponent.sequence)
+        )
+    ).all()
+
+    returned: dict[str, str] = {}
+    for component, item in rows:
+        # Cap at what the job actually took: quantize can round a fraction of
+        # 1 up past the consumed figure, and putting back more than came off
+        # would invent stock.
+        return_qty = min(
+            (component.quantity_consumed * fraction).quantize(
+                Decimal("0.0001"), rounding=ROUND_HALF_UP
+            ),
+            component.quantity_consumed,
+        )
+        if return_qty <= 0:
+            continue
+
+        if item.is_lot_tracked:
+            await _return_to_lots(db, component, return_qty, current)
+        else:
+            await apply_inventory_delta(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                location_id=job.location_id,
+                delta=return_qty,
+                transaction_type="production",
+                created_by=current.id,
+                reason="work order remainder",
+            )
+        component.quantity_consumed -= return_qty
+        returned[item.sku] = str(return_qty)
+    await db.flush()
+    return returned
+
+
+async def _return_to_lots(
+    db: AsyncSession, component: WorkOrderComponent, quantity: Decimal, current: CurrentUser
+) -> None:
+    """Back into the lots this component was drawn from, largest draw first and
+    never more than that draw. LotTransaction carries no job reference, so
+    WorkOrderComponentLot is the only record of the split; guessing here (FEFO,
+    or one arbitrary lot) would put stock in a batch it never came from and
+    quietly corrupt expiry tracking.
+    """
+    draws = (
+        await db.execute(
+            select(WorkOrderComponentLot, Lot)
+            .join(Lot, Lot.id == WorkOrderComponentLot.lot_id)
+            .where(WorkOrderComponentLot.wo_component_id == component.id)
+            .order_by(WorkOrderComponentLot.quantity.desc(), WorkOrderComponentLot.id)
+        )
+    ).all()
+
+    remaining = quantity
+    for draw, lot in draws:
+        if remaining <= 0:
+            break
+        take = min(draw.quantity, remaining)
+        await topup_lot(db, lot, take, None)
+        db.add(
+            LotTransaction(
+                org_id=current.org_id,
+                lot_id=lot.id,
+                transaction_type="receipt",
+                quantity=take,
+                reason="work order remainder",
+                created_by=current.id,
+            )
+        )
+        # The row is what this job still holds, so shrink it. Without this a
+        # second return against the same job would give the stock back twice.
+        draw.quantity -= take
+        remaining -= take
+
+
 @router.post("", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_work_order(
     body: WorkOrderCreateRequest,
@@ -487,6 +598,133 @@ async def start_work_order(
     await db.commit()
 
     item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+    location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
+    return await _detail_response(db, wo, item, location)
+
+
+@router.post("/{wo_id}/finish", response_model=WorkOrderResponse)
+async def finish_work_order(
+    wo_id: uuid.UUID,
+    body: WorkOrderFinishRequest,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Close the job: the good units become stock, the scrap is recorded and
+    the components of anything never attempted are accounted for."""
+    wo = await get_or_404(
+        db, WorkOrder, current.org_id, wo_id, "Work order not found", for_update=True
+    )
+    if wo.status != "in_progress":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
+
+    good = body.quantity_good
+    scrapped = body.quantity_scrapped
+    if good < 0 or scrapped < 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantities cannot be negative")
+    if good >= MAX_LINE_QUANTITY or scrapped >= MAX_LINE_QUANTITY:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that quantity is too large")
+    # Match the Numeric(12, 4) columns so the response reflects what gets
+    # stored, not the decimal places the caller happened to send. Same reason
+    # the edit route quantizes its quantity.
+    good = good.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    scrapped = scrapped.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+    total = good + scrapped
+    if total > _over_run_ceiling(wo.quantity_planned):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"job {wo.wo_number} was planned for {_plain(wo.quantity_planned)}, "
+            "raise a second job for the rest",
+        )
+
+    if total < wo.quantity_planned:
+        # The app cannot tell whether the unmade units' components are still on
+        # the shelf or were used up, and both wrong answers are bad, so the
+        # question is asked rather than defaulted.
+        if body.remainder_disposition not in ("not_started", "consumed"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"job {wo.wo_number} finished under plan, say whether the unmade units' "
+                "components are not_started or consumed",
+            )
+    elif body.remainder_disposition is not None:
+        # Stored only when it means something: on a job that met its plan there
+        # is no remainder for it to describe.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "remainder_disposition only applies to a job that finished under plan",
+        )
+
+    item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+    if good > 0:
+        if item.is_lot_tracked:
+            if not body.lot_number:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, f"{item.sku} is lot tracked, name the batch"
+                )
+            lot = await find_or_create_lot(
+                db,
+                org_id=current.org_id,
+                item_id=wo.item_id,
+                lot_number=body.lot_number,
+                location_id=wo.location_id,
+                quantity=good,
+                expiry_date=None,
+                created_by=current.id,
+            )
+            db.add(
+                LotTransaction(
+                    org_id=current.org_id,
+                    lot_id=lot.id,
+                    transaction_type="receipt",
+                    quantity=good,
+                    reason="work order",
+                    created_by=current.id,
+                )
+            )
+        else:
+            await apply_inventory_delta(
+                db,
+                org_id=current.org_id,
+                item_id=wo.item_id,
+                location_id=wo.location_id,
+                delta=good,
+                transaction_type="production",
+                created_by=current.id,
+                reason="work order",
+            )
+
+    if body.remainder_disposition == "not_started":
+        # Proportional: a job that made half its units returns half of each
+        # remaining component. Right for material cut per unit, wrong for a
+        # setup piece consumed whole at the start of the run. Getting that exact
+        # needs per-component consumption points, which is operation tracking.
+        await _return_components(
+            db, wo, current, (wo.quantity_planned - total) / wo.quantity_planned
+        )
+
+    wo.quantity_good = good
+    wo.quantity_scrapped = scrapped
+    wo.scrap_reason = body.scrap_reason
+    wo.remainder_disposition = body.remainder_disposition
+    wo.status = "done"
+    wo.finished_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    await log_event(
+        db,
+        action="work_order.finished",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(wo.id),
+        metadata={
+            "wo_number": wo.wo_number,
+            "quantity_good": str(good),
+            "quantity_scrapped": str(scrapped),
+            "remainder_disposition": body.remainder_disposition,
+        },
+    )
+    await db.commit()
     location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
     return await _detail_response(db, wo, item, location)
 

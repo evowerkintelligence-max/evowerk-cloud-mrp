@@ -411,7 +411,12 @@ async def test_ready_by_is_null_when_nothing_is_planned(client):
 
     grid = await _grid(client, token)
 
-    assert _product(grid, "PUMP-A2")["ready_by"] is None
+    row = _product(grid, "PUMP-A2")
+    assert row["ready_by"] is None
+    assert row["ready_by_unknown"] is False, (
+        "nothing planned is a different situation from an unknown lead time and must not "
+        "read the same way to the caller"
+    )
 
 
 async def test_ready_by_is_null_when_a_short_component_has_no_lead_time_on_file(client):
@@ -429,6 +434,10 @@ async def test_ready_by_is_null_when_a_short_component_has_no_lead_time_on_file(
     row = _product(grid, "PUMP-A2")
     assert row["materials_status"] == "missing"
     assert row["ready_by"] is None
+    assert row["ready_by_unknown"] is True, (
+        "something is planned here, so the null must be flagged as an unknown lead time, "
+        "not read as nothing scheduled"
+    )
 
 
 async def test_ready_by_is_null_when_an_arriving_component_has_no_lead_time_on_file(client):
@@ -456,6 +465,7 @@ async def test_ready_by_is_null_when_an_arriving_component_has_no_lead_time_on_f
     row = _product(grid, "PUMP-A2")
     assert row["materials_status"] == "arriving"
     assert row["ready_by"] is None
+    assert row["ready_by_unknown"] is True
 
 
 async def test_to_buy_lists_shortfalls_with_supplier_and_urgency(client):
@@ -524,6 +534,29 @@ async def test_to_buy_urgency_is_unknown_when_the_component_has_no_lead_time_on_
     )
 
 
+async def test_a_scheduled_jobs_component_gets_urgency_from_the_jobs_own_date(client):
+    """A scheduled job's components used to land in to_buy with urgency
+    "unknown" no matter how soon the job itself was scheduled, because
+    load_scheduled_component_demand seeded quantity but no date - only
+    forecast/committed demand carried one. PUMP-1 here has no forecast and no
+    sales order at all, so the only date in the system is the job's own
+    scheduled_start."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1", lead_time_days=5)
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+
+    await _raise_job(client, token, pump, qty=50, scheduled_start=str(_today() + timedelta(days=8)))
+
+    grid = await _grid(client, token)
+    to_buy = {r["item_sku"]: r for r in grid["to_buy"]}
+    assert "SEAL-1" in to_buy, "the job's own component demand must reach to_buy"
+    assert to_buy["SEAL-1"]["order_by"] == str(_today() + timedelta(days=3)), (
+        "order_by = the job's scheduled_start minus the component's lead time"
+    )
+    assert to_buy["SEAL-1"]["urgency"] == "soon"
+
+
 async def test_to_buy_urgency_boundary_is_soon_at_7_days_and_later_at_8(client):
     token = await _register_and_login(client)
     seal_soon = await _create_item(client, token, "SEAL-SOON", lead_time_days=0)
@@ -575,6 +608,41 @@ async def test_detail_carries_the_product_and_its_components(client):
     # places than a DB-round-tripped value would.
     assert Decimal(detail[1]["gross_demand"]) == Decimal("100")
     assert Decimal(detail[1]["net_requirement"]) == Decimal("100")
+
+
+async def test_detail_shows_safety_stock_and_in_production_so_the_arithmetic_reconciles(client):
+    """net_requirement = gross_demand - on_hand - on_order - on_draft -
+    in_production + safety_stock (see mrp._explode_and_net). Both
+    in_production and safety_stock used to be folded into net_requirement
+    with no visible line, so a user checking Needed - In stock - On order
+    against Still needed could never make the numbers add up.
+
+    Both apply to the product's own row here: in_production is supply from a
+    job already raised for PUMP-1 itself (not one of its components), and
+    safety_stock is PUMP-1's own buffer."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1", safety_stock_qty=5)
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 1000)
+    await _plan(client, token, pump, 100)
+    job = await _raise_job(client, token, pump, qty=10)
+    await _start(client, token, job)
+
+    detail = _product(await _grid(client, token), "PUMP-1")["detail"]
+    pump_line = next(line for line in detail if line["item_sku"] == "PUMP-1")
+
+    assert Decimal(pump_line["safety_stock"]) == Decimal("5")
+    assert Decimal(pump_line["in_production"]) == Decimal("10")
+    reconciled = (
+        Decimal(pump_line["gross_demand"])
+        - Decimal(pump_line["on_hand"])
+        - Decimal(pump_line["on_order"])
+        - Decimal(pump_line["on_draft"])
+        - Decimal(pump_line["in_production"])
+        + Decimal(pump_line["safety_stock"])
+    )
+    assert reconciled == Decimal(pump_line["net_requirement"])
 
 
 async def test_detail_is_empty_when_nothing_is_planned(client):
@@ -1149,6 +1217,7 @@ async def test_a_row_with_materials_can_be_made(client):
 
     row = _product(await _grid(client, token), "PUMP-1")
     assert row["can_make"] is True
+    assert row["cannot_make_reason"] is None
 
 
 async def test_a_row_short_of_materials_cannot_be_made(client):
@@ -1160,6 +1229,10 @@ async def test_a_row_short_of_materials_cannot_be_made(client):
 
     row = _product(await _grid(client, token), "PUMP-1")
     assert row["can_make"] is False, "offering Make on a job that would 409 is a trap"
+    assert row["cannot_make_reason"] is not None
+    assert "SEAL-1" in row["cannot_make_reason"], (
+        "the reason must name the short component, not just say no"
+    )
 
 
 async def test_a_product_with_no_recipe_cannot_be_made(client):
@@ -1169,6 +1242,7 @@ async def test_a_product_with_no_recipe_cannot_be_made(client):
 
     row = _product(await _grid(client, token), "PUMP-1")
     assert row["can_make"] is False
+    assert row["cannot_make_reason"] == "This product has no active bill of materials."
 
 
 async def test_a_row_already_covered_by_a_job_cannot_be_made_again(client):
@@ -1208,6 +1282,10 @@ async def test_stock_held_by_a_scheduled_job_does_not_count_as_available(client)
 
     row = _product(await _grid(client, token), "PUMP-1")
     assert row["can_make"] is False, "the other job already holds every seal"
+    assert row["cannot_make_reason"] is not None and "SEAL-1" in row["cannot_make_reason"], (
+        "the reason must name the component the other job is holding, not leave the user "
+        "guessing why an otherwise-plannable row has a dead Make button"
+    )
 
 
 async def test_the_build_calculator_still_needs_a_scheduled_jobs_components(client):

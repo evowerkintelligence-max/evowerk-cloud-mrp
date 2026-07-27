@@ -8,6 +8,16 @@
 
 **Tech Stack:** FastAPI + SQLAlchemy async + Pydantic v2 (backend), React + TypeScript + TanStack Query + Tailwind (frontend), pytest + vitest.
 
+## Amendments (post-implementation)
+
+- `DEFAULT_NEEDED_BY_DAYS`, shown throughout this plan's code snippets (Task 1's
+  PUT stub, Task 4's hardened PUT), was removed entirely per a post-final-review
+  user decision ("ask them dates"): `PUT /planning/grid/{item_id}` no longer
+  invents a 14-day deadline. When `needed_by` is omitted it reuses the item's
+  existing in-window date if one exists, otherwise 400s asking the user to pick
+  a date. See `backend/app/api/routes/planning_grid.py`'s `set_planned_quantity`
+  for the current behavior; the snippets below are historical.
+
 ## Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-07-26-planning-grid-design.md`. Read it before Task 1.

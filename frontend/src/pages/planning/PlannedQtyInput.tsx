@@ -258,19 +258,28 @@ export function PlannedQtyInput({
               : "A job is covering this row."}
           </p>
         ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!product.can_make || make.isPending}
-            aria-label={`Make ${outstanding} of ${product.item_sku}`}
-            // Same reason as the suggestion chip below: keep focus through
-            // mousedown so no blur-flush disables this button before mouseup
-            // and swallows the click.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => make.mutate(outstanding)}
-          >
-            Make {outstanding}
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!product.can_make || make.isPending}
+              aria-label={`Make ${outstanding} of ${product.item_sku}`}
+              // Same reason as the suggestion chip below: keep focus through
+              // mousedown so no blur-flush disables this button before mouseup
+              // and swallows the click.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => make.mutate(outstanding)}
+            >
+              Make {outstanding}
+            </Button>
+            {/* Without this, a row that reads perfectly healthy (in stock,
+                nothing missing) could still show a dead Make button with no
+                way to tell why - the reason existed in the backend and was
+                thrown away at the point can_make broke. */}
+            {!product.can_make && product.cannot_make_reason && (
+              <p className="text-xs text-muted-foreground">{product.cannot_make_reason}</p>
+            )}
+          </>
         ))}
       {dateRequired && (
         <p id={dateHintId} className="text-xs text-warning">

@@ -10,7 +10,11 @@ export interface CsvRowError {
   message: string;
 }
 
-export const CSV_TEMPLATE = 'sku,period_start,quantity,notes\nRAW-1,2026-08-01,100,"optional note"\n';
+// WIDGET-1, not a component SKU: the grid plans finished products, and an
+// example named like a raw material teaches the user to import a forecast
+// onto a BOM component, which then drives to_buy with no product row to
+// explain it.
+export const CSV_TEMPLATE = 'sku,period_start,quantity,notes\nWIDGET-1,2026-08-01,100,"optional note"\n';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

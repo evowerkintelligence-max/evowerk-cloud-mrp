@@ -18,6 +18,8 @@ import { ToBuyPanel } from "./planning/ToBuyPanel";
 import {
   materialsStatusLabel,
   materialsStatusVariant,
+  readyByIsLate,
+  readyByLabel,
   trimQty,
   type PlanningGridResponse,
 } from "./planning/types";
@@ -147,7 +149,9 @@ export function Planning() {
                             </span>
                           )}
                         </TD>
-                        <TD>{product.ready_by ?? "Not scheduled"}</TD>
+                        <TD className={readyByIsLate(product) ? "font-medium text-destructive" : undefined}>
+                          {readyByLabel(product)}
+                        </TD>
                         <TD className="text-right">
                           <Button
                             variant="ghost"

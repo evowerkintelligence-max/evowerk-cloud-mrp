@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -15,11 +16,7 @@ from app.models.bom import Bom, Item
 from app.models.routing import Routing, RoutingStep
 from app.models.work_order import WorkOrder, WorkOrderComponent
 from app.services.mrp import load_bom_children
-from app.services.planning_grid import resolve_grid_window
-
-# A job with no scheduled_start is due now, so it outranks every dated job.
-# date.min as the sort key expresses that without a second branch in SQL.
-_UNDATED_RANKS_FIRST = date.min
+from app.services.planning_loads import PLANNED_STATUSES, _UNDATED_RANKS_FIRST, _rank, resolve_grid_window
 
 
 async def active_bom_id(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> uuid.UUID | None:
@@ -55,10 +52,6 @@ async def component_requirements(
     if children is None:
         children = await load_bom_children(db, org_id)
     return [(child_id, qty_per * quantity) for child_id, qty_per in children.get(item_id, [])]
-
-
-def _rank() -> ColumnElement[date]:
-    return func.coalesce(WorkOrder.scheduled_start, _UNDATED_RANKS_FIRST)
 
 
 def _outranks(org_id: uuid.UUID, job: WorkOrder, horizon_end: date) -> list[ColumnElement[bool]]:
@@ -113,68 +106,6 @@ async def reserved_by_higher_priority(
     return {item_id: total for item_id, total in rows if total is not None and total > 0}
 
 
-# Only these two statuses reach the plan. A done job has already delivered its
-# units into stock and a cancelled one never will, so counting either would
-# promise the shop something twice.
-PLANNED_STATUSES = ("scheduled", "in_progress")
-
-
-async def load_production_supply(
-    db: AsyncSession, org_id: uuid.UUID, horizon_end: date
-) -> dict[uuid.UUID, Decimal]:
-    """Incoming supply per item from jobs in flight.
-
-    A scheduled job counts only if it is due inside the window; a running job
-    counts whatever its schedule said, because it is happening now. There is
-    deliberately no lower bound on the scheduled case: a job that should have
-    started last week is still going to happen, matching the rule Phase 2
-    settled for late sales orders.
-    """
-    rows = (
-        await db.execute(
-            select(WorkOrder.item_id, func.sum(WorkOrder.quantity_planned))
-            .where(
-                WorkOrder.org_id == org_id,
-                WorkOrder.status.in_(PLANNED_STATUSES),
-                or_(WorkOrder.status == "in_progress", _rank() <= horizon_end),
-            )
-            .group_by(WorkOrder.item_id)
-        )
-    ).all()
-    return {item_id: total for item_id, total in rows if total is not None and total > 0}
-
-
-async def load_scheduled_component_demand(
-    db: AsyncSession, org_id: uuid.UUID, horizon_end: date
-) -> dict[uuid.UUID, Decimal]:
-    """What jobs not yet started will need.
-
-    Only `scheduled` jobs: a running job's components have already left stock,
-    so on_hand reflects them and counting them again would buy them twice. This
-    must always move together with load_production_supply's scheduled half, or
-    the plan under-orders components (supply counted, its demand dropped) or
-    over-orders them (the reverse).
-    """
-    rows = (
-        await db.execute(
-            select(
-                WorkOrderComponent.item_id,
-                func.sum(
-                    WorkOrderComponent.quantity_required - WorkOrderComponent.quantity_consumed
-                ),
-            )
-            .join(WorkOrder, WorkOrder.id == WorkOrderComponent.wo_id)
-            .where(
-                WorkOrder.org_id == org_id,
-                WorkOrder.status == "scheduled",
-                _rank() <= horizon_end,
-            )
-            .group_by(WorkOrderComponent.item_id)
-        )
-    ).all()
-    return {item_id: total for item_id, total in rows if total is not None and total > 0}
-
-
 async def blocking_job(
     db: AsyncSession, org_id: uuid.UUID, job: WorkOrder, item_id: uuid.UUID
 ) -> WorkOrder | None:
@@ -210,8 +141,71 @@ STALL_FACTOR = 2
 STALL_FLOOR = timedelta(days=1)
 
 
-async def expected_duration_seconds(
-    db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, quantity: Decimal
+async def _load_routing_totals(
+    db: AsyncSession, org_id: uuid.UUID, item_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, tuple[Decimal, Decimal]]:
+    """Per item: (total setup seconds, total cycle seconds) over its active
+    routing. One query for however many items are asked about, so a caller
+    judging many jobs at once (compute_job_alerts) pays for this once rather
+    than once per job."""
+    if not item_ids:
+        return {}
+    rows = await db.execute(
+        select(
+            Routing.item_id,
+            func.sum(func.coalesce(RoutingStep.setup_time_seconds, 0)),
+            func.sum(func.coalesce(RoutingStep.cycle_time_seconds, 0)),
+        )
+        .join(RoutingStep, RoutingStep.routing_id == Routing.id)
+        .where(
+            Routing.org_id == org_id,
+            Routing.item_id.in_(item_ids),
+            Routing.status == "active",
+        )
+        .group_by(Routing.item_id)
+    )
+    return {item_id: (setup, cycle) for item_id, setup, cycle in rows.all()}
+
+
+async def _load_recent_durations(
+    db: AsyncSession, org_id: uuid.UUID, item_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, list[float]]:
+    """Per item: per-unit duration (seconds) of its DURATION_SAMPLE most
+    recently completed jobs, latest first. One query for however many items
+    are asked about - see _load_routing_totals."""
+    if not item_ids:
+        return {}
+    rows = await db.execute(
+        select(WorkOrder.item_id, WorkOrder.started_at, WorkOrder.finished_at, WorkOrder.quantity_planned)
+        .where(
+            WorkOrder.org_id == org_id,
+            WorkOrder.item_id.in_(item_ids),
+            WorkOrder.status == "done",
+            WorkOrder.started_at.is_not(None),
+            WorkOrder.finished_at.is_not(None),
+        )
+        .order_by(WorkOrder.item_id, WorkOrder.finished_at.desc())
+    )
+    per_item: dict[uuid.UUID, list[float]] = defaultdict(list)
+    for item_id, started, finished, planned in rows.all():
+        if not planned or planned <= 0:
+            continue
+        bucket = per_item[item_id]
+        if len(bucket) >= DURATION_SAMPLE:
+            # Rows for this item arrive latest-finished-first (the ORDER BY
+            # above), so once a bucket holds the sample size the rest of
+            # this item's rows are older ones the original per-item LIMIT
+            # would also have excluded.
+            continue
+        bucket.append((ensure_utc(finished) - ensure_utc(started)).total_seconds() / float(planned))
+    return per_item
+
+
+def _expected_duration_from(
+    routing_totals: dict[uuid.UUID, tuple[Decimal, Decimal]],
+    recent_durations: dict[uuid.UUID, list[float]],
+    item_id: uuid.UUID,
+    quantity: Decimal,
 ) -> float:
     """How long a job like this should take, from the best evidence there is.
 
@@ -224,46 +218,24 @@ async def expected_duration_seconds(
     a three-week assembly has no single sensible number, which is precisely the
     problem a constant cannot solve.
     """
-    setup_total, cycle_total = (
-        await db.execute(
-            select(
-                func.sum(func.coalesce(RoutingStep.setup_time_seconds, 0)),
-                func.sum(func.coalesce(RoutingStep.cycle_time_seconds, 0)),
-            )
-            .join(Routing, Routing.id == RoutingStep.routing_id)
-            .where(
-                Routing.org_id == org_id,
-                Routing.item_id == item_id,
-                Routing.status == "active",
-            )
-        )
-    ).one()
+    setup_total, cycle_total = routing_totals.get(item_id, (Decimal(0), Decimal(0)))
     if setup_total or cycle_total:
         return float(setup_total or 0) + float(cycle_total or 0) * float(quantity)
 
-    rows = (
-        await db.execute(
-            select(WorkOrder.started_at, WorkOrder.finished_at, WorkOrder.quantity_planned)
-            .where(
-                WorkOrder.org_id == org_id,
-                WorkOrder.item_id == item_id,
-                WorkOrder.status == "done",
-                WorkOrder.started_at.is_not(None),
-                WorkOrder.finished_at.is_not(None),
-            )
-            .order_by(WorkOrder.finished_at.desc())
-            .limit(DURATION_SAMPLE)
-        )
-    ).all()
-    per_unit = [
-        (ensure_utc(finished) - ensure_utc(started)).total_seconds() / float(planned)
-        for started, finished, planned in rows
-        if planned and planned > 0
-    ]
+    per_unit = recent_durations.get(item_id)
     if per_unit:
         return median(per_unit) * float(quantity)
 
     return DEFAULT_JOB_DAYS * 24 * 3600
+
+
+async def expected_duration_seconds(
+    db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, quantity: Decimal
+) -> float:
+    """Single-item convenience wrapper over the batched loaders above."""
+    routing_totals = await _load_routing_totals(db, org_id, {item_id})
+    recent_durations = await _load_recent_durations(db, org_id, {item_id})
+    return _expected_duration_from(routing_totals, recent_durations, item_id, quantity)
 
 
 @dataclass
@@ -292,6 +264,16 @@ async def compute_job_alerts(db: AsyncSession, org_id: uuid.UUID) -> list[JobAle
         )
     ).all()
 
+    # Loaded once for every running job on the brief/grid, rather than once
+    # per job: this used to call expected_duration_seconds (two queries) per
+    # running job, so a shop with many jobs in flight paid for the same
+    # routing/history lookups over and over.
+    running_item_ids = {
+        job.item_id for job, _ in rows if job.status != "scheduled" and job.started_at is not None
+    }
+    routing_totals = await _load_routing_totals(db, org_id, running_item_ids)
+    recent_durations = await _load_recent_durations(db, org_id, running_item_ids)
+
     alerts: list[JobAlertLine] = []
     for job, item in rows:
         if job.status == "scheduled":
@@ -314,7 +296,9 @@ async def compute_job_alerts(db: AsyncSession, org_id: uuid.UUID) -> list[JobAle
         if job.started_at is None:
             continue
         expected = timedelta(
-            seconds=await expected_duration_seconds(db, org_id, job.item_id, job.quantity_planned)
+            seconds=_expected_duration_from(
+                routing_totals, recent_durations, job.item_id, job.quantity_planned
+            )
         )
         limit = max(expected * STALL_FACTOR, expected + STALL_FLOOR)
         elapsed = now - ensure_utc(job.started_at)

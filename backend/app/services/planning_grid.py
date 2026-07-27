@@ -15,11 +15,18 @@ from app.services.demand import combine_demand, load_committed_demand, load_dema
 from app.services.demand_forecasting import DEFAULT_LOOKBACK_DAYS, compute_weekly_suggestions
 from app.services.demand_history import daily_consumption_by_item
 from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, load_on_hand
+from app.services.planning_loads import (  # noqa: F401 - re-exported, see below
+    GRID_HORIZON_DAYS,
+    load_production_supply,
+    resolve_grid_window,
+)
+from app.services.work_orders import component_requirements, reserved_by_higher_priority
 
-# The grid never shows a horizon control - a non-technical user should not have
-# to pick one. 90 days matches the engine default (services.mrp.resolve_horizon),
-# so the grid and a raw /mrp/plan call agree.
-GRID_HORIZON_DAYS = 90
+# GRID_HORIZON_DAYS and resolve_grid_window live in planning_loads.py now (a
+# leaf module mrp.py and work_orders.py also import from) but are re-exported
+# here unchanged: this was their original home, and every other caller -
+# api/routes/planning_grid.py, tests/test_planning_grid.py - still does
+# `from app.services.planning_grid import resolve_grid_window`.
 
 # How far back a consumed item counts as something the user still plans. Reuses
 # the suggestion engine's own lookback: an item outside it can never carry a
@@ -65,6 +72,14 @@ class GridProduct:
     # already-ordered component is assumed to take its full lead time again -
     # the honest pessimistic read until PO dates exist.
     ready_by: date | None
+    # None collapses two different situations that read identically to the
+    # user otherwise: nothing is planned yet (this stays False), and
+    # something is planned but a component's lead time is not on file so
+    # ready_by cannot be computed at all (this is True). "Not scheduled" is
+    # the right copy for the first; "Lead time unknown" is the right copy
+    # for the second, and confusing them reads as the plan itself being
+    # unscheduled when it is the data that is incomplete.
+    ready_by_unknown: bool
     # What history says this product's demand will be over the window, offered
     # only when the user has not planned anything yet - a hint to accept, never
     # a silent write. None when there is no consumption history to learn from.
@@ -83,6 +98,11 @@ class GridProduct:
     # when jobs already cover the whole row, where there is nothing left to
     # raise.
     can_make: bool
+    # Why can_make is False when outstanding_qty > 0 (i.e. the button would
+    # otherwise be offered): no active recipe, or which component is short
+    # and by how much. None when can_make is True or nothing is outstanding,
+    # since the row already has other copy for those cases.
+    cannot_make_reason: str | None
     # The engine's own numbers for this product and its components, shown when
     # the user expands the row. The only place MRP vocabulary stays visible.
     detail: list[MrpPlanLine]
@@ -116,11 +136,6 @@ class PlanningGrid:
     horizon_end: date
     products: list[GridProduct]
     to_buy: list[GridToBuy]
-
-
-def resolve_grid_window(as_of: date | None = None) -> tuple[date, date]:
-    start = as_of if as_of is not None else datetime.now(timezone.utc).date()
-    return start, start + timedelta(days=GRID_HORIZON_DAYS)
 
 
 def _reachable_components(
@@ -185,21 +200,34 @@ async def compute_planning_grid(
                     an open or drafted PO rather than stock on the shelf
         in_stock  - every component is covered by stock on hand
     """
-    # Deferred: services.work_orders imports resolve_grid_window from this
-    # module, so importing it at module level would be a cycle.
-    from app.services.work_orders import (
-        component_requirements,
-        load_production_supply,
-        reserved_by_higher_priority,
-    )
-
     horizon_start, horizon_end = resolve_grid_window(as_of)
 
+    # Loaded once and threaded into compute_mrp_plan below, rather than this
+    # function AND the engine each fetching a byte-identical copy: two
+    # org-wide explosions per grid read used to run the same on-hand,
+    # bom-children, in-production, committed-demand and demand-policy queries
+    # twice, which is also how the committed-demand widening (C2) went
+    # unnoticed in two places at once.
     children = await load_bom_children(db, org_id)
-    plan = await compute_mrp_plan(db, org_id, horizon_start, horizon_end)
-    by_item = {uuid.UUID(line.item_id): line for line in plan}
     on_hand = await load_on_hand(db, org_id)
     production_by_item = await load_production_supply(db, org_id, horizon_end)
+    committed_qty_by_item, committed_dates = await load_committed_demand(
+        db, org_id, horizon_start, horizon_end
+    )
+    policy = await load_demand_policy(db, org_id)
+
+    plan = await compute_mrp_plan(
+        db,
+        org_id,
+        horizon_start,
+        horizon_end,
+        demand_policy=policy,
+        committed=(committed_qty_by_item, committed_dates),
+        children=children,
+        on_hand=on_hand,
+        production_supply=production_by_item,
+    )
+    by_item = {uuid.UUID(line.item_id): line for line in plan}
     reserved = await _reserved_against_a_new_job(db, org_id, reserved_by_higher_priority)
 
     forecast_rows = (
@@ -221,15 +249,12 @@ async def compute_planning_grid(
     planned = {
         item_id: (qty, first, count) for item_id, qty, first, count in forecast_rows
     }
-    committed_qty_by_item, committed_dates = await load_committed_demand(
-        db, org_id, horizon_start, horizon_end
-    )
     # The same combination the engine nets against, so the Make quantity and
     # the row's colour are answering the same question.
     demand_by_item = combine_demand(
         {item_id: total for item_id, (total, _, _) in planned.items()},
         committed_qty_by_item,
-        await load_demand_policy(db, org_id),
+        policy,
     )
 
     produced = set(children)
@@ -325,7 +350,16 @@ async def compute_planning_grid(
         # it. combine_demand is the same rule the engine nets against.
         outstanding = max(Decimal(0), demand_by_item.get(product_id, qty) - in_production)
         can_make = outstanding > 0 and product_id in children
-        if can_make:
+        # Why the button would be disabled, captured at the point can_make
+        # breaks rather than thrown away. Without this a row can read green
+        # ("All in stock") while Make stays dead, because materials_status
+        # judges the full planned quantity with no reservations subtracted
+        # while can_make judges outstanding against on-hand minus what other
+        # jobs already hold - two different questions that can disagree.
+        cannot_make_reason: str | None = None
+        if outstanding > 0 and product_id not in children:
+            cannot_make_reason = "This product has no active bill of materials."
+        elif can_make:
             for component_id, required in await component_requirements(
                 db, org_id, product_id, outstanding, children=children
             ):
@@ -338,6 +372,11 @@ async def compute_planning_grid(
                 )
                 if free < required:
                     can_make = False
+                    component_item = items.get(component_id)
+                    sku = component_item.sku if component_item is not None else str(component_id)
+                    cannot_make_reason = (
+                        f"Not enough {sku} free to start: {free} available, {required} needed."
+                    )
                     break
 
         products.append(
@@ -361,10 +400,12 @@ async def compute_planning_grid(
                 # date, and a blank one on a red row is the least useful
                 # answer this screen can give.
                 ready_by=None if (qty <= 0 and committed <= 0) or unknown_lead else ready_by,
+                ready_by_unknown=unknown_lead and (qty > 0 or committed > 0),
                 suggested_qty=None,
                 in_production=in_production,
                 outstanding_qty=outstanding,
                 can_make=can_make,
+                cannot_make_reason=cannot_make_reason,
                 detail=detail,
             )
         )

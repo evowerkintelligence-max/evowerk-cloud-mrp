@@ -17,6 +17,8 @@ export function ProductDetail({ lines }: { lines: GridDetailLine[] }) {
             <TH>Needed</TH>
             <TH>In stock</TH>
             <TH>On order</TH>
+            <TH>In production</TH>
+            <TH>Safety stock</TH>
             <TH>Still needed</TH>
             <TH>Order by</TH>
           </TR>
@@ -35,6 +37,11 @@ export function ProductDetail({ lines }: { lines: GridDetailLine[] }) {
               <TD>{trimQty(line.gross_demand)}</TD>
               <TD>{trimQty(line.on_hand)}</TD>
               <TD>{trimQty(String(Number(line.on_order) + Number(line.on_draft)))}</TD>
+              {/* Both subtract into Still needed the same way on-hand and on-order
+                  do; without their own columns the arithmetic in this row never
+                  reconciled for anyone checking it by hand. */}
+              <TD>{trimQty(line.in_production)}</TD>
+              <TD>{trimQty(line.safety_stock)}</TD>
               <TD className="font-semibold">{trimQty(line.net_requirement)}</TD>
               <TD>{line.suggested_order_date ?? "-"}</TD>
             </TR>

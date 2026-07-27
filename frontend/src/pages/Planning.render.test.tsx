@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Planning } from "./Planning";
 import { CollapseConfirm } from "./planning/PlannedQtyInput";
+import { ProductDetail } from "./planning/ProductDetail";
 
 const GRID = {
   horizon_start: "2026-07-26",
@@ -23,10 +24,12 @@ const GRID = {
       materials_status: "missing",
       missing_materials: ["ALU-6061", "SEAL-V2"],
       ready_by: "2026-08-19",
+      ready_by_unknown: false,
       suggested_qty: null,
       in_production: "0.0000",
       outstanding_qty: "50.0000",
       can_make: false,
+      cannot_make_reason: "Not enough SEAL-V2 free to start: 0 available, 100 needed.",
       detail: [],
     },
     {
@@ -42,10 +45,12 @@ const GRID = {
       materials_status: "in_stock",
       missing_materials: [],
       ready_by: "2026-07-26",
+      ready_by_unknown: false,
       suggested_qty: null,
       in_production: "0.0000",
       outstanding_qty: "200.0000",
       can_make: true,
+      cannot_make_reason: null,
       detail: [],
     },
   ],
@@ -187,6 +192,51 @@ describe("Planning grid", () => {
     expect(html).toContain('value="2026-08-12"');
   });
 
+  it("colours ready-by red when it lands after the needed-by date", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    // PUMP-A2: needed_by 2026-08-12, ready_by 2026-08-19 - the plan lands late.
+    const cell = html.match(/<td class="[^"]*">2026-08-19<\/td>/)?.[0] ?? "";
+    expect(cell).toContain("text-destructive");
+  });
+
+  it("does not colour ready-by when it lands on or before the needed-by date", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    // HOUS-H1: needed_by 2026-08-30, ready_by 2026-07-26 - comfortably early.
+    const cell = html.match(/<td class="[^"]*">2026-07-26<\/td>/)?.[0] ?? "";
+    expect(cell).not.toContain("text-destructive");
+  });
+
+  it("says the lead time is unknown rather than 'Not scheduled' when a component's lead time is missing", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], ready_by: null, ready_by_unknown: true }],
+      }),
+    );
+    expect(html).toContain("Lead time unknown");
+    expect(html).not.toContain("Not scheduled");
+  });
+
+  it("says not scheduled when nothing is planned, not lead time unknown", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [
+          {
+            ...GRID.products[0],
+            planned_qty: "0.0000",
+            needed_by: null,
+            planned_bucket_count: 0,
+            ready_by: null,
+            ready_by_unknown: false,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Not scheduled");
+    expect(html).not.toContain("Lead time unknown");
+  });
+
   it("states the period the grid covers", () => {
     const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
     expect(html).toContain("2026-07-26 to 2026-10-24");
@@ -323,6 +373,8 @@ describe("Planning grid", () => {
                 on_hand: "8.0000",
                 on_order: "0.0000",
                 on_draft: "0.0000",
+                in_production: "0.0000",
+                safety_stock: "0.0000",
                 net_requirement: "42.0000",
                 suggested_order_quantity: "42.0000",
                 need_by_date: "2026-08-12",
@@ -424,6 +476,32 @@ describe("making what the grid says you need", () => {
     expect(html).toContain("disabled=\"\"");
   });
 
+  it("says why Make is disabled instead of leaving a dead button unexplained", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [
+          {
+            ...GRID.products[0],
+            can_make: false,
+            cannot_make_reason: "Not enough SEAL-V2 free to start: 0 available, 100 needed.",
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Not enough SEAL-V2 free to start");
+  });
+
+  it("does not show a reason once the row can actually be made", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], can_make: true, cannot_make_reason: null }],
+      }),
+    );
+    expect(html).not.toContain("Not enough");
+  });
+
   it("counts what is already being made out of the Make quantity", () => {
     const html = render((qc) =>
       qc.setQueryData(["planning-grid"], {
@@ -504,5 +582,36 @@ describe("making what the grid says you need", () => {
     });
     expect(html).toContain("20 in production");
     expect(html).not.toContain("Make 30");
+  });
+});
+
+describe("ProductDetail (the 'Show working' panel)", () => {
+  const LINE = {
+    item_id: "c-1",
+    item_sku: "SEAL-V2",
+    item_name: "Viton seal",
+    is_manufactured: false,
+    gross_demand: "120.0000",
+    on_hand: "8.0000",
+    on_order: "0.0000",
+    on_draft: "0.0000",
+    in_production: "15.0000",
+    safety_stock: "25.0000",
+    net_requirement: "122.0000",
+    suggested_order_quantity: "122.0000",
+    need_by_date: "2026-08-12",
+    suggested_order_date: "2026-07-29",
+  };
+
+  it("shows in-production and safety stock as their own columns", () => {
+    const html = renderToString(createElement(ProductDetail, { lines: [LINE] }))
+      .split("<!-- -->")
+      .join("");
+    expect(html).toContain("In production");
+    expect(html).toContain("Safety stock");
+    // Both figures must render as their own numbers rather than being
+    // silently absorbed into "Still needed" with no visible line.
+    expect(html).toContain("15");
+    expect(html).toContain("25");
   });
 });

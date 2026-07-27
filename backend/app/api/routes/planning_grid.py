@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -34,6 +34,7 @@ class GridDetailLineResponse(BaseModel):
     on_order: Decimal
     on_draft: Decimal
     in_production: Decimal
+    safety_stock: Decimal
     net_requirement: Decimal
     suggested_order_quantity: Decimal
     need_by_date: date | None
@@ -53,11 +54,28 @@ class GridProductResponse(BaseModel):
     materials_status: str
     missing_materials: list[str]
     ready_by: date | None
+    ready_by_unknown: bool
     suggested_qty: Decimal | None
     in_production: Decimal
     outstanding_qty: Decimal
     can_make: bool
+    cannot_make_reason: str | None
     detail: list[GridDetailLineResponse]
+
+
+class GridPlanResponse(BaseModel):
+    """What the write itself knows, not a recomputed grid row. Rerunning the
+    whole org-wide MRP explosion just to hand back one row the caller
+    discards (the frontend invalidates and refetches the grid on success
+    without ever reading this body) doubled the explosion cost of every
+    save for no one."""
+
+    item_id: str
+    item_sku: str
+    item_name: str
+    planned_qty: Decimal
+    needed_by: date | None
+    planned_bucket_count: int
 
 
 class GridToBuyResponse(BaseModel):
@@ -102,10 +120,12 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         materials_status=product.materials_status,
         missing_materials=product.missing_materials,
         ready_by=product.ready_by,
+        ready_by_unknown=product.ready_by_unknown,
         suggested_qty=product.suggested_qty,
         in_production=product.in_production,
         outstanding_qty=product.outstanding_qty,
         can_make=product.can_make,
+        cannot_make_reason=product.cannot_make_reason,
         detail=[
             GridDetailLineResponse(
                 item_id=line.item_id,
@@ -117,6 +137,7 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
                 on_order=line.on_order,
                 on_draft=line.on_draft,
                 in_production=line.in_production,
+                safety_stock=line.safety_stock,
                 net_requirement=line.net_requirement,
                 suggested_order_quantity=line.suggested_order_quantity,
                 need_by_date=line.need_by_date,
@@ -165,7 +186,7 @@ class GridPlanRequest(BaseModel):
     needed_by: date | None = None
 
 
-@router.put("/grid/{item_id}", response_model=GridProductResponse)
+@router.put("/grid/{item_id}", response_model=GridPlanResponse)
 async def set_planned_quantity(
     item_id: uuid.UUID,
     body: GridPlanRequest,
@@ -260,27 +281,12 @@ async def set_planned_quantity(
     )
     await db.commit()
 
-    grid = await compute_planning_grid(db, current.org_id)
-    for product in grid.products:
-        if product.item_id == item_id:
-            return _product_to_response(product)
-    # Cleared to zero and the item has no BOM, so it is no longer a product row.
-    return GridProductResponse(
+    quantity = body.quantity.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    return GridPlanResponse(
         item_id=str(item_id),
         item_sku=item.sku,
         item_name=item.name,
-        planned_qty=Decimal("0.0000"),
-        needed_by=None,
-        planned_bucket_count=0,
-        committed_qty=Decimal("0.0000"),
-        committed_overdue=False,
-        on_hand=Decimal("0.0000"),
-        materials_status="in_stock",
-        missing_materials=[],
-        ready_by=None,
-        suggested_qty=None,
-        in_production=Decimal("0.0000"),
-        outstanding_qty=Decimal("0.0000"),
-        can_make=False,
-        detail=[],
+        planned_qty=quantity,
+        needed_by=needed_by if quantity > 0 else None,
+        planned_bucket_count=1 if quantity > 0 else 0,
     )

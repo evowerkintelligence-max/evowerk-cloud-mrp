@@ -9,6 +9,8 @@ export interface GridDetailLine {
   on_hand: string;
   on_order: string;
   on_draft: string;
+  in_production: string;
+  safety_stock: string;
   net_requirement: string;
   suggested_order_quantity: string;
   need_by_date: string | null;
@@ -33,6 +35,10 @@ export interface GridProduct {
   materials_status: "in_stock" | "arriving" | "missing";
   missing_materials: string[];
   ready_by: string | null;
+  /** True when ready_by is null because a component's lead time is not on
+   * file, as opposed to null because nothing is planned. Same null, two
+   * different messages. */
+  ready_by_unknown: boolean;
   suggested_qty: string | null;
   /** Units already being made, as opposed to planned_qty which is the
    * estimate someone typed and committed_qty which is what customers
@@ -46,6 +52,11 @@ export interface GridProduct {
    * or jobs already cover the row, so Make is offered only when it would
    * actually succeed. */
   can_make: boolean;
+  /** Why can_make is false when there is something outstanding to make: no
+   * active recipe, or which component is short and by how much. Null when
+   * can_make is true, or when nothing is outstanding (the row already says
+   * a job is covering or waiting on this case instead). */
+  cannot_make_reason: string | null;
   detail: GridDetailLine[];
 }
 
@@ -89,6 +100,24 @@ export function materialsStatusVariant(
   if (status === "missing") return "danger";
   if (status === "arriving") return "warning";
   return "success";
+}
+
+/** What the Ready by cell should say, distinguishing "nothing planned" from
+ * "a component's lead time is not on file" - both are a null ready_by but
+ * mean different things to a shop floor user. */
+export function readyByLabel(product: GridProduct): string {
+  if (product.ready_by !== null) return product.ready_by;
+  return product.ready_by_unknown ? "Lead time unknown" : "Not scheduled";
+}
+
+/** Red when the plan will not be ready until after the date it is needed
+ * by - the spec's "ready by red when later than needed-by". */
+export function readyByIsLate(product: GridProduct): boolean {
+  return (
+    product.ready_by !== null &&
+    product.needed_by !== null &&
+    product.ready_by > product.needed_by
+  );
 }
 
 /** "50.0000" -> "50", "1.5000" -> "1.5". Trailing zeros are engine noise. */

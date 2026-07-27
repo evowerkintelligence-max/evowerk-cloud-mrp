@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import date
-from decimal import Decimal
+from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -41,6 +41,25 @@ class WorkOrderCreateRequest(BaseModel):
     # Validated here but not acted on until Task 4, which wires it to the
     # start path. Not dead: this is where the field first appears on the wire.
     start_now: bool = False
+
+
+class WorkOrderUpdateRequest(BaseModel):
+    # Every field optional: a PATCH touches only what it sends. Omitted
+    # fields keep the job's current value.
+    quantity_planned: Decimal | None = None
+    scheduled_start: date | None = None
+    location_id: str | None = None
+    notes: str | None = None
+
+
+def _validate_quantity(quantity: Decimal) -> None:
+    if quantity <= 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
+    # Numeric(12, 4) holds 8 integer digits. Postgres raises a numeric
+    # overflow on anything larger, which would surface as a 500 rather than a
+    # message the user can act on. Same bound sales_orders._validate_lines uses.
+    if quantity >= MAX_LINE_QUANTITY:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that quantity is too large")
 
 
 class WorkOrderComponentResponse(BaseModel):
@@ -142,13 +161,7 @@ async def create_work_order(
     current: CurrentUser = Depends(require_role("owner", "manager")),
     db: AsyncSession = Depends(get_db),
 ):
-    if body.quantity_planned <= 0:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
-    # Numeric(12, 4) holds 8 integer digits. Postgres raises a numeric
-    # overflow on anything larger, which would surface as a 500 rather than a
-    # message the user can act on. Same bound sales_orders._validate_lines uses.
-    if body.quantity_planned >= MAX_LINE_QUANTITY:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that quantity is too large")
+    _validate_quantity(body.quantity_planned)
 
     try:
         item_id = uuid.UUID(body.item_id)
@@ -266,5 +279,79 @@ async def get_work_order(
 ):
     wo = await get_or_404(db, WorkOrder, current.org_id, wo_id, "Work order not found")
     item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+    location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
+    return await _detail_response(db, wo, item, location)
+
+
+@router.patch("/{wo_id}", response_model=WorkOrderResponse)
+async def update_work_order(
+    wo_id: uuid.UUID,
+    body: WorkOrderUpdateRequest,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+    wo = await get_or_404(db, WorkOrder, current.org_id, wo_id, "Work order not found")
+    if wo.status != "scheduled":
+        # A started job's components are already being consumed on the floor;
+        # editing the recipe or quantity under it would rewrite what already
+        # happened.
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
+
+    quantity_planned = wo.quantity_planned
+    if body.quantity_planned is not None:
+        _validate_quantity(body.quantity_planned)
+        # Match the Numeric(12, 4) column so the response reflects what gets
+        # stored, not the raw decimal places the caller happened to send.
+        quantity_planned = body.quantity_planned.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+    item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+    # A job reflects the recipe as of its LAST edit, not the one it was
+    # raised on: if the BOM was wrong and has since been fixed, editing
+    # picks the fix up.
+    bom_id = await active_bom_id(db, current.org_id, wo.item_id)
+    if bom_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{item.sku} has no active recipe")
+
+    if body.location_id is not None:
+        wo.location_id = await resolve_location_id(db, current.org_id, body.location_id)
+    if body.scheduled_start is not None:
+        wo.scheduled_start = body.scheduled_start
+    if body.notes is not None:
+        wo.notes = body.notes
+    wo.quantity_planned = quantity_planned
+    wo.bom_id = bom_id
+
+    # Delete and re-insert every time, even when only the date changed: it is
+    # one query either way, and a conditional here is exactly how the stored
+    # components and the recipe drift apart.
+    requirements = await component_requirements(db, current.org_id, wo.item_id, quantity_planned)
+    await db.execute(
+        WorkOrderComponent.__table__.delete().where(WorkOrderComponent.wo_id == wo.id)
+    )
+    for sequence, (component_item_id, quantity_required) in enumerate(requirements):
+        db.add(
+            WorkOrderComponent(
+                org_id=current.org_id,
+                wo_id=wo.id,
+                item_id=component_item_id,
+                quantity_required=quantity_required,
+                sequence=sequence,
+            )
+        )
+
+    # Child rows changing alone never fires onupdate on the parent; touch it
+    # so updated_at still means "last changed".
+    wo.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    await log_event(
+        db,
+        action="work_order.updated",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(wo.id),
+        metadata={"wo_number": wo.wo_number},
+    )
+    await db.commit()
     location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
     return await _detail_response(db, wo, item, location)

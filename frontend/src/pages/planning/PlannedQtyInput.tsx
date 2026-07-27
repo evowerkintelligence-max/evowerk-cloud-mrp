@@ -153,7 +153,6 @@ export function PlannedQtyInput({
     if (
       shouldWarnBeforeCollapse({
         plannedBucketCount: product.planned_bucket_count,
-        quantityChanged: trimQty(quantity) !== trimQty(product.planned_qty),
         alreadyConfirmed: collapseConfirmed.current,
       })
     ) {
@@ -206,10 +205,10 @@ export function PlannedQtyInput({
     );
   }
 
-  // What a job raised from this row would be for: what is planned, less what
-  // jobs are already making. The backend's can_make judges the components
-  // against exactly this figure.
-  const outstanding = Math.max(0, Number(product.planned_qty) - Number(product.in_production));
+  // Comes from the backend, which judges can_make against exactly this figure
+  // under the org's own demand policy. Recomputing it here from planned_qty is
+  // what left a row wanted only by customers with no Make button at all.
+  const outstanding = Number(product.outstanding_qty);
 
   // Nothing planned for this product yet, and the user has typed a quantity
   // above 0 with no date chosen: the row must not silently fail to save.
@@ -246,9 +245,18 @@ export function PlannedQtyInput({
       />
       {committed}
       {inProduction}
-      {Number(product.planned_qty) > 0 &&
+      {/* Gated on real demand, not the typed forecast: a row a customer
+          ordered has planned_qty 0 and is still something to make. */}
+      {(Number(product.planned_qty) > 0 || Number(product.committed_qty) > 0) &&
         (outstanding <= 0 ? (
-          <p className="text-xs text-muted-foreground">A job is covering this row.</p>
+          // Only reassuring if the job can actually run. A scheduled job whose
+          // own components are short leaves the row red, and saying it is
+          // covered there would be the opposite of the truth.
+          <p className="text-xs text-muted-foreground">
+            {product.materials_status === "missing"
+              ? "A job is waiting on materials for this row."
+              : "A job is covering this row."}
+          </p>
         ) : (
           <Button
             variant="ghost"

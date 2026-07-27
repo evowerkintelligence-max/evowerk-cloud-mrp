@@ -177,28 +177,15 @@ async def compute_mrp_plan(
     Reused as-is (different seed) by services.mrp.compute_build_plan for the
     build calculator, which has no forecast rows to read.
     """
-    # Deferred: services.work_orders imports load_bom_children from this
-    # module, so importing it at module level would be a cycle.
-    from app.services.work_orders import load_scheduled_component_demand
-
     policy = await load_demand_policy(db, org_id)
     forecast_qty, forecast_dates = await load_forecast_demand(db, org_id, horizon_start, horizon_end)
     committed_qty, committed_dates = await load_committed_demand(
         db, org_id, horizon_start, horizon_end
     )
     independent = combine_demand(forecast_qty, committed_qty, policy)
-    # A scheduled job's components are demand in their own right. Without this,
-    # its finished good's supply below would zero that item's net requirement,
-    # _explode_and_net would never explode it, and the grid would read "all in
-    # stock" for a job that cannot actually run. Added before the empty-demand
-    # gate, because a shop with jobs and no typed forecast still has a plan.
-    scheduled_components = await load_scheduled_component_demand(db, org_id, horizon_end)
-    for item_id, qty in scheduled_components.items():
-        independent[item_id] = independent.get(item_id, Decimal(0)) + qty
-    # Gate on the COMBINED map, not the forecast alone: a shop with real orders
-    # and no typed estimates has genuine demand and must get a real plan.
-    if not independent:
-        return []
+    # No empty-demand gate here: a shop with scheduled jobs and no typed
+    # forecast still has a plan, and _explode_and_net adds those jobs'
+    # components to the seed before deciding there is nothing to do.
     need_by = earliest_dates(forecast_dates, committed_dates)
     return await _explode_and_net(db, org_id, independent, need_by, horizon_end)
 
@@ -249,8 +236,18 @@ async def _explode_and_net(
     """
     # Deferred: services.work_orders imports load_bom_children from this
     # module, so importing it at module level would be a cycle.
-    from app.services.work_orders import load_production_supply
+    from app.services.work_orders import load_production_supply, load_scheduled_component_demand
 
+    # A scheduled job's two halves are seeded and netted in the SAME function on
+    # purpose. Its finished good is supply below; its stored components are
+    # demand in their own right, and without them that supply would zero the
+    # item's net requirement, nothing would explode, and the plan would read
+    # "all in stock" for a job that cannot run. Doing the seeding in one caller
+    # and the netting here is how the build calculator came to report that a
+    # build short of materials needed nothing at all.
+    seed_gross = dict(seed_gross)
+    for item_id, qty in (await load_scheduled_component_demand(db, org_id, horizon_end)).items():
+        seed_gross[item_id] = seed_gross.get(item_id, Decimal(0)) + qty
     if not seed_gross:
         return []
     need_by = dict(seed_due) if seed_due else {}
@@ -338,7 +335,13 @@ async def _explode_and_net(
                 existing_due = need_by.get(child_id)
                 need_by[child_id] = due if existing_due is None else min(existing_due, due)
 
-        if total_gross <= 0:
+        # A buffered item with no demand this window still needs a line: its
+        # safety stock is a real requirement, and the loop above has already
+        # exploded that requirement onto its components. Dropping the parent
+        # while keeping the children's demand attributes an order to a row the
+        # plan never shows. `net <= 0` rather than `safety <= 0` so a buffer
+        # already covered by stock stays off the screen.
+        if total_gross <= 0 and net <= 0:
             continue
         indep = seed_gross.get(item_id, Decimal(0))
         is_manufactured = item_id in children

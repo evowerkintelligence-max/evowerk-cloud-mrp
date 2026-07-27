@@ -782,7 +782,14 @@ async def update_work_order(
     current: CurrentUser = Depends(require_role("owner", "manager")),
     db: AsyncSession = Depends(get_db),
 ):
-    wo = await get_or_404(db, WorkOrder, current.org_id, wo_id, "Work order not found")
+    # Locked like start, finish and cancel are, and for a sharper reason than
+    # any of them: this path DELETEs and re-inserts the component rows, so an
+    # edit racing a start would reset quantity_consumed to 0 on a job whose
+    # stock has already left the shelf, and the later return would put nothing
+    # back.
+    wo = await get_or_404(
+        db, WorkOrder, current.org_id, wo_id, "Work order not found", for_update=True
+    )
     if wo.status != "scheduled":
         # A started job's components are already being consumed on the floor;
         # editing the recipe or quantity under it would rewrite what already
@@ -804,11 +811,16 @@ async def update_work_order(
     if bom_id is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{item.sku} has no active recipe")
 
+    # Which keys the caller SENT, not which came out non-null: null is how the
+    # UI clears a date or a note, and reading it as "field omitted" meant
+    # clearing a start date silently did nothing, on the very field that drives
+    # reservation priority, the horizon bound and the Late badge.
+    supplied = body.model_fields_set
     if body.location_id is not None:
         wo.location_id = await resolve_location_id(db, current.org_id, body.location_id)
-    if body.scheduled_start is not None:
+    if "scheduled_start" in supplied:
         wo.scheduled_start = body.scheduled_start
-    if body.notes is not None:
+    if "notes" in supplied:
         wo.notes = body.notes
     wo.quantity_planned = quantity_planned
     wo.bom_id = bom_id

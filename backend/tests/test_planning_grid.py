@@ -28,7 +28,9 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"]
 
 
-async def _create_item(client, token, sku, name="Item", lead_time_days=None, min_order_qty=None):
+async def _create_item(
+    client, token, sku, name="Item", lead_time_days=None, min_order_qty=None, safety_stock_qty=None
+):
     res = await client.post(
         "/items",
         json={
@@ -39,6 +41,7 @@ async def _create_item(client, token, sku, name="Item", lead_time_days=None, min
             "is_lot_tracked": False,
             "lead_time_days": lead_time_days,
             "min_order_qty": str(min_order_qty) if min_order_qty is not None else None,
+            "safety_stock_qty": str(safety_stock_qty) if safety_stock_qty is not None else None,
         },
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1205,3 +1208,100 @@ async def test_stock_held_by_a_scheduled_job_does_not_count_as_available(client)
 
     row = _product(await _grid(client, token), "PUMP-1")
     assert row["can_make"] is False, "the other job already holds every seal"
+
+
+async def test_the_build_calculator_still_needs_a_scheduled_jobs_components(client):
+    """The two halves of a job must move together in EVERY engine caller. The
+    build calculator used to subtract a scheduled job's supply without seeding
+    its component demand, so it reported that a build short of 20 seals needed
+    nothing, and build-plan/generate-pos raised no PO for them."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    await _raise_job(client, token, pump, qty=10, scheduled_start=str(_today() + timedelta(days=5)))
+
+    res = await client.post(
+        "/mrp/build-plan",
+        json={"item_id": pump["id"], "build_quantity": "10"},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    lines = {line["item_sku"]: line for line in res.json()["lines"]}
+    assert "SEAL-1" in lines, lines
+    assert Decimal(lines["SEAL-1"]["net_requirement"]) == Decimal("20"), (
+        "the scheduled job's seals are still needed even though its pumps count as supply"
+    )
+
+
+async def test_a_buffered_item_with_no_demand_still_gets_a_line(client):
+    """Safety stock is a requirement in its own right. The netting loop already
+    explodes it onto the item's components, so dropping the item's own line
+    would attribute an order to a row the plan never shows."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-1", safety_stock_qty=50)
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    # Cover the pump's own demand entirely, so the seal is reached by
+    # explosion with zero gross demand and only its buffer to justify a line.
+    await _plan(client, token, pump, 10)
+    await _give_stock(client, token, pump, 10)
+
+    res = await client.get("/mrp/plan", headers=headers)
+    lines = {line["item_sku"]: line for line in res.json()["lines"]}
+    assert "SEAL-1" in lines, f"the buffered item vanished from the plan: {list(lines)}"
+    assert Decimal(lines["SEAL-1"]["net_requirement"]) == Decimal("50")
+
+
+async def test_a_buffer_already_covered_by_stock_stays_off_the_plan(client):
+    """The other side of the same gate: a buffer with nothing to do is noise,
+    not a line."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-1", safety_stock_qty=50)
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _plan(client, token, pump, 10)
+    await _give_stock(client, token, pump, 10)
+    await _give_stock(client, token, seal, 200)
+
+    res = await client.get("/mrp/plan", headers=headers)
+    lines = {line["item_sku"]: line for line in res.json()["lines"]}
+    assert "SEAL-1" not in lines, lines
+
+
+async def test_a_row_wanted_only_by_customers_can_still_be_made(client):
+    """A shop working from sales orders types nothing into the grid, so basing
+    the Make quantity on the forecast alone left the firmest demand in the shop
+    with no way to build it."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 100)
+    customer = await _create_customer(client, token)
+    await _create_order(client, token, customer, pump, qty=25)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert Decimal(row["committed_qty"]) == Decimal("25")
+    assert Decimal(row["planned_qty"]) == Decimal(0)
+    assert Decimal(row["outstanding_qty"]) == Decimal("25")
+    assert row["can_make"] is True
+
+
+async def test_a_committed_row_already_being_made_offers_nothing_more(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 100)
+    customer = await _create_customer(client, token)
+    await _create_order(client, token, customer, pump, qty=25)
+    job = await _raise_job(client, token, pump, qty=25)
+    await _start(client, token, job)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert Decimal(row["outstanding_qty"]) == Decimal(0)
+    assert row["can_make"] is False

@@ -135,4 +135,16 @@ describe("Production", () => {
     const html = render([]);
     expect(html).toContain("No jobs yet");
   });
+
+  it("offers a way to raise a job that is scheduled rather than started", () => {
+    // The grid's Make button always starts immediately, so without this the
+    // whole reservation, horizon and late-to-start machinery is unreachable.
+    const html = render([SCHEDULED]);
+    expect(html).toContain("New job");
+  });
+
+  it("shows a member no way to raise a job either", () => {
+    const html = render([SCHEDULED], "member");
+    expect(html).not.toContain("New job");
+  });
 });

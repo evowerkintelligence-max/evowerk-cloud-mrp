@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.models.procurement import Supplier
-from app.services.demand import load_committed_demand
+from app.services.demand import combine_demand, load_committed_demand, load_demand_policy
 from app.services.demand_forecasting import DEFAULT_LOOKBACK_DAYS, compute_weekly_suggestions
 from app.services.demand_history import daily_consumption_by_item
 from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, load_on_hand
@@ -72,6 +72,12 @@ class GridProduct:
     # Units already being made, as opposed to planned_qty which is the estimate
     # someone typed and committed_qty which is what customers ordered.
     in_production: Decimal
+    # What a job raised from this row would be for: the row's demand under the
+    # org's demand_policy, less what jobs are already making. Computed here
+    # rather than by the frontend from the three fields above, because doing it
+    # in two places is how the committed-only row came to have no Make button
+    # at all while every other cell on it read from committed demand.
+    outstanding_qty: Decimal
     # False when the product has no active recipe or its components are short,
     # because offering Make on a job that would only 409 is a trap. Also false
     # when jobs already cover the whole row, where there is nothing left to
@@ -218,6 +224,13 @@ async def compute_planning_grid(
     committed_qty_by_item, committed_dates = await load_committed_demand(
         db, org_id, horizon_start, horizon_end
     )
+    # The same combination the engine nets against, so the Make quantity and
+    # the row's colour are answering the same question.
+    demand_by_item = combine_demand(
+        {item_id: total for item_id, (total, _, _) in planned.items()},
+        committed_qty_by_item,
+        await load_demand_policy(db, org_id),
+    )
 
     produced = set(children)
     components = {child for kids in children.values() for child, _ in kids}
@@ -306,10 +319,11 @@ async def compute_planning_grid(
 
         committed = committed_qty_by_item.get(product_id, Decimal(0))
         in_production = production_by_item.get(product_id, Decimal(0))
-        # What a Make press would raise: what is planned, less what jobs are
-        # already making. The frontend computes the same figure from these two
-        # fields to label the button.
-        outstanding = max(Decimal(0), qty - in_production)
+        # Demand under the org's own policy, not the typed forecast alone: a
+        # shop working from sales orders types nothing here, and basing Make on
+        # planned_qty left the firmest demand in the shop with no way to build
+        # it. combine_demand is the same rule the engine nets against.
+        outstanding = max(Decimal(0), demand_by_item.get(product_id, qty) - in_production)
         can_make = outstanding > 0 and product_id in children
         if can_make:
             for component_id, required in await component_requirements(
@@ -349,6 +363,7 @@ async def compute_planning_grid(
                 ready_by=None if (qty <= 0 and committed <= 0) or unknown_lead else ready_by,
                 suggested_qty=None,
                 in_production=in_production,
+                outstanding_qty=outstanding,
                 can_make=can_make,
                 detail=detail,
             )

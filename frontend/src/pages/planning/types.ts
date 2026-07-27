@@ -38,8 +38,13 @@ export interface GridProduct {
    * estimate someone typed and committed_qty which is what customers
    * ordered. */
   in_production: string;
-  /** False when the product has no active recipe or its components are
-   * short, so Make is offered only when it would actually succeed. */
+  /** What a job raised from this row would be for: the row's demand under the
+   * org's demand policy, less what jobs are already making. Backend-owned so
+   * it cannot drift from the can_make the backend judges against it. */
+  outstanding_qty: string;
+  /** False when the product has no active recipe, its components are short,
+   * or jobs already cover the row, so Make is offered only when it would
+   * actually succeed. */
   can_make: boolean;
   detail: GridDetailLine[];
 }

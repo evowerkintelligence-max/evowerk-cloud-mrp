@@ -127,6 +127,18 @@ async def _backdate_start(test_engine, wo_id, days):
         await session.commit()
 
 
+async def _set_measured_duration(test_engine, wo_id, hours):
+    """Give a finished job a real measured duration. Both timestamps have to
+    move: a job that started and finished inside the test's own runtime measures
+    as zero, and a sample of zeroes cannot tell a median from a mean."""
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        job = await session.get(WorkOrder, uuid_module.UUID(wo_id))
+        job.finished_at = datetime.now(timezone.utc)
+        job.started_at = job.finished_at - timedelta(hours=hours)
+        await session.commit()
+
+
 async def test_a_job_late_to_start_is_flagged(client):
     token = await _register_and_login(client)
     seal = await _create_item(client, token, "SEAL-1")
@@ -294,3 +306,60 @@ async def test_a_cancelled_job_is_never_flagged(client):
 
     assert (await client.post(f"/work-orders/{job['id']}/cancel", headers=headers)).status_code == 200
     assert (await _brief(client, token))["job_alerts"] == []
+
+
+async def test_one_job_left_open_over_a_holiday_does_not_move_the_bar(client, test_engine):
+    """Median, not mean. Four one-hour jobs and one left open for a month:
+    the median still says an hour, so a job running three days is stalled.
+    Under a mean the bar would be about 12 days and nothing would be flagged,
+    which is exactly what the outlier is there to prevent."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 1000)
+
+    for hours in (1, 1, 1, 1, 720):
+        done = await _raise_job(client, token, pump, qty=1)
+        await _start(client, token, done)
+        assert (await _finish(client, token, done, good=1)).status_code == 200
+        await _set_measured_duration(test_engine, done["id"], hours=hours)
+
+    running = await _raise_job(client, token, pump, qty=1)
+    await _start(client, token, running)
+    await _backdate_start(test_engine, running["id"], days=3)
+
+    alerts = (await _brief(client, token))["job_alerts"]
+    assert [(a["wo_number"], a["reason"]) for a in alerts] == [(running["wo_number"], "stalled")]
+
+
+async def test_two_items_are_judged_by_their_own_history(client, test_engine):
+    """Per item, not per org: a shop making both a five-minute bracket and a
+    three-week assembly has no single sensible number."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    quick = await _create_item(client, token, "QUICK-1")
+    slow = await _create_item(client, token, "SLOW-1")
+    await _create_active_bom(client, token, quick, [(seal, 1)])
+    await _create_active_bom(client, token, slow, [(seal, 1)])
+    await _give_stock(client, token, seal, 1000)
+
+    for item, hours in ((quick, 1), (slow, 720)):
+        for _ in range(3):
+            done = await _raise_job(client, token, item, qty=1)
+            await _start(client, token, done)
+            assert (await _finish(client, token, done, good=1)).status_code == 200
+            await _set_measured_duration(test_engine, done["id"], hours=hours)
+
+    running_quick = await _raise_job(client, token, quick, qty=1)
+    await _start(client, token, running_quick)
+    await _backdate_start(test_engine, running_quick["id"], days=3)
+    running_slow = await _raise_job(client, token, slow, qty=1)
+    await _start(client, token, running_slow)
+    await _backdate_start(test_engine, running_slow["id"], days=3)
+
+    alerts = (await _brief(client, token))["job_alerts"]
+    flagged = {a["item_sku"] for a in alerts}
+    assert flagged == {"QUICK-1"}, (
+        "three days is late for the one-hour item and early for the month-long one"
+    )

@@ -31,12 +31,17 @@ describe("demand policy setting", () => {
     expect(html).toContain("When real orders come in");
     expect(html).toContain("Towards it (recommended)");
     expect(html).toContain("On top of it");
-    expect(html).toContain('value="consume"');
+    // Both options are always in the markup, so asserting on the value alone
+    // passes even with the select's value binding deleted. `selected` is the
+    // only part of the output that reflects the org's actual policy.
+    expect(html).toContain('value="consume" selected');
+    expect(html).not.toContain('value="add" selected');
   });
 
   it("reflects the add policy when that is what the org is on", () => {
     const html = render({ ...OWNER, demand_policy: "add" });
-    expect(html).toContain('value="add"');
+    expect(html).toContain('value="add" selected');
+    expect(html).not.toContain('value="consume" selected');
   });
 
   it("is hidden from a non-owner, since it changes every planning number", () => {

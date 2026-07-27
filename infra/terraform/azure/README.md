@@ -92,6 +92,23 @@ terraform apply -var image_tag=<new-tag>
 ```
 
 Same migration caveat as the AWS module: the backend container's command
-runs `alembic upgrade head` on every start - safe at `min_replicas = 1`
+runs `alembic upgrade head` on every start - safe at `max_replicas = 1`
 (hardcoded in `container_apps.tf`). If you ever scale the backend out, move
 the migration to a separate one-off deploy step first.
+
+## Scaling and cost
+
+All three apps are pinned to `min_replicas = 0`, `max_replicas = 1`, sized
+for a dev/test subscription where an idle environment should cost nothing
+overnight. The tradeoffs:
+
+- **Cold starts.** The first request after an idle period waits for a
+  container pull, and for the backend also for `alembic upgrade head`. Set
+  `min_replicas = 1` on the frontend and backend if that latency matters.
+- **`max_replicas = 1` on `redis` is correctness, not cost.** Replicas don't
+  share memory, so more than one would split the per-IP rate-limit counters.
+  Leave it at 1 until Redis moves to Azure Cache for Redis.
+- **Postgres has no scale-to-zero.** `B_Standard_B1ms` bills around the
+  clock, so it's the bulk of an idle month. Stop it between sessions with
+  `az postgres flexible-server stop -g <rg> -n <server>`; Azure restarts it
+  automatically after 7 days, so it's not a permanent off switch.

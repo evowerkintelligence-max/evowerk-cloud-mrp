@@ -26,6 +26,14 @@ resource "azurerm_container_app" "redis" {
       cpu    = var.redis_cpu
       memory = var.redis_memory
     }
+
+    # max_replicas = 1 is correctness, not cost: each replica would be a
+    # separate in-memory Redis with its own counters, so per-IP rate limits
+    # would silently divide by the replica count. Losing the counters when
+    # this scales to zero is fine (they're not durable anyway), but splitting
+    # them across live replicas is not.
+    min_replicas = 0
+    max_replicas = 1
   }
 
   ingress {
@@ -83,9 +91,11 @@ resource "azurerm_container_app" "backend" {
       memory = var.backend_memory
 
       # The image's own CMD is just uvicorn (see backend/Dockerfile) - same as
-      # docker-compose.yml's override. Only safe as-is at min/max replicas = 1;
+      # docker-compose.yml's override. Only safe as-is at max_replicas = 1;
       # move this to a separate one-off deploy step before scaling out, so
-      # multiple replicas don't race to run `alembic upgrade head`.
+      # multiple replicas don't race to run `alembic upgrade head`. Scaling to
+      # zero is fine: a cold start runs the migration exactly once, because
+      # max_replicas = 1 means there is never a second replica to race with.
       command = ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
 
       env {
@@ -114,7 +124,12 @@ resource "azurerm_container_app" "backend" {
       }
     }
 
-    min_replicas = 1
+    # ponytail: scale-to-zero, sized for a dev/test subscription funded by
+    # credits - an idle backend costs nothing overnight, at the price of a
+    # cold start (container pull + `alembic upgrade head`) on the first
+    # request after idling. Set min_replicas = 1 for anything latency-
+    # sensitive or customer-facing.
+    min_replicas = 0
     max_replicas = 1
   }
 
@@ -168,6 +183,11 @@ resource "azurerm_container_app" "frontend" {
         value = local.backend_internal_host
       }
     }
+
+    # ponytail: pinned to 1 for a dev/test box. Raise max_replicas when real
+    # traffic justifies it - nginx here is stateless, so it scales out freely.
+    min_replicas = 0
+    max_replicas = 1
   }
 
   ingress {

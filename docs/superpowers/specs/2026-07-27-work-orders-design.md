@@ -38,6 +38,11 @@ point at.
   eat them first.
 - Make the schedule date mean something: a job late to start says so, and a
   job scheduled beyond the planning horizon does not distort today's plan.
+- Surface jobs that have gone quiet. A job nobody finishes is worse than a
+  job nobody starts, because its components are already gone, so both are
+  chased where the shop already looks each morning.
+- Survive ordinary mistakes: a job can be corrected rather than only
+  cancelled and retyped.
 - Stop the grid double-counting: a job in flight is incoming supply, so the
   app never tells you to make the same 50 pumps twice.
 - Produce real yield data (planned vs good vs scrap, with start and finish
@@ -86,6 +91,9 @@ app.
 - `routing_id`: nullable. Recorded because the definition exists and is
   useful history; not tracked step by step.
 - `quantity_planned`, `quantity_good`, `quantity_scrapped`.
+- `scrap_reason`: nullable free text captured at finish. A scrap count with
+  no cause tells the shop its yield is poor without telling it why, which is
+  the question the number always prompts next.
 - `status`: `scheduled` | `in_progress` | `done` | `cancelled`.
 - `location_id`: where components come from and finished goods go. Chosen
   when the job is raised, defaulting to the org default via
@@ -134,6 +142,20 @@ Make button the common path is raise-and-start in one action; raising for a
 later date is the same call with `scheduled_start` set and `start_now`
 false.
 
+**Edit**, while still `scheduled`, changes quantity, `scheduled_start`,
+location or notes, and recomputes the component requirements and therefore
+the reservation. Without it, correcting a job raised for 50 that should have
+been 100 means cancelling and retyping it, which is the single most common
+thing a shop will want to do to a job and the fastest way to make the app
+feel hostile.
+
+Editing re-snapshots `bom_id` to the item's currently active recipe, so a
+job always reflects the recipe as of its last edit. That is the rule that
+explains itself: if the BOM was wrong and has been fixed, editing the job
+picks the fix up, and a job nobody touches keeps the recipe it was raised
+on. Editing is refused once a job has started, because its components are
+already consumed.
+
 **Start** consumes the components, branching per item on lot tracking, and
 stamps `started_at`.
 
@@ -143,8 +165,15 @@ components left at start, so scrapped units simply never arrive.
 
 **Cancel** from `scheduled` moves nothing, because nothing was consumed.
 From `in_progress` it returns every consumed component, restoring
-lot-tracked stock to the exact lots it was drawn from. It is the escape
-hatch for a mis-keyed job.
+lot-tracked stock to the exact lots it was drawn from.
+
+Cancel means **the job never ran**. Because partial production is not
+tracked, returning the components assumes none of them were turned into
+anything or thrown away. A job where work has actually begun must be
+finished with its good and scrap counts instead, even if that is good 0 and
+scrap 12, or the returned components will be stock the shop does not
+physically have. The app cannot detect which case it is, so the confirmation
+says this in as many words rather than asking "are you sure".
 
 ## 3. Holding, consuming and producing stock
 
@@ -155,6 +184,13 @@ location is the outstanding requirement across `scheduled` jobs:
 `sum(quantity_required - quantity_consumed)`. It is computed from
 `WorkOrderComponent` on demand, not stored, because a stored counter is a
 second source of truth that can drift from the rows it summarises.
+
+**Only jobs inside the planning horizon hold stock**, the same bound section
+4 applies to the plan. A job scheduled for next quarter is intent, not a
+claim on today's shelf; letting it block a job that needs to run this week
+would be the worst of both worlds, since that far-future job is not even in
+the plan the shop is looking at. A job with no `scheduled_start` holds
+immediately.
 
 Starting a job checks each component against what is actually free:
 
@@ -176,10 +212,22 @@ Blocking is genuinely what the shop wants here. Two scheduled jobs each
 needing 100 of 150 on hand means one of them cannot run, and saying so when
 the second is started beats discovering it halfway through.
 
-Under concurrency the check is advisory: two simultaneous starts can both
-read the same free quantity and pass. The physical consumption below is
-still guarded, so one of them fails there instead, with a shortfall message
-rather than a reservation message.
+**The check is made atomic by locking the stock it is about to read.**
+Before computing availability, a start takes a row lock on each component's
+stock: the `InventoryBalance` row for a non-lot component, and the candidate
+`Lot` rows for a lot-tracked one. A second start touching any of the same
+components blocks until the first commits, then recomputes against what is
+genuinely left, so the loser gets the reservation message it deserves rather
+than a confusing shortfall further in. Jobs with no components in common
+never contend, which is the right place for the cost to fall.
+
+Locks are taken **in a deterministic order**, by item id and then lot id.
+This is not incidental: two jobs sharing two components and locking them in
+opposite orders would deadlock, and that is a genuinely unpleasant failure
+to diagnose in production. The ordering requirement is stated here because
+the test suite cannot enforce it: the suite runs on SQLite, where
+`FOR UPDATE` is a no-op, so this is guaranteed by the query and by review
+rather than by a concurrency test.
 
 ### Stock paths
 
@@ -262,11 +310,48 @@ pages, so the app needs no third set of conventions. Raising a job for a
 later date is done here, where the date and location inputs live, rather
 than adding either to the grid row.
 
-Finish opens a confirmation carrying the good and scrap inputs, since it
-moves stock and cannot be undone. Cancel likewise says whether components
-will go back.
+A scheduled job is editable in place here: quantity, date, location and
+notes, which is the correction path described in section 2.
 
-## 6. Feeding plant analytics
+Finish opens a confirmation carrying the good, scrap and scrap-reason
+inputs, since it moves stock and cannot be undone. Cancel's confirmation
+states plainly that the components go back as though the job never ran, and
+points at finishing with scrap instead if any work was actually done.
+
+The grid's Make button offers the quantity still needed **after** jobs
+already in flight, so pressing it twice raises a second job for what is left
+rather than silently duplicating the first. When nothing is left to make,
+the row says a job is already covering it instead of offering Make again.
+
+## 6. Chasing jobs, and feeding plant analytics
+
+### Jobs that have gone quiet
+
+A flag on a page nobody opens is not chasing anything. Two failure modes
+need to reach the user without being looked for:
+
+- **Late to start.** A `scheduled` job whose `scheduled_start` has passed.
+  It is holding components while not making anything.
+- **Stalled.** An `in_progress` job still running after
+  `STALLED_JOB_DAYS` (7). This is the worse of the two and the one a shop
+  will actually hit: the components are already consumed, and the job counts
+  as incoming supply, so the plan is quietly promising 50 pumps that nobody
+  is making.
+
+Both surface through `app/services/morning_brief.py`, which is already the
+app's "what needs a human today" list and is computed on request, so this
+needs no scheduler and no new delivery mechanism. The planning grid's
+summary bar carries the count alongside its existing material warnings, so
+the condition is visible on the screen the shop opens first.
+
+Seven days is a heuristic, named as a constant rather than buried, and it is
+wrong for a shop whose normal build takes three weeks. Deriving an expected
+duration from the routing's cycle and setup times is the better answer and
+is left to the phase that makes routings load-bearing; until then a constant
+that is visible and easy to change beats a guess dressed up as a
+calculation.
+
+### Feeding plant analytics
 
 `PaceSession` gains a nullable `work_order_id`. A session can be started
 from a job, in which case it inherits that job's product; sessions started
@@ -312,12 +397,22 @@ interpolated. 400 for malformed input, 409 for state or stock conflicts.
 - Negative good or scrap: 400. Quantities beyond `Numeric(12, 4)` range:
   400, matching the bound the planning grid write and sales order lines use,
   because Postgres would otherwise raise a numeric overflow as a 500.
-- **Over-run guard.** Good plus scrap above twice the planned quantity is
-  refused with 400, naming the planned figure and suggesting a second job.
-  Over-runs are real and are allowed up to that point; 5000 against a
+- **Over-run guard.** Good plus scrap above `max(2 x planned, planned + 10)`
+  is refused with 400, naming the planned figure and suggesting a second
+  job. Over-runs are real and are allowed up to that point; 5000 against a
   planned 50 is a typo, and silently stocking it corrupts inventory in a way
-  that is tedious to unpick. The bound is a typo guard, not a business rule,
-  which is why it is a fixed multiple and not configurable.
+  that is tedious to unpick. The `+ 10` term matters more than it looks: a
+  plain doubling refuses a job planned for 1 that yielded 3, which is
+  routine on a prototype or small-batch line and would make the guard feel
+  broken to exactly the shops least able to work around it. The bound is a
+  typo guard, not a business rule, which is why it is fixed rather than
+  configurable.
+- **Duplicate finished lot number.** Finishing into a lot number the item
+  already has adds to that lot via the existing `find_or_create_lot`, rather
+  than erroring or creating a second lot with the same name. That is already
+  how a purchase order receipt behaves, and a shop finishing a second batch
+  into the same physical lot is doing something ordinary, not something
+  wrong.
 - Starting, finishing or cancelling a job in the wrong state: 409.
 - The job row is locked `for_update` on start, finish and cancel, so two
   concurrent calls cannot both pass the status check.
@@ -355,6 +450,18 @@ interpolated. 400 for malformed input, 409 for state or stock conflicts.
   together.
 - A scheduled job whose date has passed still counts, and reports itself as
   late to start.
+- A job scheduled beyond the horizon holds no stock, so a job needed this
+  week can still start.
+- Editing a scheduled job's quantity recomputes its components and its
+  reservation, and picks up a BOM that changed since it was raised. Editing
+  a started job is refused.
+- Over-run: a job planned for 1 accepts 3 good, and a job planned for 50
+  refuses 5000.
+- Finishing into an existing lot number adds to that lot rather than
+  creating a second lot with the same name.
+- A job in progress past the stalled threshold appears in the morning brief;
+  a job inside it does not.
+- A scheduled job past its date appears in the morning brief.
 - An `in_progress` job nets as supply but does **not** re-raise component
   demand, since those components are already consumed.
 - `done` and `cancelled` jobs count for nothing.
@@ -368,13 +475,22 @@ interpolated. 400 for malformed input, 409 for state or stock conflicts.
 
 ## Known limitations
 
-- **The reservation check is advisory under concurrency.** Two starts racing
-  can both read the same free quantity and pass it; the physical consumption
-  still guards, so one fails there with a shortfall message instead of a
-  reservation one. Closing this properly means locking every component row
-  for the duration of a start, which costs more in contention than the race
-  costs in confusion.
-- **Nothing chases a late job.** A scheduled job past its date says so
-  wherever it is displayed, but no notification goes out and nothing
-  escalates; a job scheduled and forgotten stays quietly late, holding its
-  components, until someone looks at the Production page.
+These are consequences of decisions taken above, not gaps left unexamined.
+
+- **Chasing is in-app, not push.** Late and stalled jobs reach the morning
+  brief and the grid summary, which is where this shop's users already look,
+  but nothing emails or notifies anyone. Push needs a scheduler the app does
+  not have, and adding one to deliver two lines of text would be a poor
+  trade.
+- **The stalled threshold is a constant, not a measurement.** Seven days
+  suits a shop whose jobs take hours or days and is simply wrong for one
+  whose jobs take a month. Section 6 records why, and the routing data
+  needed to do better already exists for the phase that wants it.
+- **Partial production is invisible.** A job is all-or-nothing between start
+  and finish, so a job abandoned halfway has to be finished with a scrap
+  count to stay honest. Section 2 makes the rule explicit because the app
+  cannot detect the case, which is the residual risk of not tracking
+  operations.
+- **Reservations are per job, not per priority.** Contested stock goes to
+  whoever starts first, and a shop that needs otherwise is asking for
+  scheduling.

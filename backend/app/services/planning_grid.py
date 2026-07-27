@@ -254,6 +254,8 @@ async def compute_planning_grid(
             key=lambda ln: (ln.item_id != str(product_id), ln.item_sku),
         )
 
+        committed = committed_qty_by_item.get(product_id, Decimal(0))
+
         products.append(
             GridProduct(
                 item_id=product_id,
@@ -262,17 +264,23 @@ async def compute_planning_grid(
                 planned_qty=qty,
                 needed_by=first_period,
                 planned_bucket_count=bucket_count,
-                committed_qty=committed_qty_by_item.get(product_id, Decimal(0)),
+                committed_qty=committed,
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,
-                ready_by=None if qty <= 0 or unknown_lead else ready_by,
+                # Committed demand counts as something to make: a row that
+                # exists only because a customer ordered it still needs a
+                # date, and a blank one on a red row is the least useful
+                # answer this screen can give.
+                ready_by=None if (qty <= 0 and committed <= 0) or unknown_lead else ready_by,
                 suggested_qty=None,
                 detail=detail,
             )
         )
 
-    unplanned = {p.item_id for p in products if p.planned_qty <= 0}
+    # A product a customer has already ordered does not need a guess from
+    # history: the order is better information than the forecast is.
+    unplanned = {p.item_id for p in products if p.planned_qty <= 0 and p.committed_qty <= 0}
     if unplanned:
         suggestions = await compute_weekly_suggestions(
             db, org_id, horizon_days=GRID_HORIZON_DAYS, as_of=horizon_start, item_ids=unplanned

@@ -71,16 +71,22 @@ async def update_my_org(
         org.adjust_approval_threshold = body.adjust_approval_threshold
     if body.demand_policy is not None:
         org.demand_policy = body.demand_policy
+    # Record only the fields this request actually set. Logging the untouched
+    # one alongside them reads like it was changed too, and the demand policy
+    # in particular changes what every planning number in the app means, so
+    # its audit trail has to be exact about when it moved.
+    changed: dict[str, str] = {}
+    if body.adjust_approval_threshold is not None:
+        changed["adjust_approval_threshold"] = str(org.adjust_approval_threshold)
+    if body.demand_policy is not None:
+        changed["demand_policy"] = org.demand_policy
     await log_event(
         db,
-        action="org.threshold_updated",
+        action="org.settings_updated",
         org_id=current.org_id,
         actor_user_id=current.id,
         target=str(org.id),
-        metadata={
-            "adjust_approval_threshold": str(org.adjust_approval_threshold),
-            "demand_policy": org.demand_policy,
-        },
+        metadata=changed,
     )
     await db.commit()
     return OrgResponse(

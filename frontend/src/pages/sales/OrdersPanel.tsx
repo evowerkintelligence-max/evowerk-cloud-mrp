@@ -16,7 +16,7 @@ import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/tabl
 import { useCurrentUser } from "@/lib/currentUser";
 import { humanize, soStatusVariant } from "@/lib/status";
 import { trimQty } from "../planning/types";
-import type { Customer, SalesOrder, SalesOrderDetail } from "./types";
+import type { Customer, SalesOrderDetail } from "./types";
 
 interface ItemResponse {
   id: string;
@@ -36,10 +36,12 @@ export function OrdersPanel() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [confirmDone, setConfirmDone] = useState<SalesOrder | null>(null);
-  const [confirmCancel, setConfirmCancel] = useState<SalesOrder | null>(null);
+  const [confirmDone, setConfirmDone] = useState<SalesOrderDetail | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<SalesOrderDetail | null>(null);
 
-  const orders = useQuery<SalesOrder[]>({
+  // The list endpoint returns each order's lines, so the rows need no
+  // per-row fetch of their own.
+  const orders = useQuery<SalesOrderDetail[]>({
     queryKey: ["sales-orders", search, statusFilter],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -98,7 +100,7 @@ export function OrdersPanel() {
   });
 
   const completeOrder = useMutation({
-    mutationFn: async (order: SalesOrder) => {
+    mutationFn: async (order: SalesOrderDetail) => {
       const res = await apiFetch(`/sales-orders/${order.id}/complete`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -120,7 +122,7 @@ export function OrdersPanel() {
   });
 
   const cancelOrder = useMutation({
-    mutationFn: async (order: SalesOrder) => {
+    mutationFn: async (order: SalesOrderDetail) => {
       const res = await apiFetch(`/sales-orders/${order.id}/cancel`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -318,30 +320,19 @@ function OrderRow({
   onMarkDone,
   onCancel,
 }: {
-  order: SalesOrder;
+  order: SalesOrderDetail;
   canEdit: boolean;
   onMarkDone: () => void;
   onCancel: () => void;
 }) {
-  const detail = useQuery<SalesOrderDetail>({
-    queryKey: ["sales-orders", order.id],
-    queryFn: async () => {
-      const res = await apiFetch(`/sales-orders/${order.id}`);
-      if (!res.ok) throw new Error("Failed to load the order");
-      return res.json();
-    },
-  });
-
   return (
     <TR>
       <TD className="font-medium">SO-{order.so_number}</TD>
       <TD>
         {order.customer_name}
-        {detail.data && detail.data.lines.length > 0 && (
+        {order.lines.length > 0 && (
           <div className="text-sm text-muted-foreground">
-            {detail.data.lines
-              .map((l) => `${l.item_sku} × ${trimQty(l.quantity_ordered)}`)
-              .join(", ")}
+            {order.lines.map((l) => `${l.item_sku} × ${trimQty(l.quantity_ordered)}`).join(", ")}
           </div>
         )}
       </TD>

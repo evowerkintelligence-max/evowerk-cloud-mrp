@@ -71,14 +71,12 @@ describe("Sales", () => {
 
   it("orders tab lists an order with its number, customer, product and status", () => {
     const html = render("orders", (qc) => {
-      qc.setQueryData(["sales-orders", "", ""], [OPEN_ORDER]);
-      qc.setQueryData(["sales-orders", "so-1"], OPEN_ORDER_DETAIL);
+      qc.setQueryData(["sales-orders", "", ""], [OPEN_ORDER_DETAIL]);
     });
     expect(html).toContain("Raise an order");
     expect(html).toContain("SO-7");
     expect(html).toContain("Northwind Ltd");
-    expect(html).toContain("WIDGET-1");
-    expect(html).toContain("40");
+    expect(html).toContain("WIDGET-1 × 40");
     expect(html).toContain("2030-06-01");
     expect(html).toContain("Open");
   });
@@ -117,16 +115,14 @@ describe("Sales", () => {
   });
 
   it("mark done appears for an open order but not one already done", () => {
-    const open = render("orders", (qc) => {
-      qc.setQueryData(["sales-orders", "", ""], [OPEN_ORDER]);
-      qc.setQueryData(["sales-orders", "so-1"], OPEN_ORDER_DETAIL);
-    });
+    const open = render("orders", (qc) =>
+      qc.setQueryData(["sales-orders", "", ""], [OPEN_ORDER_DETAIL]),
+    );
     expect(open).toContain("Mark done");
 
-    const done = render("orders", (qc) => {
-      qc.setQueryData(["sales-orders", "", ""], [{ ...OPEN_ORDER, status: "done" }]);
-      qc.setQueryData(["sales-orders", "so-1"], { ...OPEN_ORDER_DETAIL, status: "done" });
-    });
+    const done = render("orders", (qc) =>
+      qc.setQueryData(["sales-orders", "", ""], [{ ...OPEN_ORDER_DETAIL, status: "done" }]),
+    );
     expect(done).toContain("Done");
     expect(done).not.toContain("Mark done");
   });

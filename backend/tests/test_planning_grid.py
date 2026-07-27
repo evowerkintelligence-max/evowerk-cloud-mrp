@@ -1010,3 +1010,28 @@ async def test_a_cancelled_order_leaves_nothing_committed(client):
     row = _product(await _grid(client, token), "WIDGET-1")
     assert Decimal(row["committed_qty"]) == Decimal(0)
     assert Decimal(row["planned_qty"]) == Decimal("10")
+
+
+async def test_a_committed_only_row_gets_a_ready_by_date(client):
+    """A row that exists only because a customer ordered it still needs a
+    date: a blank ready-by on a red row is the least useful answer here."""
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1", lead_time_days=5)
+    await _create_order(client, token, customer, item, qty=15, needed_by=_soon())
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert Decimal(row["committed_qty"]) == Decimal("15")
+    assert row["ready_by"] is not None
+
+
+async def test_a_committed_product_is_not_offered_a_history_suggestion(client):
+    """An order is better information than a forecast guess, so a product a
+    customer has already ordered must not be offered one."""
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, customer, item, qty=15, needed_by=_soon())
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert row["suggested_qty"] is None

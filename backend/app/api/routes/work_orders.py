@@ -729,6 +729,47 @@ async def finish_work_order(
     return await _detail_response(db, wo, item, location)
 
 
+@router.post("/{wo_id}/cancel", response_model=WorkOrderResponse)
+async def cancel_work_order(
+    wo_id: uuid.UUID,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Call the job off. A scheduled one simply stops being a claim on stock; a
+    running one gives its components back."""
+    wo = await get_or_404(
+        db, WorkOrder, current.org_id, wo_id, "Work order not found", for_update=True
+    )
+    # Cancelling a running job means nothing was made and every component is
+    # back on the shelf. It is defined in terms of the finish path rather than
+    # being a second way to move stock, so the two cannot drift. A job where any
+    # work actually happened must be finished instead, where the under-run
+    # question gets asked properly.
+    if wo.status == "in_progress":
+        # good and scrap are both zero, so the fraction is 1 and every
+        # component comes back in full.
+        await _return_components(db, wo, current, Decimal(1))
+        wo.finished_at = datetime.now(timezone.utc)
+    elif wo.status != "scheduled":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
+
+    wo.status = "cancelled"
+    await db.flush()
+
+    await log_event(
+        db,
+        action="work_order.cancelled",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(wo.id),
+        metadata={"wo_number": wo.wo_number},
+    )
+    await db.commit()
+    item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+    location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
+    return await _detail_response(db, wo, item, location)
+
+
 @router.patch("/{wo_id}", response_model=WorkOrderResponse)
 async def update_work_order(
     wo_id: uuid.UUID,

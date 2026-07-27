@@ -56,6 +56,7 @@ from app.api.routes import (
     suppliers,
     throughput,
     work_centers,
+    work_orders,
     workflows,
 )
 from app.core.config import get_settings
@@ -153,6 +154,7 @@ app.include_router(rca_cases.router, dependencies=[Depends(require_feature("rca_
 app.include_router(predictive.router, dependencies=[Depends(require_feature("predictive"))])
 app.include_router(mfg_forecast.router, dependencies=[Depends(require_feature("mfg_forecast"))])
 app.include_router(work_centers.router)
+app.include_router(work_orders.router, dependencies=[Depends(require_feature("production"))])
 app.include_router(computer_vision.router, dependencies=[Depends(require_feature("computer_vision"))])
 app.include_router(data_chat.router, dependencies=[Depends(require_feature("data_chat"))])
 app.include_router(alerts.router)

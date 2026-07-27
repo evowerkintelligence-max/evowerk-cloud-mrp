@@ -54,6 +54,7 @@ from app.models import (  # noqa: F401 - register models
     realtime,
     report_spec,
     routing,
+    sales,
     sensor,
     shift_forecast,
     shift_schedule,

@@ -21,6 +21,14 @@ class Org(Base):
     adjust_approval_threshold: Mapped[Decimal] = mapped_column(
         Numeric(12, 4), nullable=False, default=Decimal("50")
     )
+    # consume | add. How committed demand (open sales orders) combines with
+    # estimated demand (typed or imported forecasts) when planning. `consume`
+    # plans the larger of the two, so orders count towards the estimate rather
+    # than on top of it and materials are not bought twice for the same sale.
+    # `add` sums them, for a shop whose estimate deliberately excludes booked
+    # work. A string rather than a boolean so a third policy needs no migration.
+    # See app.services.demand.combine_demand.
+    demand_policy: Mapped[str] = mapped_column(String(20), nullable=False, default="consume")
     # Single source of truth for what this org can access - no separate "plan"
     # label is stored anywhere, so the two can never drift apart. See
     # backend/app/core/features.py for the valid keys.

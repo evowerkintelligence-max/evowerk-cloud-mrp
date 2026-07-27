@@ -63,6 +63,7 @@ from app.models import (  # noqa: F401 - register models
     tenant,
     user,
     work_center,
+    work_order,
     workflow,
 )
 from app.models.tenant import Org
@@ -133,7 +134,7 @@ _ENTITLEMENT_DEFAULT_TEST_MODULES = {"test_feature_gating", "test_org_features_m
 # app.core.features.PREMIUM_FEATURES. Adding a feature key to the registry
 # means adding it here too, or that feature's routes will 403 in tests.
 _GRANTED_IN_TESTS = [
-    "boms", "procurement", "sales", "lots", "warehouse", "planning",
+    "boms", "procurement", "sales", "production", "lots", "warehouse", "planning",
     "plant_summary", "oee", "pace_tracking", "downtime", "downtime_tracking",
     "throughput", "scrap", "shifts", "spc", "kpis", "kpi_dashboards",
     "reports", "data_chat", "automl", "predictive", "simulation",

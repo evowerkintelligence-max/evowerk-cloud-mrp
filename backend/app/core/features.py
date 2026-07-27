@@ -12,6 +12,7 @@ FEATURES: dict[str, tuple[str, str]] = {
     "boms": ("Bills of Materials", "core"),
     "procurement": ("Procurement", "core"),
     "sales": ("Sales Orders", "core"),
+    "production": ("Production", "core"),
     "lots": ("Lots", "core"),
     "warehouse": ("Warehouse", "core"),
     "planning": ("Planning", "core"),

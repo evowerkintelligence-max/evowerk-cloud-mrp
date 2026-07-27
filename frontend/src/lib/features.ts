@@ -11,6 +11,7 @@ export const FEATURES: Record<string, FeatureDef> = {
   boms: { label: "Bills of Materials", tier: "core" },
   procurement: { label: "Procurement", tier: "core" },
   sales: { label: "Sales Orders", tier: "core" },
+  production: { label: "Production", tier: "core" },
   lots: { label: "Lots", tier: "core" },
   warehouse: { label: "Warehouse", tier: "core" },
   planning: { label: "Planning", tier: "core" },

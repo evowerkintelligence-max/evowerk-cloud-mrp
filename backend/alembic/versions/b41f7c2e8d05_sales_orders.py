@@ -5,7 +5,7 @@ Revises: c7a3d5e91f42
 Create Date: 2026-07-27
 
 """
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 revision = "b41f7c2e8d05"  # pragma: allowlist secret
@@ -88,10 +88,77 @@ def upgrade() -> None:
         "orgs",
         sa.Column("demand_policy", sa.String(20), nullable=False, server_default="consume"),
     )
+    _set_sales_entitlement(granted=True)
 
 
 def downgrade() -> None:
+    _set_sales_entitlement(granted=False)
     op.drop_table("sales_order_lines")
     op.drop_table("sales_orders")
     op.drop_table("customers")
     op.drop_column("orgs", "demand_policy")
+
+
+# The feature key this migration ships, hardcoded rather than imported from
+# app.core.features so a later edit to that registry cannot rewrite history.
+_SALES_FEATURE = "sales"
+
+# jsonb_exists rather than the `?` operator: `?` collides with the DBAPI
+# paramstyle and would be read as a bind parameter.
+_OFFLINE_GRANT_SQL = """
+UPDATE orgs
+   SET enabled_features = (enabled_features::jsonb || '["sales"]'::jsonb)::json
+ WHERE jsonb_array_length(enabled_features::jsonb) > 0
+   AND NOT jsonb_exists(enabled_features::jsonb, 'sales')
+"""
+
+_OFFLINE_REVOKE_SQL = """
+UPDATE orgs
+   SET enabled_features = ((enabled_features::jsonb) - 'sales')::json
+ WHERE jsonb_exists(enabled_features::jsonb, 'sales')
+"""
+
+
+def _set_sales_entitlement(*, granted: bool, connection=None) -> None:
+    """Add or remove "sales" on every org already holding entitlements.
+
+    Org.enabled_features is a stored JSON array read by require_feature (see
+    app.api.deps), so adding a key to the FEATURES registry does nothing for
+    rows already in the database. Without this backfill the whole feature
+    ships invisible to every existing customer: 403 on /customers and
+    /sales-orders, and no nav entry. Same reasoning as b2e9f4a71c83, which
+    grandfathered every org into Core when gating first went live.
+
+    An org with NO entitlements is left alone: an empty list is a deliberate
+    "not provisioned yet" state, not a Core org, so granting it access here
+    would hand out a feature nobody asked for.
+
+    `connection` defaults to the migration's own bind; it is a parameter so
+    backend/tests/test_sales_entitlement_backfill.py can exercise this against
+    a scratch database. The suite builds its schema with create_all and never
+    runs Alembic, so without that seam this code would ship untested.
+    """
+    orgs = sa.table("orgs", sa.column("id", sa.Uuid()), sa.column("enabled_features", sa.JSON()))
+    if connection is None:
+        if context.is_offline_mode():
+            # Offline (--sql) mode cannot run the SELECT the row loop below
+            # needs, so emit the equivalent as one statement. Postgres-specific
+            # because that is the only engine a real deployment renders SQL
+            # for; every online path (CI, docker-compose, ECS, Container Apps)
+            # takes the portable loop instead.
+            op.execute(_OFFLINE_GRANT_SQL if granted else _OFFLINE_REVOKE_SQL)
+            return
+        connection = op.get_bind()
+    for org_id, features in connection.execute(sa.select(orgs.c.id, orgs.c.enabled_features)):
+        current = list(features or [])
+        if not current:
+            continue
+        if granted and _SALES_FEATURE not in current:
+            updated = [*current, _SALES_FEATURE]
+        elif not granted and _SALES_FEATURE in current:
+            updated = [f for f in current if f != _SALES_FEATURE]
+        else:
+            continue
+        connection.execute(
+            orgs.update().where(orgs.c.id == org_id).values(enabled_features=updated)
+        )

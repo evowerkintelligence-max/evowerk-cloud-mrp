@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.models.work_order import WorkOrderComponent, WorkOrderComponentLot
 
 pytestmark = pytest.mark.asyncio
 
@@ -381,17 +386,39 @@ async def test_a_later_job_cannot_block_a_sooner_one(client):
     )
 
 
-async def test_a_job_scheduled_beyond_the_horizon_holds_nothing(client):
+async def test_a_scheduled_sooner_job_holds_stock_against_a_later_one(client):
+    """The reservation itself, with nothing else able to explain the refusal:
+    150 on the shelf covers either job alone, so the later one is only short
+    because the sooner one is holding 100 it has not consumed yet."""
     token = await _register_and_login(client)
     seal = await _create_item(client, token, "SEAL-1")
     pump = await _create_item(client, token, "PUMP-1")
     await _create_active_bom(client, token, pump, [(seal, 1)])
     await _give_stock(client, token, seal, 150)
 
-    await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(400))
-    near = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(2))
+    # Left scheduled, never started, so no stock has actually moved.
+    await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(2))
+    later = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(30))
 
-    assert (await _start(client, token, near)).status_code == 200
+    refused = await _start(client, token, later)
+    assert refused.status_code == 409, refused.text
+    assert "SEAL-1: 50 short at" in refused.json()["detail"]
+    assert "WO-1 needs them on" in refused.json()["detail"]
+
+
+async def test_a_job_scheduled_beyond_the_horizon_holds_nothing(client):
+    """The holder is due sooner, so only the horizon bound keeps it from
+    reserving. A job past the horizon is intent, not a claim on the shelf."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 150)
+
+    await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(100))
+    far = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(200))
+
+    assert (await _start(client, token, far)).status_code == 200
 
 
 async def test_a_job_does_not_block_itself(client):
@@ -437,7 +464,7 @@ async def test_a_started_job_cannot_be_edited(client):
     assert res.status_code == 409
 
 
-async def test_starting_a_lot_tracked_component_draws_from_lots(client):
+async def test_starting_a_lot_tracked_component_draws_from_lots(client, test_engine):
     """A lot-tracked component cannot go through apply_inventory_delta, so
     this pins the other branch."""
     token = await _register_and_login(client)
@@ -453,3 +480,21 @@ async def test_starting_a_lot_tracked_component_draws_from_lots(client):
     lots = await client.get("/lots", headers=headers)
     remaining = sum(Decimal(lot["quantity_remaining"]) for lot in lots.json())
     assert remaining == Decimal("80")
+
+    # The lot split is written nowhere else, so if this row were dropped a
+    # later cancel or under-run return could not put stock back where it came
+    # from. No API exposes it yet, hence the direct read.
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(WorkOrderComponentLot.lot_id, WorkOrderComponentLot.quantity).join(
+                    WorkOrderComponent,
+                    WorkOrderComponent.id == WorkOrderComponentLot.wo_component_id,
+                )
+                .where(WorkOrderComponent.wo_id == uuid.UUID(job["id"]))
+            )
+        ).all()
+    assert [(str(lot_id), Decimal(qty)) for lot_id, qty in rows] == [
+        (lots.json()[0]["id"], Decimal("20"))
+    ]

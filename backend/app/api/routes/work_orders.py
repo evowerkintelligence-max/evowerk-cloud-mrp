@@ -20,7 +20,7 @@ from app.models.location import Location
 from app.models.lot import Lot, LotTransaction
 from app.models.work_order import WorkOrder, WorkOrderComponent, WorkOrderComponentLot
 from app.services.inventory import apply_inventory_delta
-from app.services.locations import resolve_location_id
+from app.services.locations import location_code, resolve_location_id
 from app.services.lots import consume_lot_fefo
 from app.services.work_orders import (
     active_bom_id,
@@ -200,7 +200,13 @@ async def _lock_component_stock(
                 Lot.status == "active",
                 Lot.quantity_remaining > 0,
             )
-            .order_by(Lot.item_id, Lot.id)
+            # item_id leads so two jobs sharing components lock items in the
+            # same order. Within an item the rest mirrors consume_lot_fefo's
+            # iteration order, because that is the order every other lot
+            # consumer takes these same row locks in; sorting by Lot.id here
+            # instead would let a start and a concurrent FEFO consume grab two
+            # lots in opposite orders and deadlock.
+            .order_by(Lot.item_id, Lot.expiry_date.is_(None), Lot.expiry_date, Lot.created_at)
             .with_for_update()
         )
     ).all()
@@ -225,18 +231,22 @@ async def _start_job(db: AsyncSession, job: WorkOrder, current: CurrentUser) -> 
             select(WorkOrderComponent, Item)
             .join(Item, Item.id == WorkOrderComponent.item_id)
             .where(WorkOrderComponent.org_id == current.org_id, WorkOrderComponent.wo_id == job.id)
-            .order_by(Item.id)
+            # BOM order, so a refusal names the component a user would expect
+            # to hit first. The deadlock-safe lock ordering lives entirely in
+            # _lock_component_stock, so this is only the consume loop's order.
+            .order_by(WorkOrderComponent.sequence)
         )
     ).all()
 
-    # Lock the stock this start is about to read and write, ordered by item
-    # id, BEFORE computing availability. Two jobs sharing components would
-    # otherwise both read the same free quantity and both pass, and the
-    # loser would fail later with a confusing shortfall instead of a
-    # reservation message. The deterministic order is what stops two jobs
-    # locking the same pair in opposite orders and deadlocking. The suite
-    # runs on SQLite where FOR UPDATE is a no-op, so this is guaranteed by
-    # the query and by review, not by a concurrency test.
+    # Lock the stock this start is about to read and write, in
+    # _lock_component_stock's deterministic order, BEFORE computing
+    # availability. Two jobs sharing components would otherwise both read the
+    # same free quantity and both pass, and the loser would fail later with a
+    # confusing shortfall instead of a reservation message. The deterministic
+    # order is what stops two jobs locking the same pair in opposite orders
+    # and deadlocking. The suite runs on SQLite where FOR UPDATE is a no-op,
+    # so this is guaranteed by the query and by review, not by a concurrency
+    # test.
     on_hand = await _lock_component_stock(
         db, current.org_id, job.location_id, [item.id for _, item in rows]
     )
@@ -319,8 +329,10 @@ async def _shortfall_detail(
 ) -> str:
     """Both extra lookups live here, on the refusal path only, so the start
     that succeeds pays for neither."""
-    location = await get_or_404(db, Location, job.org_id, job.location_id, "Location not found")
-    detail = f"{item.sku}: {_plain(shortfall)} short at {location.code}"
+    # location_code falls back rather than raising, so a missing location
+    # cannot turn this 409 into a 404 about the wrong thing.
+    code = await location_code(db, job.location_id)
+    detail = f"{item.sku}: {_plain(shortfall)} short at {code}"
     holder = await blocking_job(db, job.org_id, job, item.id) if reserved.get(item.id) else None
     if holder is not None:
         due = holder.scheduled_start.isoformat() if holder.scheduled_start else "now"

@@ -14,7 +14,11 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
+from app.models.lot import LotTransaction
 from app.models.sales import Customer, SalesOrder, SalesOrderLine
+from app.services.inventory import apply_inventory_delta
+from app.services.locations import resolve_location_id
+from app.services.lots import consume_lot_fefo
 
 router = APIRouter(prefix="/sales-orders", tags=["sales-orders"])
 
@@ -271,6 +275,83 @@ async def update_sales_order_lines(
         actor_user_id=current.id,
         target=str(so.id),
         metadata={"so_number": so.so_number, "line_count": len(lines_in)},
+    )
+    await db.commit()
+    return await get_sales_order(so_id, current, db)
+
+
+@router.post("/{so_id}/complete", response_model=SalesOrderDetailResponse)
+async def complete_sales_order(
+    so_id: uuid.UUID,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ship the order: the goods leave stock and the order closes, in one
+    transaction, so a shortfall on the second line rolls back the first line's
+    movement too."""
+    so = await get_or_404(
+        db, SalesOrder, current.org_id, so_id, "Sales order not found", for_update=True
+    )
+    if so.status != "open":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"order {so.so_number} is already {so.status}")
+
+    # An order has no location of its own, so it ships from the org's default,
+    # the same fallback /inventory/{item_id}/consume uses.
+    location_id = await resolve_location_id(db, current.org_id, None)
+
+    moved: dict[str, str] = {}
+    for line, item in await _fetch_so_lines_with_items(db, so.id, for_update=True):
+        outstanding = line.quantity_ordered - line.quantity_delivered
+        if outstanding <= 0:
+            continue
+        # Two paths on purpose, do not collapse them into one: lot-tracked
+        # stock lives in its own subsystem and apply_inventory_delta refuses
+        # it outright, while non-lot stock has no lots to draw from. Both
+        # raise 409 with a usable message when short, so there is no
+        # pre-flight availability check here.
+        if item.is_lot_tracked:
+            consumed = await consume_lot_fefo(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                location_id=location_id,
+                quantity=outstanding,
+            )
+            for entry in consumed:
+                db.add(
+                    LotTransaction(
+                        org_id=current.org_id,
+                        lot_id=entry.lot.id,
+                        transaction_type="consumption",
+                        quantity=entry.quantity,
+                        reason="sales order",
+                        created_by=current.id,
+                    )
+                )
+        else:
+            await apply_inventory_delta(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                location_id=location_id,
+                delta=-outstanding,
+                transaction_type="consumption",
+                created_by=current.id,
+                reason="sales order",
+            )
+        line.quantity_delivered = line.quantity_ordered
+        moved[item.sku] = str(outstanding)
+
+    so.status = "done"
+    await db.flush()
+
+    await log_event(
+        db,
+        action="sales_order.completed",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(so.id),
+        metadata={"so_number": so.so_number, "moved": moved},
     )
     await db.commit()
     return await get_sales_order(so_id, current, db)

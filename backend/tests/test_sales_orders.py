@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -157,3 +159,125 @@ async def test_orders_are_org_scoped(client):
     headers_b = {"Authorization": f"Bearer {token_b}"}
     assert (await client.get("/sales-orders", headers=headers_b)).json() == []
     assert (await client.get(f"/sales-orders/{order['id']}", headers=headers_b)).status_code == 404
+
+
+async def _give_stock(client, token, item, qty):
+    res = await client.post(
+        f"/inventory/{item['id']}/adjust",
+        json={"quantity": str(qty), "reason_code": "found_stock"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["applied"] is True
+    return res
+
+
+async def _receive_into_lot(client, token, item, qty, lot_number):
+    """Gives a lot-tracked item real on-hand stock via a received PO lot. Lot
+    stock cannot be seeded any other way, so this needs a supplier too."""
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await client.post(
+        "/suppliers", json={"name": f"Acme Metals {lot_number}"}, headers=headers
+    )
+    assert supplier.status_code == 201, supplier.text
+    po = await client.post(
+        "/purchase-orders", json={"supplier_id": supplier.json()["id"]}, headers=headers
+    )
+    po_id = po.json()["id"]
+    lines = await client.patch(
+        f"/purchase-orders/{po_id}",
+        json=[{"item_id": item["id"], "quantity_ordered": str(qty), "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    line_id = lines.json()["lines"][0]["id"]
+    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
+    recv = await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[{"po_line_id": line_id, "quantity": str(qty), "lot_number": lot_number}],
+        headers=headers,
+    )
+    assert recv.status_code == 200, recv.text
+
+
+async def test_completing_an_order_removes_the_stock(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _give_stock(client, token, item, 50)
+    order = await _create_order(client, token, customer, item, qty=20)
+
+    res = await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "done"
+    assert body["lines"][0]["quantity_delivered"] == "20.0000"
+
+    inv = await client.get(f"/inventory/{item['id']}", headers=headers)
+    assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("30")
+
+
+async def test_completing_without_enough_stock_is_refused_and_moves_nothing(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _give_stock(client, token, item, 5)
+    order = await _create_order(client, token, customer, item, qty=20)
+
+    res = await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+    assert res.status_code == 409
+
+    inv = await client.get(f"/inventory/{item['id']}", headers=headers)
+    assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("5"), "a refused completion must move no stock"
+    still = await client.get(f"/sales-orders/{order['id']}", headers=headers)
+    assert still.json()["status"] == "open", "a refused completion must leave the order open"
+
+
+async def test_completing_twice_is_refused(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _give_stock(client, token, item, 50)
+    order = await _create_order(client, token, customer, item, qty=10)
+
+    assert (await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)).status_code == 200
+    again = await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+    assert again.status_code == 409
+
+    inv = await client.get(f"/inventory/{item['id']}", headers=headers)
+    assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("40"), "stock must come off once, not twice"
+
+
+async def test_a_cancelled_order_cannot_be_completed(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _give_stock(client, token, item, 50)
+    order = await _create_order(client, token, customer, item, qty=10)
+    await client.post(f"/sales-orders/{order['id']}/cancel", headers=headers)
+
+    res = await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+    assert res.status_code == 409
+
+
+async def test_completing_a_lot_tracked_order_draws_from_lots(client):
+    """A lot-tracked finished good cannot go through apply_inventory_delta at
+    all, so this pins the other branch."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "TRACKED-1", is_lot_tracked=True)
+
+    # Lot-tracked stock only enters through a received purchase order.
+    await _receive_into_lot(client, token, item, qty=50, lot_number="LOT-A")
+
+    order = await _create_order(client, token, customer, item, qty=20)
+    res = await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+    assert res.status_code == 200, res.text
+
+    lots = await client.get("/lots", headers=headers)
+    remaining = sum(Decimal(lot["quantity_remaining"]) for lot in lots.json())
+    assert remaining == Decimal("30")

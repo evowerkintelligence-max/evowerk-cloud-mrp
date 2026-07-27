@@ -62,7 +62,11 @@ async def create_customer(
     # them a real "set your password" link instead. org_features is set on
     # the Org inside that same transaction, so a crash after it commits never
     # leaves a customer created with enabled_features stuck at empty.
-    throwaway_password = secrets.token_urlsafe(24)
+    # token_urlsafe's 64-char alphabet holds only 10 digits, so ~1 draw in 215
+    # comes back with no digit at all - which UserCreate.password_policy then
+    # rejects, 500ing this endpoint at random. Append a letter+digit so the
+    # throwaway satisfies the policy by construction rather than by luck.
+    throwaway_password = secrets.token_urlsafe(24) + "a1"
     try:
         created_user = await user_manager.create(
             UserCreate(

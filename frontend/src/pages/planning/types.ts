@@ -52,7 +52,13 @@ export interface PlanningGridResponse {
   horizon_end: string;
   products: GridProduct[];
   to_buy: GridToBuy[];
-  summary: { missing: number; arriving: number; in_stock: number };
+  summary: {
+    missing: number;
+    arriving: number;
+    in_stock: number;
+    /** Jobs late to start, or running far longer than a job like them should. */
+    jobs_needing_attention: number;
+  };
 }
 
 /** Plain-language status wording - the grid never says "net requirement". */

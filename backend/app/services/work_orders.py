@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from statistics import median
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.models.bom import Bom
+from app.core.time import ensure_utc
+from app.models.bom import Bom, Item
+from app.models.routing import Routing, RoutingStep
 from app.models.work_order import WorkOrder, WorkOrderComponent
 from app.services.mrp import load_bom_children
 from app.services.planning_grid import resolve_grid_window
@@ -181,3 +185,139 @@ async def blocking_job(
         .order_by(_rank(), WorkOrder.wo_number)
         .limit(1)
     )
+
+
+# Used only by a shop with neither routing times nor one completed job of an
+# item. It stops being used the moment the shop has told the app anything
+# better, which is what makes it a cold start rather than a policy.
+DEFAULT_JOB_DAYS = 7
+# How many completed jobs of an item the median is taken over.
+DURATION_SAMPLE = 5
+# Stalled once elapsed exceeds max(FACTOR x expected, expected + FLOOR). The
+# additive floor is the same lesson as the over-run guard's +10: doubling alone
+# is far too tight at small values and would call a two-hour job stalled after
+# four.
+STALL_FACTOR = 2
+STALL_FLOOR = timedelta(days=1)
+
+
+async def expected_duration_seconds(
+    db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, quantity: Decimal
+) -> float:
+    """How long a job like this should take, from the best evidence there is.
+
+    In order: the item's routing, which is the shop's own stated intent and is
+    already recorded; else the median per-unit duration of its recently
+    completed jobs, median rather than mean so one job left open over a holiday
+    does not move the bar; else a cold-start constant.
+
+    Per item, not per org, because a shop making both a five-minute bracket and
+    a three-week assembly has no single sensible number, which is precisely the
+    problem a constant cannot solve.
+    """
+    setup_total, cycle_total = (
+        await db.execute(
+            select(
+                func.sum(func.coalesce(RoutingStep.setup_time_seconds, 0)),
+                func.sum(func.coalesce(RoutingStep.cycle_time_seconds, 0)),
+            )
+            .join(Routing, Routing.id == RoutingStep.routing_id)
+            .where(
+                Routing.org_id == org_id,
+                Routing.item_id == item_id,
+                Routing.status == "active",
+            )
+        )
+    ).one()
+    if setup_total or cycle_total:
+        return float(setup_total or 0) + float(cycle_total or 0) * float(quantity)
+
+    rows = (
+        await db.execute(
+            select(WorkOrder.started_at, WorkOrder.finished_at, WorkOrder.quantity_planned)
+            .where(
+                WorkOrder.org_id == org_id,
+                WorkOrder.item_id == item_id,
+                WorkOrder.status == "done",
+                WorkOrder.started_at.is_not(None),
+                WorkOrder.finished_at.is_not(None),
+            )
+            .order_by(WorkOrder.finished_at.desc())
+            .limit(DURATION_SAMPLE)
+        )
+    ).all()
+    per_unit = [
+        (ensure_utc(finished) - ensure_utc(started)).total_seconds() / float(planned)
+        for started, finished, planned in rows
+        if planned and planned > 0
+    ]
+    if per_unit:
+        return median(per_unit) * float(quantity)
+
+    return DEFAULT_JOB_DAYS * 24 * 3600
+
+
+@dataclass
+class JobAlertLine:
+    wo_id: uuid.UUID
+    wo_number: int
+    item_sku: str
+    item_name: str
+    # late_to_start | stalled
+    reason: str
+    days_over: float
+
+
+async def compute_job_alerts(db: AsyncSession, org_id: uuid.UUID) -> list[JobAlertLine]:
+    """Jobs that have gone quiet: scheduled past their date, or running far
+    longer than a job like them should. A flag on a page nobody opens is not
+    chasing anything, so these ride the morning brief the shop already reads."""
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    rows = (
+        await db.execute(
+            select(WorkOrder, Item)
+            .join(Item, Item.id == WorkOrder.item_id)
+            .where(WorkOrder.org_id == org_id, WorkOrder.status.in_(PLANNED_STATUSES))
+            .order_by(WorkOrder.wo_number)
+        )
+    ).all()
+
+    alerts: list[JobAlertLine] = []
+    for job, item in rows:
+        if job.status == "scheduled":
+            # An undated job has nothing to be late against. It outranks every
+            # dated job for stock, but flagging it would put a permanent alert
+            # on the brief that no action can clear.
+            if job.scheduled_start is not None and job.scheduled_start < today:
+                alerts.append(
+                    JobAlertLine(
+                        wo_id=job.id,
+                        wo_number=job.wo_number,
+                        item_sku=item.sku,
+                        item_name=item.name,
+                        reason="late_to_start",
+                        days_over=(today - job.scheduled_start).days,
+                    )
+                )
+            continue
+
+        if job.started_at is None:
+            continue
+        expected = timedelta(
+            seconds=await expected_duration_seconds(db, org_id, job.item_id, job.quantity_planned)
+        )
+        limit = max(expected * STALL_FACTOR, expected + STALL_FLOOR)
+        elapsed = now - ensure_utc(job.started_at)
+        if elapsed > limit:
+            alerts.append(
+                JobAlertLine(
+                    wo_id=job.id,
+                    wo_number=job.wo_number,
+                    item_sku=item.sku,
+                    item_name=item.name,
+                    reason="stalled",
+                    days_over=(elapsed - limit).total_seconds() / 86400,
+                )
+            )
+    return alerts

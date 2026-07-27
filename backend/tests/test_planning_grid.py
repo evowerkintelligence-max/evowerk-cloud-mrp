@@ -1066,3 +1066,40 @@ async def test_a_product_with_no_orders_is_not_marked_overdue(client):
 
     row = _product(await _grid(client, token), "WIDGET-1")
     assert row["committed_overdue"] is False
+
+
+async def _raise_job(client, token, item, qty=10, scheduled_start=None):
+    body = {"item_id": item["id"], "quantity_planned": str(qty)}
+    if scheduled_start is not None:
+        body["scheduled_start"] = scheduled_start
+    res = await client.post(
+        "/work-orders", json=body, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+async def test_the_summary_counts_jobs_needing_attention(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _raise_job(
+        client, token, pump, qty=10, scheduled_start=str(_today() - timedelta(days=3))
+    )
+
+    grid = await _grid(client, token)
+    assert grid["summary"]["jobs_needing_attention"] == 1
+
+
+async def test_the_summary_counts_no_attention_for_a_job_on_schedule(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _raise_job(
+        client, token, pump, qty=10, scheduled_start=str(_today() + timedelta(days=3))
+    )
+
+    grid = await _grid(client, token)
+    assert grid["summary"]["jobs_needing_attention"] == 0

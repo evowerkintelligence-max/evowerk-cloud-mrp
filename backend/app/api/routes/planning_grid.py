@@ -19,6 +19,7 @@ from app.services.planning_grid import (
     compute_planning_grid,
     resolve_grid_window,
 )
+from app.services.work_orders import compute_job_alerts
 
 router = APIRouter(prefix="/planning", tags=["planning"])
 
@@ -70,6 +71,10 @@ class GridSummaryResponse(BaseModel):
     missing: int
     arriving: int
     in_stock: int
+    # Jobs late to start or running far longer than a job like them should. It
+    # rides the summary bar as well as the morning brief, because the brief is
+    # still a page someone has to remember to open.
+    jobs_needing_attention: int
 
 
 class PlanningGridResponse(BaseModel):
@@ -144,6 +149,7 @@ async def get_planning_grid(
             missing=sum(1 for p in grid.products if p.materials_status == "missing"),
             arriving=sum(1 for p in grid.products if p.materials_status == "arriving"),
             in_stock=sum(1 for p in grid.products if p.materials_status == "in_stock"),
+            jobs_needing_attention=len(await compute_job_alerts(db, current.org_id)),
         ),
     )
 

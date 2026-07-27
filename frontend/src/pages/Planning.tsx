@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { CalendarRange } from "lucide-react";
 import { apiFetch } from "../api/client";
 import { useCurrentUser } from "@/lib/currentUser";
@@ -79,6 +80,17 @@ export function Planning() {
       {grid.isError && <Alert variant="destructive">{(grid.error as Error).message}</Alert>}
       {error && <Alert variant="destructive">{error}</Alert>}
       {grid.isLoading && <Skeleton className="h-40 w-full" />}
+
+      {/* Outside the products block on purpose: a job that has gone quiet is
+          worth saying even for a shop whose grid has no rows yet. */}
+      {grid.data && grid.data.summary.jobs_needing_attention > 0 && (
+        <p className="mb-4 text-sm font-medium text-destructive">
+          <Link to="/production" className="underline">
+            {grid.data.summary.jobs_needing_attention}{" "}
+            {grid.data.summary.jobs_needing_attention === 1 ? "job needs" : "jobs need"} attention
+          </Link>
+        </p>
+      )}
 
       {grid.data && grid.data.products.length === 0 && (
         <EmptyState

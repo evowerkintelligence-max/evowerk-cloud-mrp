@@ -44,7 +44,7 @@ const GRID = {
     },
   ],
   to_buy: [],
-  summary: { missing: 1, arriving: 0, in_stock: 1 },
+  summary: { missing: 1, arriving: 0, in_stock: 1, jobs_needing_attention: 0 },
 };
 
 function render(seed: (qc: QueryClient) => void = () => {}) {
@@ -83,6 +83,22 @@ describe("Planning grid", () => {
   it("summarises the counts above the grid", () => {
     const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
     expect(html).toContain("1 product needs materials");
+  });
+
+  it("points at production when a job has gone quiet", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        summary: { ...GRID.summary, jobs_needing_attention: 2 },
+      }),
+    );
+    expect(html).toContain("2 jobs need attention");
+    expect(html).toContain('href="/production"');
+  });
+
+  it("says nothing about jobs when none need attention", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).not.toContain("attention");
   });
 
   it("names the missing materials on the row", () => {

@@ -1103,3 +1103,105 @@ async def test_the_summary_counts_no_attention_for_a_job_on_schedule(client):
 
     grid = await _grid(client, token)
     assert grid["summary"]["jobs_needing_attention"] == 0
+
+
+async def _give_stock(client, token, item, qty):
+    res = await client.post(
+        f"/inventory/{item['id']}/adjust",
+        json={"quantity": str(qty), "reason_code": "found_stock"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["applied"] is True
+    return res
+
+
+async def _start(client, token, job):
+    return await client.post(
+        f"/work-orders/{job['id']}/start", headers={"Authorization": f"Bearer {token}"}
+    )
+
+
+async def test_the_row_shows_what_is_in_production(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _plan(client, token, pump, 50)
+    await _give_stock(client, token, seal, 100)
+    job = await _raise_job(client, token, pump, qty=20)
+    await _start(client, token, job)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert Decimal(row["in_production"]) == Decimal("20")
+
+
+async def test_a_row_with_materials_can_be_made(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _plan(client, token, pump, 10)
+    await _give_stock(client, token, seal, 100)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert row["can_make"] is True
+
+
+async def test_a_row_short_of_materials_cannot_be_made(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _plan(client, token, pump, 10)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert row["can_make"] is False, "offering Make on a job that would 409 is a trap"
+
+
+async def test_a_product_with_no_recipe_cannot_be_made(client):
+    token = await _register_and_login(client)
+    pump = await _create_item(client, token, "PUMP-1")
+    await _plan(client, token, pump, 10)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert row["can_make"] is False
+
+
+async def test_a_row_already_covered_by_a_job_cannot_be_made_again(client):
+    """Nothing outstanding means nothing to raise, and offering Make would
+    quietly double the plan."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _plan(client, token, pump, 10)
+    await _give_stock(client, token, seal, 100)
+    job = await _raise_job(client, token, pump, qty=10)
+    await _start(client, token, job)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert row["can_make"] is False
+
+
+async def test_stock_held_by_a_scheduled_job_does_not_count_as_available(client):
+    """The same reservation rule start applies: material another job has
+    already claimed cannot also make this row."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    other = await _create_item(client, token, "PUMP-2")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _create_active_bom(client, token, other, [(seal, 1)])
+    await _give_stock(client, token, seal, 10)
+    await _plan(client, token, pump, 10)
+    assert _product(await _grid(client, token), "PUMP-1")["can_make"] is True
+
+    # A job for the OTHER product, so PUMP-1's own outstanding quantity is
+    # untouched and only the reservation can refuse it. Undated and numbered
+    # first, so it outranks the undated job Make would raise next and holds all
+    # ten seals.
+    await _raise_job(client, token, other, qty=10)
+
+    row = _product(await _grid(client, token), "PUMP-1")
+    assert row["can_make"] is False, "the other job already holds every seal"

@@ -69,6 +69,14 @@ class GridProduct:
     # only when the user has not planned anything yet - a hint to accept, never
     # a silent write. None when there is no consumption history to learn from.
     suggested_qty: Decimal | None
+    # Units already being made, as opposed to planned_qty which is the estimate
+    # someone typed and committed_qty which is what customers ordered.
+    in_production: Decimal
+    # False when the product has no active recipe or its components are short,
+    # because offering Make on a job that would only 409 is a trap. Also false
+    # when jobs already cover the whole row, where there is nothing left to
+    # raise.
+    can_make: bool
     # The engine's own numbers for this product and its components, shown when
     # the user expands the row. The only place MRP vocabulary stays visible.
     detail: list[MrpPlanLine]
@@ -124,6 +132,31 @@ def _reachable_components(
     return seen
 
 
+async def _reserved_against_a_new_job(db: AsyncSession, org_id: uuid.UUID, reserved_for) -> dict:
+    """What existing scheduled jobs hold ahead of the job a Make press would
+    raise: undated, at the default location, numbered next.
+
+    Asking the real reservation rule about that hypothetical job is what keeps
+    the button and the start endpoint agreeing. Reproducing the ranking here
+    instead is how the grid would come to offer Make on a job that 409s.
+    """
+    from app.models.work_order import WorkOrder
+    from app.services.locations import get_default_location_id
+
+    next_number = (
+        await db.scalar(select(func.max(WorkOrder.wo_number)).where(WorkOrder.org_id == org_id))
+        or 0
+    ) + 1
+    prospective = WorkOrder(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        location_id=await get_default_location_id(db, org_id),
+        scheduled_start=None,
+        wo_number=next_number,
+    )
+    return await reserved_for(db, org_id, prospective)
+
+
 async def compute_planning_grid(
     db: AsyncSession, org_id: uuid.UUID, as_of: date | None = None
 ) -> PlanningGrid:
@@ -146,12 +179,22 @@ async def compute_planning_grid(
                     an open or drafted PO rather than stock on the shelf
         in_stock  - every component is covered by stock on hand
     """
+    # Deferred: services.work_orders imports resolve_grid_window from this
+    # module, so importing it at module level would be a cycle.
+    from app.services.work_orders import (
+        component_requirements,
+        load_production_supply,
+        reserved_by_higher_priority,
+    )
+
     horizon_start, horizon_end = resolve_grid_window(as_of)
 
     children = await load_bom_children(db, org_id)
     plan = await compute_mrp_plan(db, org_id, horizon_start, horizon_end)
     by_item = {uuid.UUID(line.item_id): line for line in plan}
     on_hand = await load_on_hand(db, org_id)
+    production_by_item = await load_production_supply(db, org_id, horizon_end)
+    reserved = await _reserved_against_a_new_job(db, org_id, reserved_by_higher_priority)
 
     forecast_rows = (
         await db.execute(
@@ -262,6 +305,26 @@ async def compute_planning_grid(
         )
 
         committed = committed_qty_by_item.get(product_id, Decimal(0))
+        in_production = production_by_item.get(product_id, Decimal(0))
+        # What a Make press would raise: what is planned, less what jobs are
+        # already making. The frontend computes the same figure from these two
+        # fields to label the button.
+        outstanding = max(Decimal(0), qty - in_production)
+        can_make = outstanding > 0 and product_id in children
+        if can_make:
+            for component_id, required in await component_requirements(
+                db, org_id, product_id, outstanding, children=children
+            ):
+                # Org-wide on-hand, the same approximation every other cell on
+                # this screen makes; start checks the job's own location, so a
+                # multi-site org can still see a refusal here it was not warned
+                # about.
+                free = on_hand.get(component_id, Decimal(0)) - reserved.get(
+                    component_id, Decimal(0)
+                )
+                if free < required:
+                    can_make = False
+                    break
 
         products.append(
             GridProduct(
@@ -285,6 +348,8 @@ async def compute_planning_grid(
                 # answer this screen can give.
                 ready_by=None if (qty <= 0 and committed <= 0) or unknown_lead else ready_by,
                 suggested_qty=None,
+                in_production=in_production,
+                can_make=can_make,
                 detail=detail,
             )
         )

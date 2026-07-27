@@ -24,6 +24,8 @@ const GRID = {
       missing_materials: ["ALU-6061", "SEAL-V2"],
       ready_by: "2026-08-19",
       suggested_qty: null,
+      in_production: "0.0000",
+      can_make: false,
       detail: [],
     },
     {
@@ -40,6 +42,8 @@ const GRID = {
       missing_materials: [],
       ready_by: "2026-07-26",
       suggested_qty: null,
+      in_production: "0.0000",
+      can_make: true,
       detail: [],
     },
   ],
@@ -389,5 +393,67 @@ describe("overdue committed demand", () => {
       qc.setQueryData(["org-me"], { role: "member", adjust_approval_threshold: "0" });
     });
     expect(html).toContain("40 ordered, late");
+  });
+});
+
+describe("making what the grid says you need", () => {
+  it("offers Make for the quantity still outstanding", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], can_make: true }],
+      }),
+    );
+    expect(html).toContain("Make 50");
+    expect(html).not.toContain("disabled=\"\"");
+  });
+
+  it("disables Make when the row cannot actually be made", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], can_make: false }],
+      }),
+    );
+    // Paired with the enabled case above, which asserts no disabled attribute
+    // is rendered at all: together they pin the can_make branch rather than
+    // matching some other element's attribute.
+    expect(html).toContain("Make 50");
+    expect(html).toContain("disabled=\"\"");
+  });
+
+  it("counts what is already being made out of the Make quantity", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], can_make: true, in_production: "20.0000" }],
+      }),
+    );
+    expect(html).toContain("20 in production");
+    expect(html).toContain("Make 30");
+  });
+
+  it("says a job is covering the row instead of offering Make again", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], can_make: false, in_production: "50.0000" }],
+      }),
+    );
+    expect(html).toContain("50 in production");
+    expect(html).toContain("A job is covering this row");
+    expect(html).not.toContain("Make 0");
+  });
+
+  it("shows a member the in-production line but no Make button", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], can_make: true, in_production: "20.0000" }],
+      });
+      qc.setQueryData(["org-me"], { role: "member", adjust_approval_threshold: "0" });
+    });
+    expect(html).toContain("20 in production");
+    expect(html).not.toContain("Make 30");
   });
 });

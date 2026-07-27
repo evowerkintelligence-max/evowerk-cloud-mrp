@@ -34,6 +34,13 @@ export interface GridProduct {
   missing_materials: string[];
   ready_by: string | null;
   suggested_qty: string | null;
+  /** Units already being made, as opposed to planned_qty which is the
+   * estimate someone typed and committed_qty which is what customers
+   * ordered. */
+  in_production: string;
+  /** False when the product has no active recipe or its components are
+   * short, so Make is offered only when it would actually succeed. */
+  can_make: boolean;
   detail: GridDetailLine[];
 }
 

@@ -31,7 +31,11 @@ async def active_bom_id(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID)
 
 
 async def component_requirements(
-    db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID, quantity: Decimal
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    item_id: uuid.UUID,
+    quantity: Decimal,
+    children: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] | None = None,
 ) -> list[tuple[uuid.UUID, Decimal]]:
     """What a job for `quantity` of `item_id` needs, one entry per direct
     component.
@@ -43,8 +47,13 @@ async def component_requirements(
 
     load_bom_children already folds each line's scrap_pct into the per-unit
     figure, so this must not apply scrap a second time.
+
+    `children` is for a caller asking about many items at once (the planning
+    grid asks per row): pass the map it already loaded rather than paying for
+    the same query once per row.
     """
-    children = await load_bom_children(db, org_id)
+    if children is None:
+        children = await load_bom_children(db, org_id)
     return [(child_id, qty_per * quantity) for child_id, qty_per in children.get(item_id, [])]
 
 

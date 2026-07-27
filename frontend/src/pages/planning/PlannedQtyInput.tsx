@@ -99,6 +99,32 @@ export function PlannedQtyInput({
     },
   });
 
+  const make = useMutation({
+    mutationFn: async (quantity: number) => {
+      const res = await apiFetch("/work-orders", {
+        method: "POST",
+        body: JSON.stringify({
+          item_id: product.item_id,
+          quantity_planned: String(quantity),
+          start_now: true,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        // The backend's 409 names the short component, the location and the
+        // job holding it, and is written to be read by the user.
+        throw new Error(body.detail ?? "Could not raise the job");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["planning-grid"] });
+      queryClient.invalidateQueries({ queryKey: ["work-orders"] });
+      onSaved();
+    },
+    onError: (e: Error) => onError(`${product.item_name}: ${e.message}`),
+  });
+
   if (scheduler.current === null) {
     scheduler.current = createSaveScheduler<SavePayload>((next) => save.mutate(next), SAVE_DEBOUNCE_MS);
   }
@@ -161,14 +187,29 @@ export function PlannedQtyInput({
     </p>
   );
 
+  // Rendered in BOTH branches below: a member watching the floor has as much
+  // reason to know a job is already running as the person who typed the
+  // number. The committed line above was missed that way once already.
+  const inProduction = Number(product.in_production) > 0 && (
+    <p className="text-xs text-muted-foreground">
+      {trimQty(product.in_production)} in production
+    </p>
+  );
+
   if (readOnly) {
     return (
       <div className="space-y-1">
         <span>{qty}</span>
         {committed}
+        {inProduction}
       </div>
     );
   }
+
+  // What a job raised from this row would be for: what is planned, less what
+  // jobs are already making. The backend's can_make judges the components
+  // against exactly this figure.
+  const outstanding = Math.max(0, Number(product.planned_qty) - Number(product.in_production));
 
   // Nothing planned for this product yet, and the user has typed a quantity
   // above 0 with no date chosen: the row must not silently fail to save.
@@ -204,6 +245,25 @@ export function PlannedQtyInput({
         onBlur={flush}
       />
       {committed}
+      {inProduction}
+      {Number(product.planned_qty) > 0 &&
+        (outstanding <= 0 ? (
+          <p className="text-xs text-muted-foreground">A job is covering this row.</p>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!product.can_make || make.isPending}
+            aria-label={`Make ${outstanding} of ${product.item_sku}`}
+            // Same reason as the suggestion chip below: keep focus through
+            // mousedown so no blur-flush disables this button before mouseup
+            // and swallows the click.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => make.mutate(outstanding)}
+          >
+            Make {outstanding}
+          </Button>
+        ))}
       {dateRequired && (
         <p id={dateHintId} className="text-xs text-warning">
           Pick a date to save this quantity.

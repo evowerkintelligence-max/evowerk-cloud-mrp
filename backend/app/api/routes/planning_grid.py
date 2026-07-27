@@ -54,6 +54,8 @@ class GridProductResponse(BaseModel):
     missing_materials: list[str]
     ready_by: date | None
     suggested_qty: Decimal | None
+    in_production: Decimal
+    can_make: bool
     detail: list[GridDetailLineResponse]
 
 
@@ -100,6 +102,8 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         missing_materials=product.missing_materials,
         ready_by=product.ready_by,
         suggested_qty=product.suggested_qty,
+        in_production=product.in_production,
+        can_make=product.can_make,
         detail=[
             GridDetailLineResponse(
                 item_id=line.item_id,
@@ -273,5 +277,7 @@ async def set_planned_quantity(
         missing_materials=[],
         ready_by=None,
         suggested_qty=None,
+        in_production=Decimal("0.0000"),
+        can_make=False,
         detail=[],
     )

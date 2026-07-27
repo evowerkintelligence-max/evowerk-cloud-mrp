@@ -24,6 +24,9 @@ export interface GridProduct {
   /** How many separate dated rows make up planned_qty: 0 nothing planned,
    * 1 normal, more than 1 only for an imported or legacy plan. */
   planned_bucket_count: number;
+  /** What customers have actually ordered, as opposed to planned_qty which is
+   * the estimate someone typed. */
+  committed_qty: string;
   on_hand: string;
   materials_status: "in_stock" | "arriving" | "missing";
   missing_materials: string[];

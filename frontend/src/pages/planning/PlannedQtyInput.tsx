@@ -148,8 +148,17 @@ export function PlannedQtyInput({
 
   useEffect(() => () => flush(), []);
 
+  const committed = Number(product.committed_qty) > 0 && (
+    <p className="text-xs text-muted-foreground">{trimQty(product.committed_qty)} ordered</p>
+  );
+
   if (readOnly) {
-    return <span>{qty}</span>;
+    return (
+      <div className="space-y-1">
+        <span>{qty}</span>
+        {committed}
+      </div>
+    );
   }
 
   // Nothing planned for this product yet, and the user has typed a quantity
@@ -185,6 +194,7 @@ export function PlannedQtyInput({
         }}
         onBlur={flush}
       />
+      {committed}
       {dateRequired && (
         <p id={dateHintId} className="text-xs text-warning">
           Pick a date to save this quantity.

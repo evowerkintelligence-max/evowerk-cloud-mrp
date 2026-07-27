@@ -10,6 +10,7 @@ import { ApprovalsPanel } from "./Approvals";
 export interface OrgMeResponse {
   role: string;
   adjust_approval_threshold: string;
+  demand_policy: string;
 }
 
 const BASE_TABS = [

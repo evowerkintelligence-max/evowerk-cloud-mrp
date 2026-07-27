@@ -46,6 +46,7 @@ class GridProductResponse(BaseModel):
     needed_by: date | None
     planned_bucket_count: int
     committed_qty: Decimal
+    committed_overdue: bool
     on_hand: Decimal
     materials_status: str
     missing_materials: list[str]
@@ -87,6 +88,7 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         needed_by=product.needed_by,
         planned_bucket_count=product.planned_bucket_count,
         committed_qty=product.committed_qty,
+        committed_overdue=product.committed_overdue,
         on_hand=product.on_hand,
         materials_status=product.materials_status,
         missing_materials=product.missing_materials,
@@ -257,6 +259,7 @@ async def set_planned_quantity(
         needed_by=None,
         planned_bucket_count=0,
         committed_qty=Decimal("0.0000"),
+        committed_overdue=False,
         on_hand=Decimal("0.0000"),
         materials_status="in_stock",
         missing_materials=[],

@@ -25,6 +25,9 @@ export interface SalesOrder {
   status: string;
   needed_by: string;
   notes: string | null;
+  /** Still open with the needed-by date behind us. The goods are still owed,
+   * so it keeps counting as demand; this just lets the list say so. */
+  is_overdue: boolean;
 }
 
 export interface SalesOrderDetail extends SalesOrder {

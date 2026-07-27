@@ -21,6 +21,7 @@ const OPEN_ORDER = {
   status: "open",
   needed_by: "2030-06-01",
   notes: null,
+  is_overdue: false,
 };
 
 const OPEN_ORDER_DETAIL = {
@@ -125,5 +126,24 @@ describe("Sales", () => {
     );
     expect(done).toContain("Done");
     expect(done).not.toContain("Mark done");
+  });
+});
+
+describe("late orders", () => {
+  it("marks an overdue open order as late", () => {
+    const html = render("orders", (qc) =>
+      qc.setQueryData(
+        ["sales-orders", "", ""],
+        [{ ...OPEN_ORDER_DETAIL, needed_by: "2020-01-01", is_overdue: true }],
+      ),
+    );
+    expect(html).toContain("Late");
+  });
+
+  it("does not mark an on-time order as late", () => {
+    const html = render("orders", (qc) =>
+      qc.setQueryData(["sales-orders", "", ""], [OPEN_ORDER_DETAIL]),
+    );
+    expect(html).not.toContain("Late");
   });
 });

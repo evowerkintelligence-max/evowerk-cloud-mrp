@@ -27,6 +27,8 @@ export interface GridProduct {
   /** What customers have actually ordered, as opposed to planned_qty which is
    * the estimate someone typed. */
   committed_qty: string;
+  /** True when some of that committed quantity was due before today. */
+  committed_overdue: boolean;
   on_hand: string;
   materials_status: "in_stock" | "arriving" | "missing";
   missing_materials: string[];

@@ -148,8 +148,17 @@ export function PlannedQtyInput({
 
   useEffect(() => () => flush(), []);
 
+  // Missing a date a customer was already promised is a different problem
+  // from missing an upcoming one, so the late case says so rather than
+  // reading like any other ordered line.
   const committed = Number(product.committed_qty) > 0 && (
-    <p className="text-xs text-muted-foreground">{trimQty(product.committed_qty)} ordered</p>
+    <p
+      className={
+        product.committed_overdue ? "text-xs text-destructive" : "text-xs text-muted-foreground"
+      }
+    >
+      {trimQty(product.committed_qty)} ordered{product.committed_overdue ? ", late" : ""}
+    </p>
   );
 
   if (readOnly) {

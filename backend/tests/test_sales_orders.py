@@ -612,3 +612,50 @@ async def test_a_member_can_read_orders_but_not_raise_or_complete_them(client, t
 
     inv = await client.get(f"/inventory/{item['id']}", headers=headers)
     assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("50"), "no refused call may move stock"
+
+
+def _yesterday() -> str:
+    return (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+
+
+async def test_an_overdue_open_order_still_counts_as_demand(client):
+    """A forecast bucket in the past is spent; an open order in the past is
+    not, it is late. Dropping it would turn the grid green for the single most
+    at-risk commitment in the shop."""
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, customer, item, qty=25, needed_by=_yesterday())
+
+    lines = await _plan_lines(client, token)
+    assert Decimal(lines["WIDGET-1"]["net_requirement"]) == Decimal("25")
+
+
+async def test_an_overdue_order_is_flagged_late(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    late = await _create_order(client, token, customer, item, qty=5, needed_by=_yesterday())
+    on_time = await _create_order(client, token, customer, item, qty=5, needed_by=_soon())
+
+    assert late["is_overdue"] is True
+    assert on_time["is_overdue"] is False
+
+    by_id = {o["id"]: o for o in (await client.get("/sales-orders", headers=headers)).json()}
+    assert by_id[late["id"]]["is_overdue"] is True
+    assert by_id[on_time["id"]]["is_overdue"] is False
+
+
+async def test_a_closed_overdue_order_is_not_flagged_late(client):
+    """Late only means "still owed": cancelling or completing settles it."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    order = await _create_order(client, token, customer, item, qty=5, needed_by=_yesterday())
+    await client.post(f"/sales-orders/{order['id']}/cancel", headers=headers)
+
+    fetched = await client.get(f"/sales-orders/{order['id']}", headers=headers)
+    assert fetched.json()["is_overdue"] is False
+    assert await _plan_lines(client, token) == {}, "a cancelled order is settled, late or not"

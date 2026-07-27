@@ -67,6 +67,10 @@ class SalesOrderResponse(BaseModel):
     status: str
     needed_by: date
     notes: str | None
+    # Still open with the needed-by date behind us. The goods are still owed,
+    # so the order keeps counting as demand (see
+    # services.demand.load_committed_demand); this just lets the list say so.
+    is_overdue: bool
 
 
 class SalesOrderDetailResponse(SalesOrderResponse):
@@ -82,6 +86,7 @@ def _so_to_response(so: SalesOrder, customer: Customer) -> SalesOrderResponse:
         status=so.status,
         needed_by=so.needed_by,
         notes=so.notes,
+        is_overdue=so.status == "open" and so.needed_by < datetime.now(timezone.utc).date(),
     )
 
 

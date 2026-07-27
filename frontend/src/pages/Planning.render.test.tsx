@@ -18,6 +18,7 @@ const GRID = {
       needed_by: "2026-08-12",
       planned_bucket_count: 1,
       committed_qty: "40.0000",
+      committed_overdue: false,
       on_hand: "8.0000",
       materials_status: "missing",
       missing_materials: ["ALU-6061", "SEAL-V2"],
@@ -33,6 +34,7 @@ const GRID = {
       needed_by: "2026-08-30",
       planned_bucket_count: 1,
       committed_qty: "0",
+      committed_overdue: false,
       on_hand: "240.0000",
       materials_status: "in_stock",
       missing_materials: [],
@@ -342,5 +344,34 @@ describe("committed customer demand on the grid", () => {
       qc.setQueryData(["org-me"], { role: "member", adjust_approval_threshold: "0" });
     });
     expect(html).toContain("40 ordered");
+  });
+});
+
+describe("overdue committed demand", () => {
+  it("says the ordered quantity is late when it is", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], committed_overdue: true }],
+      }),
+    );
+    expect(html).toContain("40 ordered, late");
+  });
+
+  it("says only the quantity when the commitment is on time", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).toContain("40 ordered");
+    expect(html).not.toContain("ordered, late");
+  });
+
+  it("shows the late wording to a member too, whose cell is read-only", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], committed_overdue: true }],
+      });
+      qc.setQueryData(["org-me"], { role: "member", adjust_approval_threshold: "0" });
+    });
+    expect(html).toContain("40 ordered, late");
   });
 });

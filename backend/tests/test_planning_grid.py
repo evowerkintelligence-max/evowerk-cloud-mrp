@@ -1035,3 +1035,34 @@ async def test_a_committed_product_is_not_offered_a_history_suggestion(client):
 
     row = _product(await _grid(client, token), "WIDGET-1")
     assert row["suggested_qty"] is None
+
+
+async def test_an_overdue_commitment_is_marked_on_the_row(client):
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    yesterday = str(_today() - timedelta(days=1))
+    await _create_order(client, token, customer, item, qty=12, needed_by=yesterday)
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert Decimal(row["committed_qty"]) == Decimal("12"), "a late order is still owed"
+    assert row["committed_overdue"] is True
+
+
+async def test_an_on_time_commitment_is_not_marked_overdue(client):
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, customer, item, qty=12, needed_by=_soon())
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert row["committed_overdue"] is False
+
+
+async def test_a_product_with_no_orders_is_not_marked_overdue(client):
+    token = await _register_and_login(client)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _plan(client, token, item, 10)
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert row["committed_overdue"] is False

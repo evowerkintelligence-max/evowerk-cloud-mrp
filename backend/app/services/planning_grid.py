@@ -48,6 +48,11 @@ class GridProduct:
     # planned_qty which is the estimate someone typed. Outstanding quantity on
     # open sales orders only - see services.demand.load_committed_demand.
     committed_qty: Decimal
+    # True when some of that committed quantity was due before today. The
+    # goods are still owed, so it still counts as demand, but a late
+    # commitment is a different problem from an upcoming one and the row says
+    # so rather than looking like any other red row.
+    committed_overdue: bool
     on_hand: Decimal
     # in_stock | arriving | missing, judged over the components reachable from
     # this product through active BOMs (or the product itself when it has none).
@@ -167,7 +172,9 @@ async def compute_planning_grid(
     planned = {
         item_id: (qty, first, count) for item_id, qty, first, count in forecast_rows
     }
-    committed_qty_by_item, _ = await load_committed_demand(db, org_id, horizon_start, horizon_end)
+    committed_qty_by_item, committed_dates = await load_committed_demand(
+        db, org_id, horizon_start, horizon_end
+    )
 
     produced = set(children)
     components = {child for kids in children.values() for child, _ in kids}
@@ -265,6 +272,10 @@ async def compute_planning_grid(
                 needed_by=first_period,
                 planned_bucket_count=bucket_count,
                 committed_qty=committed,
+                committed_overdue=(
+                    committed > 0
+                    and committed_dates.get(product_id, horizon_start) < horizon_start
+                ),
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,

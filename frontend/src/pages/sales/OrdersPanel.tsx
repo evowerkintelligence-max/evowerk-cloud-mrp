@@ -338,7 +338,10 @@ function OrderRow({
       </TD>
       <TD className="text-muted-foreground">{order.needed_by}</TD>
       <TD>
-        <Badge variant={soStatusVariant(order.status)}>{humanize(order.status)}</Badge>
+        <div className="flex flex-wrap items-center gap-1">
+          <Badge variant={soStatusVariant(order.status)}>{humanize(order.status)}</Badge>
+          {order.is_overdue && <Badge variant="danger">Late</Badge>}
+        </div>
       </TD>
       <TD className="text-right">
         {canEdit && order.status === "open" && (

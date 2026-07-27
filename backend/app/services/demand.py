@@ -80,7 +80,16 @@ async def load_committed_demand(
     db: AsyncSession, org_id: uuid.UUID, horizon_start: date, horizon_end: date
 ) -> tuple[dict[uuid.UUID, Decimal], dict[uuid.UUID, date]]:
     """Committed demand: outstanding quantity per item across open sales
-    orders, and the earliest needed-by date per item, over the window."""
+    orders, and the earliest needed-by date per item, up to the end of the
+    window.
+
+    Deliberately NOT bounded below by horizon_start, unlike the forecast query
+    above. A forecast bucket in the past is spent, but an open order in the
+    past is not spent, it is late: the goods are still owed. Dropping it would
+    turn the grid green for the single most at-risk commitment in the shop.
+    Callers can spot these by comparing the returned date against today; see
+    GridProduct.committed_overdue.
+    """
     rows = (
         await db.execute(
             select(
@@ -92,7 +101,6 @@ async def load_committed_demand(
             .where(
                 SalesOrder.org_id == org_id,
                 SalesOrder.status == OPEN_ORDER_STATUS,
-                SalesOrder.needed_by >= horizon_start,
                 SalesOrder.needed_by <= horizon_end,
             )
             .group_by(SalesOrderLine.item_id)

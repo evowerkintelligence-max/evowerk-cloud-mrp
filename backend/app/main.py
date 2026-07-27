@@ -47,6 +47,7 @@ from app.api.routes import (
     realtime,
     reports,
     routings,
+    sales_orders,
     scrap,
     shifts,
     simulation,
@@ -113,6 +114,7 @@ app.include_router(boms.router, dependencies=[Depends(require_feature("boms"))])
 app.include_router(suppliers.router)
 app.include_router(purchase_orders.router, dependencies=[Depends(require_feature("procurement"))])
 app.include_router(customers.router, dependencies=[Depends(require_feature("sales"))])
+app.include_router(sales_orders.router, dependencies=[Depends(require_feature("sales"))])
 app.include_router(lots.router, dependencies=[Depends(require_feature("lots"))])
 app.include_router(locations.router)
 app.include_router(machines.router)

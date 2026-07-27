@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -281,3 +282,126 @@ async def test_completing_a_lot_tracked_order_draws_from_lots(client):
     lots = await client.get("/lots", headers=headers)
     remaining = sum(Decimal(lot["quantity_remaining"]) for lot in lots.json())
     assert remaining == Decimal("30")
+
+
+def _soon() -> str:
+    return (datetime.now(timezone.utc).date() + timedelta(days=30)).isoformat()
+
+
+async def _create_active_bom(client, token, produced_item, lines):
+    """lines: list of (component_item, qty_per). Creates a draft BOM, sets its
+    lines, and activates it."""
+    headers = {"Authorization": f"Bearer {token}"}
+    bom = await client.post("/boms", json={"item_id": produced_item["id"]}, headers=headers)
+    assert bom.status_code == 201
+    bom_data = bom.json()
+    patch = await client.patch(
+        f"/boms/{bom_data['id']}",
+        json={
+            "lines": [
+                {
+                    "component_item_id": component["id"],
+                    "quantity": str(qty),
+                    "sequence": i,
+                    "scrap_pct": "0",
+                }
+                for i, (component, qty) in enumerate(lines)
+            ],
+            "expected_updated_at": bom_data["updated_at"],
+        },
+        headers=headers,
+    )
+    assert patch.status_code == 200
+    activate = await client.post(f"/boms/{bom_data['id']}/activate", headers=headers)
+    assert activate.status_code == 200
+    return bom_data["id"]
+
+
+async def _plan_lines(client, token):
+    res = await client.get("/mrp/plan", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.text
+    return {line["item_sku"]: line for line in res.json()["lines"]}
+
+
+async def test_an_open_order_alone_produces_a_plan(client):
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, customer, item, qty=25, needed_by=_soon())
+
+    lines = await _plan_lines(client, token)
+    assert Decimal(lines["WIDGET-1"]["net_requirement"]) == Decimal("25"), (
+        "an order with no forecast must still plan"
+    )
+
+
+async def test_a_cancelled_order_is_not_demand(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    order = await _create_order(client, token, customer, item, qty=25, needed_by=_soon())
+    await client.post(f"/sales-orders/{order['id']}/cancel", headers=headers)
+
+    assert await _plan_lines(client, token) == {}
+
+
+async def test_a_completed_order_is_not_demand(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _give_stock(client, token, item, 100)
+    order = await _create_order(client, token, customer, item, qty=25, needed_by=_soon())
+    await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+
+    assert await _plan_lines(client, token) == {}
+
+
+async def test_consume_policy_does_not_double_count(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await client.put(
+        f"/planning/grid/{item['id']}",
+        json={"quantity": "100", "needed_by": _soon()},
+        headers=headers,
+    )
+    await _create_order(client, token, customer, item, qty=60, needed_by=_soon())
+
+    lines = await _plan_lines(client, token)
+    assert Decimal(lines["WIDGET-1"]["net_requirement"]) == Decimal("100"), (
+        "60 ordered against a 100 estimate must plan 100, not 160"
+    )
+
+
+async def test_add_policy_sums_both_sources(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    await client.patch("/orgs/me", json={"demand_policy": "add"}, headers=headers)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await client.put(
+        f"/planning/grid/{item['id']}",
+        json={"quantity": "100", "needed_by": _soon()},
+        headers=headers,
+    )
+    await _create_order(client, token, customer, item, qty=60, needed_by=_soon())
+
+    lines = await _plan_lines(client, token)
+    assert Decimal(lines["WIDGET-1"]["net_requirement"]) == Decimal("160")
+
+
+async def test_orders_explode_through_a_bom(client):
+    """An order for a built product must generate component demand, proving
+    committed demand flows through the same explosion forecasts do."""
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    await _create_order(client, token, customer, pump, qty=10, needed_by=_soon())
+
+    lines = await _plan_lines(client, token)
+    assert Decimal(lines["SEAL-1"]["net_requirement"]) == Decimal("20")

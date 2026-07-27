@@ -11,10 +11,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bom import Bom, BomLine, Item
-from app.models.forecast import DemandForecast
 from app.models.inventory import InventoryBalance
 from app.models.lot import Lot
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine
+from app.services.demand import (
+    combine_demand,
+    earliest_dates,
+    load_committed_demand,
+    load_demand_policy,
+    load_forecast_demand,
+)
 
 # Open-PO supply comes only from POs a supplier has actually been told to ship.
 # A draft PO is still being edited (lines can still change or it can be
@@ -70,11 +76,6 @@ class MrpPlanLine(BaseModel):
 async def _sum_by_item(db: AsyncSession, query) -> dict[uuid.UUID, Decimal]:
     result = await db.execute(query)
     return {item_id: (total or Decimal(0)) for item_id, total in result.all()}
-
-
-async def _min_date_by_item(db: AsyncSession, query) -> dict[uuid.UUID, date]:
-    result = await db.execute(query)
-    return dict(result.all())
 
 
 async def load_bom_children(
@@ -144,8 +145,11 @@ async def compute_mrp_plan(
         net_requirement = max(0, gross_demand - on_hand - on_order - on_draft)
         gross_demand    = independent_demand + dependent_demand
 
-    - independent_demand: the item's own forecast buckets whose period_start is
-      in [horizon_start, horizon_end].
+    - independent_demand: the item's own demand from both sources, combined
+      under the org's demand_policy (`consume` by default, so the larger of the
+      two rather than their sum): forecast buckets whose period_start is in
+      [horizon_start, horizon_end], and outstanding quantity on open sales
+      orders whose needed_by is in the same window. See services.demand.
     - dependent_demand: quantity_per x parent net_requirement, summed over every
       parent assembly that lists this item in its active BOM.
     - on_hand: for lot-tracked items, sum of *active* lot quantity_remaining
@@ -161,36 +165,21 @@ async def compute_mrp_plan(
       but reported separately so submitted vs still-a-draft stays visible.
 
     The explosion/netting engine itself lives in _explode_and_net, seeded here
-    from DemandForecast rows - see that function for the full algorithm.
+    from both demand sources - see that function for the full algorithm.
     Reused as-is (different seed) by services.mrp.compute_build_plan for the
     build calculator, which has no forecast rows to read.
     """
-    independent = await _sum_by_item(
-        db,
-        select(DemandForecast.item_id, func.sum(DemandForecast.quantity))
-        .where(
-            DemandForecast.org_id == org_id,
-            DemandForecast.period_start >= horizon_start,
-            DemandForecast.period_start <= horizon_end,
-        )
-        .group_by(DemandForecast.item_id),
+    policy = await load_demand_policy(db, org_id)
+    forecast_qty, forecast_dates = await load_forecast_demand(db, org_id, horizon_start, horizon_end)
+    committed_qty, committed_dates = await load_committed_demand(
+        db, org_id, horizon_start, horizon_end
     )
+    independent = combine_demand(forecast_qty, committed_qty, policy)
+    # Gate on the COMBINED map, not the forecast alone: a shop with real orders
+    # and no typed estimates has genuine demand and must get a real plan.
     if not independent:
         return []
-
-    # Earliest in-horizon forecast date per item - seeds need_by below. A
-    # separate query (not reused from `independent`) because this needs MIN,
-    # not SUM, over the same rows.
-    need_by = await _min_date_by_item(
-        db,
-        select(DemandForecast.item_id, func.min(DemandForecast.period_start))
-        .where(
-            DemandForecast.org_id == org_id,
-            DemandForecast.period_start >= horizon_start,
-            DemandForecast.period_start <= horizon_end,
-        )
-        .group_by(DemandForecast.item_id),
-    )
+    need_by = earliest_dates(forecast_dates, committed_dates)
     return await _explode_and_net(db, org_id, independent, need_by)
 
 

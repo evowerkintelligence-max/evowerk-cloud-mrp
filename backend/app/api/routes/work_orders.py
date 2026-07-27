@@ -98,6 +98,10 @@ class WorkOrderResponse(BaseModel):
     item_id: str
     item_sku: str
     item_name: str
+    # The finish form has to ask for a lot number for a batch-tracked product
+    # and must not for anything else. Carried on the row the panel already has,
+    # rather than making the UI fetch every product to find out.
+    item_is_lot_tracked: bool
     status: str
     quantity_planned: Decimal
     quantity_good: Decimal
@@ -122,6 +126,7 @@ def _wo_to_response(
         item_id=str(wo.item_id),
         item_sku=item.sku,
         item_name=item.name,
+        item_is_lot_tracked=item.is_lot_tracked,
         status=wo.status,
         quantity_planned=wo.quantity_planned,
         quantity_good=wo.quantity_good,

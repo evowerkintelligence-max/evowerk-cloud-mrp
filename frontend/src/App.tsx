@@ -32,6 +32,7 @@ const Sales = lazyPage(() => import("./pages/Sales"), "Sales");
 const Lots = lazyPage(() => import("./pages/Lots"), "Lots");
 const Warehouse = lazyPage(() => import("./pages/Warehouse"), "Warehouse");
 const Planning = lazyPage(() => import("./pages/Planning"), "Planning");
+const Production = lazyPage(() => import("./pages/Production"), "Production");
 const Datasets = lazyPage(() => import("./pages/analytics/Datasets"), "Datasets");
 const DatasetDetail = lazyPage(() => import("./pages/analytics/DatasetDetail"), "DatasetDetail");
 const SqlEditor = lazyPage(() => import("./pages/SqlEditor"), "SqlEditor");
@@ -164,6 +165,7 @@ export function App() {
             <Route path="/lots" element={<RequireFeature feature="lots"><Lots /></RequireFeature>} />
             <Route path="/warehouse" element={<RequireFeature feature="warehouse"><Warehouse /></RequireFeature>} />
             <Route path="/planning" element={<RequireFeature feature="planning"><Planning /></RequireFeature>} />
+            <Route path="/production" element={<RequireFeature feature="production"><Production /></RequireFeature>} />
             <Route path="/analytics" element={<Navigate to="/analytics/oee" replace />} />
             <Route path="/analytics/oee" element={<RequireFeature feature="oee"><Oee /></RequireFeature>} />
             <Route path="/analytics/pace-tracking" element={<RequireFeature feature="pace_tracking"><PaceTracking /></RequireFeature>} />

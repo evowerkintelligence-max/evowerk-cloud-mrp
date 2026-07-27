@@ -24,6 +24,17 @@ export function soStatusVariant(status: string): Variant {
   return SO_STATUS[status] ?? "neutral";
 }
 
+const WO_STATUS: Record<string, Variant> = {
+  scheduled: "neutral",
+  in_progress: "info",
+  done: "success",
+  cancelled: "danger",
+};
+
+export function woStatusVariant(status: string): Variant {
+  return WO_STATUS[status] ?? "neutral";
+}
+
 const ITEM_TYPE: Record<string, Variant> = {
   raw_material: "teal",
   component: "indigo",

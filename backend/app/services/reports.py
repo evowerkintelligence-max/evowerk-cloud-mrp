@@ -33,7 +33,6 @@ from app.services import llm
 from app.services import rca_cases as rca_cases_service
 from app.services import sql_query as sql_query_service
 from app.services.inventory_analytics import compute_inventory_analytics
-from app.services.mrp import compute_mrp_plan, resolve_horizon
 from app.services.rca import DIMENSIONS, RcaResult, compute_rca
 from app.services.scenario import compare_lead_time_scenario
 
@@ -50,7 +49,29 @@ from app.services.scenario import compare_lead_time_scenario
 # from whatever data it just computed.
 BRAND = "EvoWerk Cloud MRP"
 
-KINDS = ("mrp-plan", "inventory-analytics", "rca", "scenario", "dataset")
+KINDS = ("inventory-analytics", "rca", "scenario", "dataset")
+# Kinds that used to be in KINDS and can still show up in an old
+# saved_reports.spec / report_inbox_items.spec captured before removal (see
+# _resolve_kind_report_sections). Never add a kind here to bring it back -
+# these stay permanently unbuildable, only tolerated in stored specs.
+RETIRED_KINDS = ("mrp-plan",)
+
+
+def reject_retired_kind_sections(sections: list[ReportSectionSpec]) -> None:
+    """Creation/update-time guard for saved_reports and report_inbox_items:
+    a NEW spec must not be allowed to reference a retired report_kind, only
+    an old one that already exists is tolerated (see RETIRED_KINDS and
+    _resolve_kind_report_sections, which silently drops the section at
+    render time rather than failing the whole report - the right behavior
+    for a spec that predates the retirement, wrong behavior for one being
+    saved today with no excuse not to know better)."""
+    for section in sections:
+        if section.type == "kind_report" and section.report_kind in RETIRED_KINDS:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"report_kind '{section.report_kind}' has been retired and can no longer "
+                "be used in a new report section",
+            )
 FORMATS = {
     "csv": "text/csv",
     "html": "text/html; charset=utf-8",
@@ -153,99 +174,6 @@ def _now() -> datetime:
 # --------------------------------------------------------------------------- #
 # Builders - one per report kind
 # --------------------------------------------------------------------------- #
-async def build_mrp_plan_report(
-    db: AsyncSession, org_id: uuid.UUID, horizon_start: date, horizon_end: date
-) -> Report:
-    lines = await compute_mrp_plan(db, org_id, horizon_start, horizon_end)
-    actions = [ln for ln in lines if ln.net_requirement > 0]
-    to_order = [ln for ln in actions if not ln.is_manufactured]
-    to_build = [ln for ln in actions if ln.is_manufactured]
-
-    def action_rows(subset):
-        return [
-            [
-                ln.item_sku,
-                ln.item_name,
-                "Build" if ln.is_manufactured else "Order",
-                _num(ln.gross_demand),
-                _num(ln.on_hand),
-                _num(ln.on_order),
-                _num(ln.on_draft),
-                _num(ln.suggested_order_quantity),
-            ]
-            for ln in subset
-        ]
-
-    sections = [
-        Section(
-            title="Suggested actions",
-            columns=["SKU", "Item", "Action", "Gross demand", "On hand", "On order", "On draft", "Quantity"],
-            rows=action_rows(actions),
-            note="Items with a shortfall over this horizon, largest first."
-            if actions
-            else "No shortfalls: forecast demand is fully covered by stock and open orders.",
-        ),
-        Section(
-            title="Full plan",
-            columns=[
-                "SKU",
-                "Item",
-                "Type",
-                "Independent",
-                "Dependent",
-                "Gross demand",
-                "On hand",
-                "On order",
-                "On draft",
-                "Net requirement",
-            ],
-            rows=[
-                [
-                    ln.item_sku,
-                    ln.item_name,
-                    "Manufactured" if ln.is_manufactured else "Purchased",
-                    _num(ln.independent_demand),
-                    _num(ln.dependent_demand),
-                    _num(ln.gross_demand),
-                    _num(ln.on_hand),
-                    _num(ln.on_order),
-                    _num(ln.on_draft),
-                    _num(ln.net_requirement),
-                ]
-                for ln in lines
-            ],
-            note="Every item reached by a forecast or exploded onto from a parent assembly."
-            if lines
-            else "No forecast demand falls inside this horizon.",
-        ),
-    ]
-
-    return Report(
-        slug="mrp-plan",
-        title="MRP Plan",
-        subtitle=f"Demand horizon {horizon_start:%d %b %Y} — {horizon_end:%d %b %Y}",
-        org_name=await _org_name(db, org_id),
-        generated_at=_now(),
-        kpis=[
-            ("Planned items", _int(len(lines))),
-            ("To order", _int(len(to_order))),
-            ("To build", _int(len(to_build))),
-            ("Total net requirement", _num(sum((ln.net_requirement for ln in lines), Decimal(0)))),
-        ],
-        sections=sections,
-        notes=[
-            "net requirement = max(0, gross demand − on hand − on order − on draft); "
-            "gross demand = independent (own forecast) + dependent (exploded from parent assemblies).",
-            "Explosion is netted, not gross: an assembly is netted against its own stock before its "
-            "remaining requirement explodes onto its components.",
-            "On-hand excludes lots on QA hold or recall. Draft purchase orders count as supply, so a "
-            "shortfall already drafted does not appear as a new suggestion.",
-            "Lot sizing, minimum order quantities and lead-time offsetting are not applied — quantity "
-            "is the raw net requirement.",
-        ],
-    )
-
-
 async def build_inventory_analytics_report(db: AsyncSession, org_id: uuid.UUID) -> Report:
     lines = await compute_inventory_analytics(db, org_id)
     counts: dict[str, int] = {}
@@ -548,9 +476,6 @@ async def build_report_by_kind(
     lead_times: str | None,
     dataset_id: str | None,
 ) -> Report:
-    if kind == "mrp-plan":
-        hs, he = resolve_horizon(horizon_start, horizon_end)
-        return await build_mrp_plan_report(db, org_id, hs, he)
     if kind == "inventory-analytics":
         return await build_inventory_analytics_report(db, org_id)
     if kind == "rca":
@@ -599,7 +524,7 @@ class ReportSectionSpec(BaseModel):
     # engine - one of the 7 analytics-engine pages (all share EngineScreen)
     engine_path: str | None = None
     engine_body: dict | None = None
-    # kind_report - mrp-plan / inventory-analytics / rca / scenario / dataset
+    # kind_report - inventory-analytics / rca / scenario / dataset
     report_kind: str | None = None
     report_params: dict | None = None
     # rca_case - the fishbone case-management tool
@@ -692,6 +617,12 @@ async def _resolve_engine_sections(db: AsyncSession, current: CurrentUser, spec:
 
 
 async def _resolve_kind_report_sections(db: AsyncSession, org_id: uuid.UUID, spec: ReportSectionSpec) -> list[Section]:
+    if spec.report_kind in RETIRED_KINDS:
+        # A report saved before this kind was retired still carries it in its
+        # stored spec. Drop just this section rather than failing the whole
+        # report - the rest of the report is unaffected by one export that no
+        # longer exists.
+        return []
     if spec.report_kind not in KINDS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"report_kind must be one of {sorted(KINDS)}")
     params = spec.report_params or {}

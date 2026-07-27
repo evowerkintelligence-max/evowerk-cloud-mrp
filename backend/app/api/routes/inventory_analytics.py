@@ -20,6 +20,7 @@ from app.services.morning_brief import (
     compute_morning_brief,
 )
 from app.services.rca import DIMENSIONS, RcaDimensionValue, RcaResult, compute_rca
+from app.services.work_orders import JobAlertLine, compute_job_alerts
 from app.services.scenario import ScenarioDelta, compare_lead_time_scenario
 
 router = APIRouter(prefix="/inventory", tags=["inventory-analytics"])
@@ -105,9 +106,19 @@ class LotAlertResponse(BaseModel):
     reason: str
 
 
+class JobAlertResponse(BaseModel):
+    wo_id: str
+    wo_number: int
+    item_sku: str
+    item_name: str
+    reason: str
+    days_over: float
+
+
 class MorningBriefResponse(BaseModel):
     lines: list[BriefLineResponse]
     lot_alerts: list[LotAlertResponse]
+    job_alerts: list[JobAlertResponse]
 
 
 def _brief_to_response(line: BriefLine) -> BriefLineResponse:
@@ -142,6 +153,17 @@ def _lot_alert_to_response(alert: LotAlertLine) -> LotAlertResponse:
     )
 
 
+def _job_alert_to_response(alert: JobAlertLine) -> JobAlertResponse:
+    return JobAlertResponse(
+        wo_id=str(alert.wo_id),
+        wo_number=alert.wo_number,
+        item_sku=alert.item_sku,
+        item_name=alert.item_name,
+        reason=alert.reason,
+        days_over=alert.days_over,
+    )
+
+
 @router.get("/morning-brief", response_model=MorningBriefResponse)
 async def get_morning_brief(
     current: CurrentUser = Depends(get_current_user),
@@ -149,13 +171,15 @@ async def get_morning_brief(
 ):
     """Daily digest of items needing attention (stockout/low/excess/slow-moving),
     ranked by severity, compared against the same figures 7 days ago where
-    available, plus lots on hold or expiring soon. See
-    app.services.morning_brief."""
+    available, plus lots on hold or expiring soon and production jobs that have
+    gone quiet. See app.services.morning_brief and app.services.work_orders."""
     lines = await compute_morning_brief(db, current.org_id)
     lot_alerts = await compute_lot_alerts(db, current.org_id)
+    job_alerts = await compute_job_alerts(db, current.org_id)
     return MorningBriefResponse(
         lines=[_brief_to_response(line) for line in lines],
         lot_alerts=[_lot_alert_to_response(alert) for alert in lot_alerts],
+        job_alerts=[_job_alert_to_response(alert) for alert in job_alerts],
     )
 
 

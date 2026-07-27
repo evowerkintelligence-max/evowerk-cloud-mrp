@@ -48,6 +48,12 @@ class PaceSession(Base):
     dataset_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("datasets.id"), nullable=True
     )
+    # Nullable on purpose: a session started the existing free-text way has no
+    # job, and every already-shipped session predates this column. When set, it
+    # is what lets OEE say which product a session was running.
+    work_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("work_orders.id"), nullable=True
+    )
 
 
 class PaceTap(Base):

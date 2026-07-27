@@ -6,6 +6,7 @@ import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
@@ -107,6 +108,22 @@ export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
     onError: (e: Error) => setError(e.message),
   });
 
+  const updateDemandPolicy = useMutation({
+    mutationFn: async (policy: string) => {
+      const res = await apiFetch("/orgs/me", {
+        method: "PATCH",
+        body: JSON.stringify({ demand_policy: policy }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.detail ?? "Failed to update the setting");
+      }
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["org-me"] }),
+    onError: (e: Error) => setError(e.message),
+  });
+
   function onThresholdSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -147,6 +164,30 @@ export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
                 Save
               </Button>
             </form>
+          </CardContent>
+        </Card>
+      )}
+
+      {isOwner && (
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle>Customer orders and your plan</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Field
+              label="When real orders come in, do they count towards your plan, or on top of it?"
+              htmlFor="demand-policy"
+            >
+              <Select
+                id="demand-policy"
+                value={org.demand_policy}
+                disabled={updateDemandPolicy.isPending}
+                onChange={(e) => updateDemandPolicy.mutate(e.target.value)}
+              >
+                <option value="consume">Towards it (recommended)</option>
+                <option value="add">On top of it</option>
+              </Select>
+            </Field>
           </CardContent>
         </Card>
       )}

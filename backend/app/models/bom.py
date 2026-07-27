@@ -73,6 +73,14 @@ class Item(Base):
     # as lead_time_days - "no MOQ recorded" must not silently behave like
     # "MOQ of 0" (a no-op) is indistinguishable from real data.
     min_order_qty: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    # Buffer stock the planner must keep on the shelf, added on top of demand
+    # when netting (see app.services.mrp._explode_and_net). Nullable and NOT
+    # defaulted to 0 for the same reason as min_order_qty/lead_time_days -
+    # "no buffer policy set" is a real state, and defaulting it would look
+    # identical to a deliberate zero-buffer decision. None is treated as 0 at
+    # netting time, so an org that never sets this gets exactly the pre-safety
+    # -stock plan it had before.
+    safety_stock_qty: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     # Catalog-only: hides/tags a discontinued SKU in the UI. Does NOT gate
     # services.mrp.compute_mrp_plan or forecasts.generate_pos - an inactive
     # item is still planned and ordered until that's deliberately wired in.

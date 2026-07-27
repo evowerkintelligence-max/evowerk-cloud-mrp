@@ -24,6 +24,13 @@ _CORE_FEATURES_AT_MIGRATION_TIME = [
     "scrap", "shifts", "spc", "kpis", "kpi_dashboards", "reports", "data_chat",
 ]
 
+# Declares which entitlement keys this migration hands to orgs that already
+# exist. backend/tests/test_feature_migration_coverage.py unions this across
+# every migration and fails if a core key in the registry is not covered, so
+# a new feature cannot ship invisible to current customers. Pure declaration,
+# no behavior of its own.
+GRANTS_FEATURES = list(_CORE_FEATURES_AT_MIGRATION_TIME)
+
 
 def upgrade() -> None:
     op.add_column(

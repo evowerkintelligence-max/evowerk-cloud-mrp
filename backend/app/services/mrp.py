@@ -11,10 +11,21 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bom import Bom, BomLine, Item
-from app.models.forecast import DemandForecast
 from app.models.inventory import InventoryBalance
 from app.models.lot import Lot
 from app.models.procurement import PurchaseOrder, PurchaseOrderLine
+from app.services.demand import (
+    combine_demand,
+    earliest_dates,
+    load_committed_demand,
+    load_demand_policy,
+    load_forecast_demand,
+)
+from app.services.planning_loads import (
+    load_production_supply,
+    load_scheduled_component_demand,
+    resolve_grid_window,
+)
 
 # Open-PO supply comes only from POs a supplier has actually been told to ship.
 # A draft PO is still being edited (lines can still change or it can be
@@ -44,6 +55,17 @@ class MrpPlanLine(BaseModel):
     # but it offsets net_requirement the same way, so drafting an order removes
     # the item from the shortfall and a second generation can't double-order it.
     on_draft: Decimal
+    # Supply from work orders in flight (scheduled inside the horizon, or
+    # running whatever their date said). Kept separate from the two PO figures
+    # for the same reason they are kept separate from each other: the shop can
+    # see where each unit of cover is coming from.
+    in_production: Decimal
+    # item.safety_stock_qty, 0 when unset. Added to net_requirement rather
+    # than subtracted from on_hand (see _explode_and_net) - shown as its own
+    # line so gross_demand - on_hand - on_order - on_draft - in_production +
+    # safety_stock actually reconciles to net_requirement for a user checking
+    # the arithmetic, instead of the buffer disappearing silently into it.
+    safety_stock: Decimal
     net_requirement: Decimal
     # The stable "how much to order/build" field for API consumers and PO
     # generation. Equal to net_requirement, except for purchased items with a
@@ -72,12 +94,7 @@ async def _sum_by_item(db: AsyncSession, query) -> dict[uuid.UUID, Decimal]:
     return {item_id: (total or Decimal(0)) for item_id, total in result.all()}
 
 
-async def _min_date_by_item(db: AsyncSession, query) -> dict[uuid.UUID, date]:
-    result = await db.execute(query)
-    return dict(result.all())
-
-
-async def _load_bom_children(
+async def load_bom_children(
     db: AsyncSession, org_id: uuid.UUID
 ) -> dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]]:
     """Manufacturing graph over ACTIVE BOMs only: produced item_id -> list of
@@ -101,110 +118,13 @@ async def _load_bom_children(
     return children
 
 
-def resolve_horizon(horizon_start: date | None, horizon_end: date | None) -> tuple[date, date]:
-    today = datetime.now(timezone.utc).date()
-    hs = horizon_start if horizon_start is not None else today
-    he = horizon_end if horizon_end is not None else today + timedelta(days=90)
-    if he < hs:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_end must not be before horizon_start")
-    return hs, he
-
-
-async def compute_mrp_plan(
-    db: AsyncSession, org_id: uuid.UUID, horizon_start: date, horizon_end: date
-) -> list[MrpPlanLine]:
-    """Material Requirements Planning: net demand against supply, exploding
-    forecasts through active BOMs so a forecast of a finished good becomes
-    concrete requirements for the components it's built from.
-
-        net_requirement = max(0, gross_demand - on_hand - on_order - on_draft)
-        gross_demand    = independent_demand + dependent_demand
-
-    - independent_demand: the item's own forecast buckets whose period_start is
-      in [horizon_start, horizon_end].
-    - dependent_demand: quantity_per x parent net_requirement, summed over every
-      parent assembly that lists this item in its active BOM.
-    - on_hand: for lot-tracked items, sum of *active* lot quantity_remaining
-      (on_hold lots - QA hold/recall - are excluded; they can't be consumed, so
-      counting them would understate a real shortage). For non-lot-tracked
-      items, the general inventory_balances on-hand. The two are disjoint (an
-      item is one or the other), so summing them is just "whichever applies".
-    - on_order: open PO supply, quantity_ordered - quantity_received across PO
-      lines on submitted/partially_received POs.
-    - on_draft: outstanding quantity on open *draft* POs - planned but not yet
-      committed supply. Offsets the requirement like on_order (so drafting an
-      order removes the shortfall and a repeat generation can't double-order),
-      but reported separately so submitted vs still-a-draft stays visible.
-
-    The explosion/netting engine itself lives in _explode_and_net, seeded here
-    from DemandForecast rows - see that function for the full algorithm.
-    Reused as-is (different seed) by services.mrp.compute_build_plan for the
-    build calculator, which has no forecast rows to read.
+async def load_on_hand(db: AsyncSession, org_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
+    """Total on-hand per item: active lot quantities for lot-tracked items plus
+    the general inventory_balances for everything else. The two are disjoint (an
+    item is one or the other - see Item.is_lot_tracked), so summing them is just
+    "whichever applies". on_hold lots are excluded: they can't be consumed, so
+    counting them would understate a real shortage.
     """
-    independent = await _sum_by_item(
-        db,
-        select(DemandForecast.item_id, func.sum(DemandForecast.quantity))
-        .where(
-            DemandForecast.org_id == org_id,
-            DemandForecast.period_start >= horizon_start,
-            DemandForecast.period_start <= horizon_end,
-        )
-        .group_by(DemandForecast.item_id),
-    )
-    if not independent:
-        return []
-
-    # Earliest in-horizon forecast date per item - seeds need_by below. A
-    # separate query (not reused from `independent`) because this needs MIN,
-    # not SUM, over the same rows.
-    need_by = await _min_date_by_item(
-        db,
-        select(DemandForecast.item_id, func.min(DemandForecast.period_start))
-        .where(
-            DemandForecast.org_id == org_id,
-            DemandForecast.period_start >= horizon_start,
-            DemandForecast.period_start <= horizon_end,
-        )
-        .group_by(DemandForecast.item_id),
-    )
-    return await _explode_and_net(db, org_id, independent, need_by)
-
-
-async def _explode_and_net(
-    db: AsyncSession,
-    org_id: uuid.UUID,
-    seed_gross: dict[uuid.UUID, Decimal],
-    seed_due: dict[uuid.UUID, date] | None,
-) -> list[MrpPlanLine]:
-    """The shared explosion/netting core behind compute_mrp_plan (seeded from
-    forecasts) and compute_build_plan (seeded from a single build quantity).
-
-    This is *netted* explosion, not gross: each assembly is netted against its
-    own on-hand/on-order first, and only the resulting net requirement explodes
-    to its components. Finished-good and sub-assembly stock therefore correctly
-    reduces how much of each raw component you actually need to buy. Items are
-    processed parents-before-components (topological order over the active-BOM
-    DAG) so an assembly's net is final before it explodes downward.
-
-    Demand-driven: items reached by neither `seed_gross` nor an explosion
-    aren't planning actions, so they're omitted.
-
-    Lead-time offsetting and MOQ rounding are modelled on top of the netting
-    above:
-    - need_by_date: the earliest date (from seed_due) reaching this item,
-      propagated down through explosion. None if seed_due is None/empty or
-      this item is never reached by a dated seed (e.g. every build-calculator
-      call, which has no dates at all).
-    - suggested_order_date = need_by_date - item.lead_time_days, when both are
-      known and the item is purchased (not manufactured).
-    - suggested_order_quantity rounds net_requirement up to item.min_order_qty
-      for purchased items when the MOQ is higher. Explosion always uses the
-      raw net, never the MOQ-rounded figure.
-    """
-    if not seed_gross:
-        return []
-    need_by = dict(seed_due) if seed_due else {}
-
     on_hand = await _sum_by_item(
         db,
         select(Lot.item_id, func.sum(Lot.quantity_remaining))
@@ -219,6 +139,170 @@ async def _explode_and_net(
     )
     for item_id, qty in inventory_on_hand.items():
         on_hand[item_id] = on_hand.get(item_id, Decimal(0)) + qty
+    return on_hand
+
+
+def resolve_horizon(horizon_start: date | None, horizon_end: date | None) -> tuple[date, date]:
+    today = datetime.now(timezone.utc).date()
+    hs = horizon_start if horizon_start is not None else today
+    he = horizon_end if horizon_end is not None else today + timedelta(days=90)
+    if he < hs:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "horizon_end must not be before horizon_start")
+    return hs, he
+
+
+async def compute_mrp_plan(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    horizon_start: date,
+    horizon_end: date,
+    *,
+    demand_policy: str | None = None,
+    committed: tuple[dict[uuid.UUID, Decimal], dict[uuid.UUID, date]] | None = None,
+    children: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] | None = None,
+    on_hand: dict[uuid.UUID, Decimal] | None = None,
+    production_supply: dict[uuid.UUID, Decimal] | None = None,
+) -> list[MrpPlanLine]:
+    """Material Requirements Planning: net demand against supply, exploding
+    forecasts through active BOMs so a forecast of a finished good becomes
+    concrete requirements for the components it's built from.
+
+        net_requirement = max(0, gross_demand - on_hand - on_order - on_draft - in_production)
+        gross_demand    = independent_demand + dependent_demand
+
+    - independent_demand: the item's own demand from both sources, combined
+      under the org's demand_policy (`consume` by default, so the larger of the
+      two rather than their sum): forecast buckets whose period_start is in
+      [horizon_start, horizon_end], and outstanding quantity on open sales
+      orders whose needed_by is in the same window. See services.demand.
+    - dependent_demand: quantity_per x parent net_requirement, summed over every
+      parent assembly that lists this item in its active BOM.
+    - on_hand: for lot-tracked items, sum of *active* lot quantity_remaining
+      (on_hold lots - QA hold/recall - are excluded; they can't be consumed, so
+      counting them would understate a real shortage). For non-lot-tracked
+      items, the general inventory_balances on-hand. The two are disjoint (an
+      item is one or the other), so summing them is just "whichever applies".
+    - on_order: open PO supply, quantity_ordered - quantity_received across PO
+      lines on submitted/partially_received POs.
+    - on_draft: outstanding quantity on open *draft* POs - planned but not yet
+      committed supply. Offsets the requirement like on_order (so drafting an
+      order removes the shortfall and a repeat generation can't double-order),
+      but reported separately so submitted vs still-a-draft stays visible.
+    - in_production: work orders in flight, added in _explode_and_net. A
+      scheduled job also seeds its own stored components as demand here, so the
+      two halves of a job always move together.
+
+    The explosion/netting engine itself lives in _explode_and_net, seeded here
+    from both demand sources - see that function for the full algorithm.
+    Reused as-is (different seed) by services.mrp.compute_build_plan for the
+    build calculator, which has no forecast rows to read.
+
+    demand_policy/committed/children/on_hand/production_supply are for a
+    caller that already loaded them for its own purposes (compute_planning_grid
+    loads all five before calling this) so they can be passed straight through
+    instead of this function and _explode_and_net fetching byte-identical
+    copies a second time - the redundant pair of org-wide explosions that let
+    the committed-demand widening (C2) go unnoticed in two places at once.
+    None (the default) means "load it here", exactly what every other caller
+    still does.
+    """
+    policy = demand_policy if demand_policy is not None else await load_demand_policy(db, org_id)
+    forecast_qty, forecast_dates = await load_forecast_demand(db, org_id, horizon_start, horizon_end)
+    if committed is not None:
+        committed_qty, committed_dates = committed
+    else:
+        committed_qty, committed_dates = await load_committed_demand(
+            db, org_id, horizon_start, horizon_end
+        )
+    independent = combine_demand(forecast_qty, committed_qty, policy)
+    # No empty-demand gate here: a shop with scheduled jobs and no typed
+    # forecast still has a plan, and _explode_and_net adds those jobs'
+    # components to the seed before deciding there is nothing to do.
+    need_by = earliest_dates(forecast_dates, committed_dates)
+    return await _explode_and_net(
+        db,
+        org_id,
+        independent,
+        need_by,
+        horizon_end,
+        children=children,
+        on_hand=on_hand,
+        production_supply=production_supply,
+    )
+
+
+async def _explode_and_net(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    seed_gross: dict[uuid.UUID, Decimal],
+    seed_due: dict[uuid.UUID, date] | None,
+    horizon_end: date,
+    *,
+    children: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] | None = None,
+    on_hand: dict[uuid.UUID, Decimal] | None = None,
+    production_supply: dict[uuid.UUID, Decimal] | None = None,
+) -> list[MrpPlanLine]:
+    """The shared explosion/netting core behind compute_mrp_plan (seeded from
+    forecasts) and compute_build_plan (seeded from a single build quantity).
+
+    This is *netted* explosion, not gross: each assembly is netted against its
+    own on-hand/on-order first, and only the resulting net requirement explodes
+    to its components. Finished-good and sub-assembly stock therefore correctly
+    reduces how much of each raw component you actually need to buy. Items are
+    processed parents-before-components (topological order over the active-BOM
+    DAG) so an assembly's net is final before it explodes downward.
+
+    Demand-driven: items reached by neither `seed_gross` nor an explosion
+    aren't planning actions, so they're omitted.
+
+    Safety stock (item.safety_stock_qty) is added to the net requirement
+    rather than subtracted from available stock - same arithmetic, but it says
+    *why*: the buffer is demand you must satisfy on top of the forecast, so
+    that a forecast miss or a late delivery eats the buffer instead of a
+    stockout. None means "no buffer policy", treated as 0 here, which is
+    byte-for-byte the pre-safety-stock formula - an org that never sets the
+    field sees no plan change at all. The buffer deliberately flows through
+    explosion untouched: an assembly's inflated net becomes its components'
+    gross, which is the correct multi-level behavior (buffering the parent
+    means actually having the parts to build the buffer). Components carry
+    their own buffer on top of that if they set one.
+
+    Lead-time offsetting and MOQ rounding are modelled on top of the netting
+    above:
+    - need_by_date: the earliest date (from seed_due) reaching this item,
+      propagated down through explosion. None if seed_due is None/empty or
+      this item is never reached by a dated seed (e.g. every build-calculator
+      call, which has no dates at all).
+    - suggested_order_date = need_by_date - item.lead_time_days, when both are
+      known and the item is purchased (not manufactured).
+    - suggested_order_quantity rounds net_requirement up to item.min_order_qty
+      for purchased items when the MOQ is higher. Explosion always uses the
+      raw net, never the MOQ-rounded figure.
+    """
+    # A scheduled job's two halves are seeded and netted in the SAME function on
+    # purpose. Its finished good is supply below; its stored components are
+    # demand in their own right, and without them that supply would zero the
+    # item's net requirement, nothing would explode, and the plan would read
+    # "all in stock" for a job that cannot run. Doing the seeding in one caller
+    # and the netting here is how the build calculator came to report that a
+    # build short of materials needed nothing at all.
+    seed_gross = dict(seed_gross)
+    scheduled_qty, scheduled_dates = await load_scheduled_component_demand(db, org_id, horizon_end)
+    for item_id, qty in scheduled_qty.items():
+        seed_gross[item_id] = seed_gross.get(item_id, Decimal(0)) + qty
+    if not seed_gross:
+        return []
+    need_by = dict(seed_due) if seed_due else {}
+    for item_id, when in scheduled_dates.items():
+        existing = need_by.get(item_id)
+        need_by[item_id] = when if existing is None else min(existing, when)
+
+    on_hand = on_hand if on_hand is not None else await load_on_hand(db, org_id)
+    in_production = (
+        production_supply
+        if production_supply is not None
+        else await load_production_supply(db, org_id, horizon_end)
+    )
     on_order = await _sum_by_item(
         db,
         select(
@@ -239,7 +323,7 @@ async def _explode_and_net(
         .where(PurchaseOrder.org_id == org_id, PurchaseOrder.status == "draft")
         .group_by(PurchaseOrderLine.item_id),
     )
-    children = await _load_bom_children(db, org_id)
+    children = children if children is not None else await load_bom_children(db, org_id)
 
     relevant: set[uuid.UUID] = set()
     stack = list(seed_gross.keys())
@@ -289,7 +373,9 @@ async def _explode_and_net(
         hand = on_hand.get(item_id, Decimal(0))
         order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
         draft_qty = max(Decimal(0), on_draft.get(item_id, Decimal(0)))
-        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty)
+        production_qty = max(Decimal(0), in_production.get(item_id, Decimal(0)))
+        safety = item.safety_stock_qty or Decimal(0)
+        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty - production_qty + safety)
         due = need_by.get(item_id)
 
         for child_id, qty_per in children.get(item_id, []):
@@ -298,7 +384,13 @@ async def _explode_and_net(
                 existing_due = need_by.get(child_id)
                 need_by[child_id] = due if existing_due is None else min(existing_due, due)
 
-        if total_gross <= 0:
+        # A buffered item with no demand this window still needs a line: its
+        # safety stock is a real requirement, and the loop above has already
+        # exploded that requirement onto its components. Dropping the parent
+        # while keeping the children's demand attributes an order to a row the
+        # plan never shows. `net <= 0` rather than `safety <= 0` so a buffer
+        # already covered by stock stays off the screen.
+        if total_gross <= 0 and net <= 0:
             continue
         indep = seed_gross.get(item_id, Decimal(0))
         is_manufactured = item_id in children
@@ -323,6 +415,8 @@ async def _explode_and_net(
                 on_hand=hand,
                 on_order=order_qty,
                 on_draft=draft_qty,
+                in_production=production_qty,
+                safety_stock=safety,
                 net_requirement=net,
                 suggested_order_quantity=suggested_qty,
                 need_by_date=due,
@@ -346,7 +440,7 @@ async def compute_build_plan(
     compute_mrp_plan uses) seeded from a single ad hoc quantity instead of
     demand forecasts - so it nets against real on-hand/on-order/on-draft
     stock exactly like planning does, and each component's own recipe-level
-    scrap_pct (see BomLine.scrap_pct / _load_bom_children) still applies.
+    scrap_pct (see BomLine.scrap_pct / load_bom_children) still applies.
 
     yield_loss_pct is a *different* scrap concept from BomLine.scrap_pct:
     it's the expected fraction of finished-good ATTEMPTS that fail entirely
@@ -371,4 +465,7 @@ async def compute_build_plan(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item has no active BOM - nothing to build")
 
     attempted_qty = build_quantity / (1 - yield_loss_pct / 100)
-    return await _explode_and_net(db, org_id, {item_id: attempted_qty}, None)
+    # The same window the planning grid uses, so an ad hoc build nets against
+    # jobs in flight exactly as planning does.
+    _, horizon_end = resolve_grid_window()
+    return await _explode_and_net(db, org_id, {item_id: attempted_qty}, None, horizon_end)

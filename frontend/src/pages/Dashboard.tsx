@@ -95,7 +95,7 @@ const LINKS = [
   { to: "/procurement", label: "Procurement", description: "Suppliers and purchase orders", icon: ShoppingCart },
   { to: "/lots", label: "Lots", description: "Lot-tracked stock and holds", icon: Boxes },
   { to: "/warehouse", label: "Warehouse", description: "On-hand inventory and storage locations", icon: Warehouse },
-  { to: "/planning", label: "Planning", description: "Forecasts, MRP, and auto-POs", icon: CalendarRange },
+  { to: "/planning", label: "Planning", description: "What to make and what to order", icon: CalendarRange },
   { to: "/analytics", label: "Analytics", description: "OEE, downtime, throughput, scrap, shifts, SPC", icon: BarChart3 },
   { to: "/datasets", label: "Datasets", description: "Upload, clean, and query production data", icon: Database },
   { to: "/bi", label: "BI Dashboards", description: "Build charts and save them to dashboards", icon: LayoutGrid },
@@ -250,7 +250,7 @@ export function Dashboard() {
               {brief.data!.lines.map((line) => (
                 <Link
                   key={line.item_id}
-                  to="/warehouse"
+                  to="/planning"
                   className={cn(
                     "flex items-center justify-between gap-3 rounded-md border-l-[6px] bg-secondary/20 px-3 py-2 text-sm transition-colors hover:translate-x-0.5 hover:bg-secondary/40",
                     STATUS_BORDER[line.status] ?? "border-l-border",

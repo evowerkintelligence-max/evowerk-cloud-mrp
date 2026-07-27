@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inventory import InventoryBalance, InventoryTransaction
+from app.services.locations import location_code
 
 # Several concurrent *first* movements for the same item+location can all try to
 # create its balance row and collide on uq_inventory_balances_org_item_loc. Each
@@ -115,12 +116,16 @@ async def _bump_balance(
                 )
             )
         ).scalar_one_or_none()
+        # The location lookup sits inside the failure branch so the happy path
+        # takes no extra query for a string it never builds.
         if existing is not None:
+            code = await location_code(db, location_id)
             raise InsufficientInventory(
-                f"On-hand at this location is {existing}; that movement would drive it below zero"
+                f"On-hand at {code} is {existing}; that movement would drive it below zero"
             )
         if delta < 0:
-            raise InsufficientInventory("Nothing on hand at this location to consume")
+            code = await location_code(db, location_id)
+            raise InsufficientInventory(f"Nothing on hand at {code} to consume")
 
         # 3. First movement for this item+location (delta > 0): create the
         # balance. If a concurrent request won the race, loop back and update

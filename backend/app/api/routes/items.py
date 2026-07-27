@@ -34,6 +34,7 @@ class ItemCreateRequest(BaseModel):
     preferred_supplier_id: str | None = None
     lead_time_days: int | None = None
     min_order_qty: Decimal | None = None
+    safety_stock_qty: Decimal | None = None
     description: str | None = None
     barcode: str | None = None
 
@@ -48,6 +49,7 @@ class ItemUpdateRequest(BaseModel):
     # silently reset. Checked via model_fields_set in update_item.
     lead_time_days: int | None = None
     min_order_qty: Decimal | None = None
+    safety_stock_qty: Decimal | None = None
     is_active: bool | None = None
     name: str | None = None
     unit_of_measure: str | None = None
@@ -65,6 +67,7 @@ class ItemResponse(BaseModel):
     preferred_supplier_id: str | None
     lead_time_days: int | None
     min_order_qty: Decimal | None
+    safety_stock_qty: Decimal | None
     is_active: bool
     description: str | None
     barcode: str | None
@@ -83,6 +86,7 @@ def _to_response(item: Item) -> ItemResponse:
         ),
         lead_time_days=item.lead_time_days,
         min_order_qty=item.min_order_qty,
+        safety_stock_qty=item.safety_stock_qty,
         is_active=item.is_active,
         description=item.description,
         barcode=item.barcode,
@@ -141,6 +145,7 @@ async def _create_item_row(
     preferred_supplier_id: str | None = None,
     lead_time_days: int | None = None,
     min_order_qty: Decimal | None = None,
+    safety_stock_qty: Decimal | None = None,
     description: str | None = None,
     barcode: str | None = None,
 ) -> Item:
@@ -153,6 +158,8 @@ async def _create_item_row(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "lead_time_days must be non-negative")
     if min_order_qty is not None and min_order_qty <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "min_order_qty must be positive")
+    if safety_stock_qty is not None and safety_stock_qty < 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "safety_stock_qty must be non-negative")
     resolved_supplier_id = await _resolve_supplier_id(db, org_id, preferred_supplier_id)
 
     item = Item(
@@ -165,6 +172,7 @@ async def _create_item_row(
         preferred_supplier_id=resolved_supplier_id,
         lead_time_days=lead_time_days,
         min_order_qty=min_order_qty,
+        safety_stock_qty=safety_stock_qty,
         description=description,
         barcode=barcode,
     )
@@ -204,6 +212,7 @@ async def create_item(
         preferred_supplier_id=body.preferred_supplier_id,
         lead_time_days=body.lead_time_days,
         min_order_qty=body.min_order_qty,
+        safety_stock_qty=body.safety_stock_qty,
         description=body.description,
         barcode=body.barcode,
     )
@@ -303,6 +312,15 @@ async def import_items(
             )
             continue
 
+        safety_raw = _row_cell(row, field_map, "safety_stock_qty")
+        try:
+            safety_stock_qty = Decimal(safety_raw) if safety_raw is not None else None
+        except InvalidOperation:
+            errors.append(
+                ImportRowError(row=row_number, sku=sku, message="safety_stock_qty must be a number")
+            )
+            continue
+
         try:
             item = await _create_item_row(
                 db,
@@ -317,6 +335,7 @@ async def import_items(
                 preferred_supplier_id=_row_cell(row, field_map, "preferred_supplier_id"),
                 lead_time_days=lead_time_days,
                 min_order_qty=min_order_qty,
+                safety_stock_qty=safety_stock_qty,
                 description=_row_cell(row, field_map, "description"),
                 barcode=_row_cell(row, field_map, "barcode"),
             )
@@ -343,7 +362,8 @@ async def export_items(
     writer.writerow(
         [
             "sku", "name", "item_type", "unit_of_measure", "is_lot_tracked",
-            "lead_time_days", "min_order_qty", "is_active", "description", "barcode",
+            "lead_time_days", "min_order_qty", "safety_stock_qty", "is_active", "description",
+            "barcode",
             "preferred_supplier_id",
         ]
     )
@@ -357,6 +377,7 @@ async def export_items(
                 item.is_lot_tracked,
                 item.lead_time_days if item.lead_time_days is not None else "",
                 item.min_order_qty if item.min_order_qty is not None else "",
+                item.safety_stock_qty if item.safety_stock_qty is not None else "",
                 item.is_active,
                 item.description or "",
                 item.barcode or "",
@@ -393,6 +414,13 @@ async def update_item(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "min_order_qty must be positive")
         item.min_order_qty = body.min_order_qty
         metadata["min_order_qty"] = str(body.min_order_qty) if body.min_order_qty is not None else None
+    if "safety_stock_qty" in body.model_fields_set:
+        if body.safety_stock_qty is not None and body.safety_stock_qty < 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "safety_stock_qty must be non-negative")
+        item.safety_stock_qty = body.safety_stock_qty
+        metadata["safety_stock_qty"] = (
+            str(body.safety_stock_qty) if body.safety_stock_qty is not None else None
+        )
     if "is_active" in body.model_fields_set and body.is_active is not None:
         item.is_active = body.is_active
         metadata["is_active"] = body.is_active

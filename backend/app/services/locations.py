@@ -24,6 +24,15 @@ async def get_default_location_id(db: AsyncSession, org_id: uuid.UUID) -> uuid.U
     return location_id
 
 
+async def location_code(db: AsyncSession, location_id: uuid.UUID) -> str:
+    """For refusal messages: "at BAY-2" tells a multi-site user where to go
+    look, "at this location" does not. Falls back rather than raising, because
+    a message helper must never replace the failure it is describing.
+    """
+    code = await db.scalar(select(Location.code).where(Location.id == location_id))
+    return code or "this location"
+
+
 async def resolve_location_id(db: AsyncSession, org_id: uuid.UUID, raw: str | None) -> uuid.UUID:
     """Turn an optional caller-supplied location_id into a validated one, falling
     back to the org's default location when omitted - so the location dimension

@@ -16,6 +16,7 @@ from app.api.routes import (
     boms,
     cbm,
     computer_vision,
+    customers,
     data_chat,
     datasets,
     device_tokens,
@@ -36,6 +37,7 @@ from app.api.routes import (
     oee,
     orgs,
     pace_tracking,
+    planning_grid,
     plant_summary,
     predictive,
     process_mining,
@@ -45,6 +47,7 @@ from app.api.routes import (
     realtime,
     reports,
     routings,
+    sales_orders,
     scrap,
     shifts,
     simulation,
@@ -53,6 +56,7 @@ from app.api.routes import (
     suppliers,
     throughput,
     work_centers,
+    work_orders,
     workflows,
 )
 from app.core.config import get_settings
@@ -110,6 +114,8 @@ app.include_router(items.router)
 app.include_router(boms.router, dependencies=[Depends(require_feature("boms"))])
 app.include_router(suppliers.router)
 app.include_router(purchase_orders.router, dependencies=[Depends(require_feature("procurement"))])
+app.include_router(customers.router, dependencies=[Depends(require_feature("sales"))])
+app.include_router(sales_orders.router, dependencies=[Depends(require_feature("sales"))])
 app.include_router(lots.router, dependencies=[Depends(require_feature("lots"))])
 app.include_router(locations.router)
 app.include_router(machines.router)
@@ -120,6 +126,7 @@ app.include_router(inventory_analytics.router, dependencies=[Depends(require_fea
 app.include_router(inventory.router, dependencies=[Depends(require_feature("warehouse"))])
 app.include_router(forecasts.router, dependencies=[Depends(require_feature("planning"))])
 app.include_router(forecasts.mrp_router, dependencies=[Depends(require_feature("planning"))])
+app.include_router(planning_grid.router, dependencies=[Depends(require_feature("planning"))])
 app.include_router(datasets.router)
 app.include_router(oee.router, dependencies=[Depends(require_feature("oee"))])
 app.include_router(pace_tracking.router, dependencies=[Depends(require_feature("pace_tracking"))])
@@ -147,6 +154,7 @@ app.include_router(rca_cases.router, dependencies=[Depends(require_feature("rca_
 app.include_router(predictive.router, dependencies=[Depends(require_feature("predictive"))])
 app.include_router(mfg_forecast.router, dependencies=[Depends(require_feature("mfg_forecast"))])
 app.include_router(work_centers.router)
+app.include_router(work_orders.router, dependencies=[Depends(require_feature("production"))])
 app.include_router(computer_vision.router, dependencies=[Depends(require_feature("computer_vision"))])
 app.include_router(data_chat.router, dependencies=[Depends(require_feature("data_chat"))])
 app.include_router(alerts.router)

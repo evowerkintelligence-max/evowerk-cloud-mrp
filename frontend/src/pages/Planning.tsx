@@ -1,81 +1,69 @@
-import { FormEvent, useState } from "react";
+import { Fragment, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { CalendarClock, Hammer, ListChecks, ShoppingCart } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CalendarRange } from "lucide-react";
 import { apiFetch } from "../api/client";
-import { today, plusDays } from "@/lib/date";
+import { useCurrentUser } from "@/lib/currentUser";
 import { PageHeader } from "@/components/PageHeader";
-import { StatCard } from "@/components/StatCard";
-import { Field } from "@/components/Field";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { SendToReportButton, fmt } from "./analytics/shared";
-import { SuggestFromHistoryCard } from "./planning/SuggestFromHistory";
 import { ImportForecastsCsvSection } from "./planning/ImportForecastsCsv";
+import { PlannedQtyInput } from "./planning/PlannedQtyInput";
+import { ProductDetail } from "./planning/ProductDetail";
+import { ToBuyPanel } from "./planning/ToBuyPanel";
+import {
+  materialsStatusLabel,
+  materialsStatusVariant,
+  readyByIsLate,
+  readyByLabel,
+  trimQty,
+  type PlanningGridResponse,
+} from "./planning/types";
 
-interface ItemResponse {
-  id: string;
-  sku: string;
-  name: string;
-  is_lot_tracked: boolean;
-}
-
-interface ForecastResponse {
-  id: string;
-  item_id: string;
-  item_sku: string;
-  item_name: string;
-  period_start: string;
-  quantity: string;
-  source: string;
-  notes: string | null;
-  updated_at: string;
-}
-
-interface MrpPlanLine {
-  item_id: string;
-  item_sku: string;
-  item_name: string;
-  is_manufactured: boolean;
-  independent_demand: string;
-  dependent_demand: string;
-  gross_demand: string;
-  on_hand: string;
-  on_order: string;
-  on_draft: string;
-  net_requirement: string;
-  suggested_order_quantity: string;
-  need_by_date: string | null;
-  suggested_order_date: string | null;
-}
-
-interface MrpPlanResponse {
-  horizon_start: string;
-  horizon_end: string;
-  lines: MrpPlanLine[];
+function summaryLine(summary: PlanningGridResponse["summary"]): string {
+  if (summary.missing > 0) {
+    const noun = summary.missing === 1 ? "product needs" : "products need";
+    return `${summary.missing} ${noun} materials ordered.`;
+  }
+  if (summary.arriving > 0) {
+    const noun = summary.arriving === 1 ? "product is" : "products are";
+    return `${summary.arriving} ${noun} waiting on a delivery.`;
+  }
+  return "Everything is covered.";
 }
 
 export function Planning() {
-  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const currentUser = useCurrentUser();
+  const canEdit = currentUser.data?.role === "owner" || currentUser.data?.role === "manager";
+  // POST /mrp/generate-pos is gated to owner only on the backend (stricter
+  // than the manager-allowed quantity edit above), so this check is deliberately
+  // narrower than canEdit.
+  const canOrder = currentUser.data?.role === "owner";
+  // POST /forecasts/import is also owner-only. Kept as its own check rather
+  // than reused from canOrder: the two happen to share a role today, but
+  // nothing ties an ordering permission to an import permission, and the
+  // 403 a non-owner got on submit is the exact bug this button now avoids
+  // showing them in the first place.
+  const canImport = currentUser.data?.role === "owner";
+  const grid = useQuery<PlanningGridResponse>({
+    queryKey: ["planning-grid"],
+    queryFn: async () => {
+      const res = await apiFetch("/planning/grid");
+      if (!res.ok) throw new Error("Failed to load the planning grid");
+      return res.json();
+    },
+  });
 
-  // Forecast entry form
-  const [itemId, setItemId] = useState("");
-  const [periodStart, setPeriodStart] = useState(today());
-  const [quantity, setQuantity] = useState("");
-  const [notes, setNotes] = useState("");
-
-  // MRP horizon
-  const [horizonStart, setHorizonStart] = useState(today());
-  const [horizonEnd, setHorizonEnd] = useState(plusDays(90));
-
-  const items = useQuery<ItemResponse[]>({
+  const items = useQuery<{ id: string; sku: string }[]>({
     queryKey: ["items"],
+    enabled: showImport,
     queryFn: async () => {
       const res = await apiFetch("/items");
       if (!res.ok) throw new Error("Failed to load items");
@@ -83,352 +71,123 @@ export function Planning() {
     },
   });
 
-  const forecasts = useQuery<ForecastResponse[]>({
-    queryKey: ["forecasts"],
-    queryFn: async () => {
-      const res = await apiFetch("/forecasts");
-      if (!res.ok) throw new Error("Failed to load forecasts");
-      return res.json();
-    },
-  });
-
-  const plan = useQuery<MrpPlanResponse>({
-    queryKey: ["mrp-plan", horizonStart, horizonEnd],
-    queryFn: async () => {
-      const res = await apiFetch(
-        `/mrp/plan?horizon_start=${horizonStart}&horizon_end=${horizonEnd}`,
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? "Failed to run MRP plan");
-      }
-      return res.json();
-    },
-  });
-
-  function invalidatePlanning() {
-    queryClient.invalidateQueries({ queryKey: ["forecasts"] });
-    queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
-  }
-
-  const upsertForecast = useMutation({
-    mutationFn: async () => {
-      const res = await apiFetch("/forecasts", {
-        method: "POST",
-        body: JSON.stringify({
-          item_id: itemId,
-          period_start: periodStart,
-          quantity,
-          notes: notes || null,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? "Failed to save forecast");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      setQuantity("");
-      setNotes("");
-      invalidatePlanning();
-    },
-    onError: (e: Error) => setError(e.message),
-  });
-
-  // Tracked separately from deleteForecast.isPending/.variables - those
-  // reflect only the single most-recently-invoked call, so deleting row B
-  // while row A's DELETE is still in flight would incorrectly re-enable A's
-  // button. A Set of in-flight ids handles overlapping calls correctly.
-  const [pendingForecastIds, setPendingForecastIds] = useState<Set<string>>(new Set());
-  const deleteForecast = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await apiFetch(`/forecasts/${id}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? "Failed to delete forecast");
-      }
-    },
-    onMutate: (id) => setPendingForecastIds((prev) => new Set(prev).add(id)),
-    onSettled: (_data, _err, id) =>
-      setPendingForecastIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      }),
-    onSuccess: invalidatePlanning,
-    onError: (e: Error) => setError(e.message),
-  });
-
-  function onAddForecast(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    if (!itemId) {
-      setError("Pick an item first");
-      return;
-    }
-    upsertForecast.mutate();
-  }
-
   return (
-    <div className="space-y-8">
+    <div>
       <PageHeader
         title="Planning"
-        description="Enter demand forecasts per item and period. The plan explodes manufactured-item forecasts through their active BOM into component requirements, then nets against on-hand stock and open POs to show what to build and what to order."
+        description="Type how many you plan to make. Green is in stock, amber is on the way, red is missing."
+        actions={
+          canImport && (
+            <Button variant="secondary" size="sm" onClick={() => setShowImport((v) => !v)}>
+              Import from CSV
+            </Button>
+          )
+        }
       />
 
+      {canImport && showImport && <ImportForecastsCsvSection items={items.data ?? []} />}
+
+      {grid.isError && <Alert variant="destructive">{(grid.error as Error).message}</Alert>}
       {error && <Alert variant="destructive">{error}</Alert>}
+      {grid.isLoading && <Skeleton className="h-40 w-full" />}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Demand forecasts</CardTitle>
-          <CardDescription>Add or update a forecast for an item and period.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <form onSubmit={onAddForecast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Item" htmlFor="fc-item">
-              <Select id="fc-item" value={itemId} onChange={(e) => setItemId(e.target.value)} required>
-                <option value="">Select an item…</option>
-                {items.data?.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.sku} - {item.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Period start" htmlFor="fc-period">
-              <Input
-                id="fc-period"
-                type="date"
-                value={periodStart}
-                onChange={(e) => setPeriodStart(e.target.value)}
-                required
-              />
-            </Field>
-            <Field label="Quantity" htmlFor="fc-qty">
-              <Input
-                id="fc-qty"
-                type="number"
-                step="0.0001"
-                min="0"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                required
-              />
-            </Field>
-            <Field label="Notes (optional)" htmlFor="fc-notes">
-              <Input id="fc-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </Field>
-            <div className="flex items-end">
-              <Button type="submit" loading={upsertForecast.isPending}>
-                Save forecast
-              </Button>
-            </div>
-          </form>
+      {/* Outside the products block on purpose: a job that has gone quiet is
+          worth saying even for a shop whose grid has no rows yet. */}
+      {grid.data && grid.data.summary.jobs_needing_attention > 0 && (
+        <p className="mb-4 text-sm font-medium text-destructive">
+          <Link to="/production" className="underline">
+            {grid.data.summary.jobs_needing_attention}{" "}
+            {grid.data.summary.jobs_needing_attention === 1 ? "job needs" : "jobs need"} attention
+          </Link>
+        </p>
+      )}
 
+      {grid.data && grid.data.products.length === 0 && (
+        <EmptyState
+          icon={<CalendarRange />}
+          title="Add a bill of materials to start planning"
+          description="Products you build appear here automatically once they have a recipe."
+        />
+      )}
+
+      {grid.data && grid.data.products.length > 0 && (
+        <>
+          <p className="mb-1 text-xs text-muted-foreground">
+            This covers {grid.data.horizon_start} to {grid.data.horizon_end}.
+          </p>
+          <p className="mb-4 text-sm font-medium">{summaryLine(grid.data.summary)}</p>
           <TableWrap>
             <Table>
               <THead>
                 <TR>
-                  <TH>Item</TH>
-                  <TH>Period start</TH>
-                  <TH>Quantity</TH>
-                  <TH>Source</TH>
-                  <TH>Notes</TH>
-                  <TH className="text-right">Actions</TH>
+                  <TH>Product</TH>
+                  <TH>Planned</TH>
+                  <TH>On hand</TH>
+                  <TH>Materials</TH>
+                  <TH>Ready by</TH>
+                  <TH className="text-right">Detail</TH>
                 </TR>
               </THead>
               <TBody>
-                {forecasts.data?.map((fc) => (
-                  <TR key={fc.id}>
-                    <TD className="font-medium">
-                      {fc.item_sku} - {fc.item_name}
-                    </TD>
-                    <TD>{fc.period_start}</TD>
-                    <TD>{fc.quantity}</TD>
-                    <TD>
-                      <Badge variant="neutral">{fc.source}</Badge>
-                    </TD>
-                    <TD className="text-muted-foreground">{fc.notes ?? "—"}</TD>
-                    <TD className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => deleteForecast.mutate(fc.id)}
-                        loading={pendingForecastIds.has(fc.id)}
-                      >
-                        Delete
-                      </Button>
-                    </TD>
-                  </TR>
-                ))}
+                {grid.data.products.map((product) => {
+                  const isExpanded = expanded === product.item_id;
+                  return (
+                    <Fragment key={product.item_id}>
+                      <TR>
+                        <TD>
+                          <span className="font-medium">{product.item_name}</span>
+                          <span className="block text-xs text-muted-foreground">{product.item_sku}</span>
+                        </TD>
+                        <TD>
+                          <PlannedQtyInput
+                            product={product}
+                            onError={setError}
+                            onSaved={() => setError(null)}
+                            readOnly={!canEdit}
+                          />
+                        </TD>
+                        <TD>{trimQty(product.on_hand)}</TD>
+                        <TD>
+                          <Badge variant={materialsStatusVariant(product.materials_status)}>
+                            {materialsStatusLabel(product)}
+                          </Badge>
+                          {product.missing_materials.length > 0 && (
+                            <span className="block text-xs text-muted-foreground">
+                              {product.missing_materials.join(", ")}
+                            </span>
+                          )}
+                        </TD>
+                        <TD className={readyByIsLate(product) ? "font-medium text-destructive" : undefined}>
+                          {readyByLabel(product)}
+                        </TD>
+                        <TD className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-expanded={isExpanded}
+                            aria-label={`${isExpanded ? "Hide" : "Show"} working for ${product.item_name}`}
+                            onClick={() => setExpanded(isExpanded ? null : product.item_id)}
+                          >
+                            {isExpanded ? "Hide working" : "Show working"}
+                          </Button>
+                        </TD>
+                      </TR>
+                      {isExpanded && (
+                        <TR>
+                          <TD colSpan={6}>
+                            <ProductDetail lines={product.detail} />
+                          </TD>
+                        </TR>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </TBody>
             </Table>
           </TableWrap>
-
-          <ImportForecastsCsvSection items={items.data ?? []} />
-        </CardContent>
-      </Card>
-
-      <SuggestFromHistoryCard />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>MRP plan</CardTitle>
-          <CardDescription>Net requirements across the planning horizon.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:max-w-md">
-            <Field label="Horizon start" htmlFor="h-start">
-              <Input
-                id="h-start"
-                type="date"
-                value={horizonStart}
-                onChange={(e) => setHorizonStart(e.target.value)}
-              />
-            </Field>
-            <Field label="Horizon end" htmlFor="h-end">
-              <Input
-                id="h-end"
-                type="date"
-                value={horizonEnd}
-                onChange={(e) => setHorizonEnd(e.target.value)}
-              />
-            </Field>
-          </div>
-
-          {plan.data && plan.data.lines.length > 0 && (
-            <SendToReportButton
-              spec={{ type: "kind_report", report_kind: "mrp-plan", report_params: { horizon_start: horizonStart, horizon_end: horizonEnd } }}
-              label={`MRP plan — ${horizonStart} to ${horizonEnd}`}
-            />
-          )}
-
-          {plan.data && plan.data.lines.length > 0 && (
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              {[
-                {
-                  label: "Planned items",
-                  value: plan.data.lines.length,
-                  icon: <ListChecks />,
-                  tone: "primary" as const,
-                },
-                {
-                  label: "To build",
-                  value: plan.data.lines.filter(
-                    (l) => l.is_manufactured && Number(l.suggested_order_quantity) > 0,
-                  ).length,
-                  icon: <Hammer />,
-                  tone: "accent" as const,
-                },
-                {
-                  label: "To order",
-                  value: plan.data.lines.filter(
-                    (l) => !l.is_manufactured && Number(l.suggested_order_quantity) > 0,
-                  ).length,
-                  icon: <ShoppingCart />,
-                  tone: "info" as const,
-                },
-                {
-                  label: "Past due",
-                  value: plan.data.lines.filter(
-                    (l) => l.suggested_order_date && l.suggested_order_date < today(),
-                  ).length,
-                  icon: <CalendarClock />,
-                  tone: "warning" as const,
-                },
-              ].map((s) => (
-                <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} tone={s.tone} />
-              ))}
-            </div>
-          )}
-
-          {plan.isError && <Alert variant="destructive">{(plan.error as Error).message}</Alert>}
-          {plan.data && plan.data.lines.length === 0 && (
-            <p className="text-sm text-muted-foreground">No forecast demand in this horizon.</p>
-          )}
-          {plan.data && plan.data.lines.length > 0 && (
-            <TableWrap>
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Item</TH>
-                    <TH>Independent</TH>
-                    <TH>Dependent</TH>
-                    <TH>Gross</TH>
-                    <TH>On hand</TH>
-                    <TH>On order</TH>
-                    <TH>On draft</TH>
-                    <TH>Net req.</TH>
-                    <TH>Suggested action</TH>
-                    <TH>Order by</TH>
-                  </TR>
-                </THead>
-                <TBody>
-                  {plan.data.lines.map((line) => {
-                    const qty = Number(line.suggested_order_quantity);
-                    return (
-                      <TR key={line.item_id}>
-                        <TD className="font-medium">
-                          {line.item_sku} - {line.item_name}
-                          {line.is_manufactured && (
-                            <Badge variant="accent" className="ml-2">
-                              make
-                            </Badge>
-                          )}
-                        </TD>
-                        <TD>{fmt(Number(line.independent_demand))}</TD>
-                        <TD>{fmt(Number(line.dependent_demand))}</TD>
-                        <TD>{fmt(Number(line.gross_demand))}</TD>
-                        <TD>{fmt(Number(line.on_hand))}</TD>
-                        <TD>{fmt(Number(line.on_order))}</TD>
-                        <TD>{fmt(Number(line.on_draft))}</TD>
-                        <TD className="font-semibold">{fmt(Number(line.net_requirement))}</TD>
-                        <TD>
-                          {qty > 0 ? (
-                            <Badge variant={line.is_manufactured ? "accent" : "info"}>
-                              {line.is_manufactured ? "Build" : "Order"} {fmt(qty)}
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TD>
-                        <TD>
-                          {line.suggested_order_date ? (
-                            <span
-                              className={
-                                line.suggested_order_date < today()
-                                  ? "font-semibold text-destructive"
-                                  : undefined
-                              }
-                            >
-                              {line.suggested_order_date}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TD>
-                      </TR>
-                    );
-                  })}
-                </TBody>
-              </Table>
-            </TableWrap>
-          )}
-          {plan.data && plan.data.lines.length > 0 && (
-            <p className="text-sm text-muted-foreground">
-              Ready to order the shortfalls?{" "}
-              <Link
-                to={`/procurement?tab=generate&horizonStart=${horizonStart}&horizonEnd=${horizonEnd}`}
-                className="text-primary hover:underline"
-              >
-                Generate purchase orders
-              </Link>{" "}
-              in Procurement.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+          <ToBuyPanel rows={grid.data.to_buy} canOrder={canOrder} />
+        </>
+      )}
     </div>
   );
 }

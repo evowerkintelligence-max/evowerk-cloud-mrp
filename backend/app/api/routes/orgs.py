@@ -21,11 +21,18 @@ class OrgResponse(BaseModel):
     role: str
     user_id: str
     adjust_approval_threshold: Decimal
+    demand_policy: str
     enabled_features: list[str]
 
 
 class OrgUpdateRequest(BaseModel):
-    adjust_approval_threshold: Decimal
+    # Both optional so a caller can change one setting without restating the
+    # other; omitted fields are left as they are.
+    adjust_approval_threshold: Decimal | None = None
+    demand_policy: str | None = None
+
+
+DEMAND_POLICIES = ("consume", "add")
 
 
 @router.get("/me", response_model=OrgResponse)
@@ -41,6 +48,7 @@ async def get_my_org(
         role=current.role,
         user_id=str(current.id),
         adjust_approval_threshold=org.adjust_approval_threshold,
+        demand_policy=org.demand_policy,
         enabled_features=org.enabled_features,
     )
 
@@ -51,18 +59,34 @@ async def update_my_org(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    if body.adjust_approval_threshold < 0:
+    if body.adjust_approval_threshold is not None and body.adjust_approval_threshold < 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "threshold must be zero or positive")
+    if body.demand_policy is not None and body.demand_policy not in DEMAND_POLICIES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "demand policy must be consume or add"
+        )
     result = await db.execute(select(Org).where(Org.id == current.org_id))
     org = result.scalar_one()
-    org.adjust_approval_threshold = body.adjust_approval_threshold
+    if body.adjust_approval_threshold is not None:
+        org.adjust_approval_threshold = body.adjust_approval_threshold
+    if body.demand_policy is not None:
+        org.demand_policy = body.demand_policy
+    # Record only the fields this request actually set. Logging the untouched
+    # one alongside them reads like it was changed too, and the demand policy
+    # in particular changes what every planning number in the app means, so
+    # its audit trail has to be exact about when it moved.
+    changed: dict[str, str] = {}
+    if body.adjust_approval_threshold is not None:
+        changed["adjust_approval_threshold"] = str(org.adjust_approval_threshold)
+    if body.demand_policy is not None:
+        changed["demand_policy"] = org.demand_policy
     await log_event(
         db,
-        action="org.threshold_updated",
+        action="org.settings_updated",
         org_id=current.org_id,
         actor_user_id=current.id,
         target=str(org.id),
-        metadata={"adjust_approval_threshold": str(body.adjust_approval_threshold)},
+        metadata=changed,
     )
     await db.commit()
     return OrgResponse(
@@ -71,5 +95,6 @@ async def update_my_org(
         role=current.role,
         user_id=str(current.id),
         adjust_approval_threshold=org.adjust_approval_threshold,
+        demand_policy=org.demand_policy,
         enabled_features=org.enabled_features,
     )

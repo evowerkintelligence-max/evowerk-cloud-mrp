@@ -63,8 +63,7 @@ export function ImportForecastsCsvSection({ items }: { items: { id: string; sku:
       setErrors([]);
       setFileName(null);
       if (fileRef.current) fileRef.current.value = "";
-      queryClient.invalidateQueries({ queryKey: ["forecasts"] });
-      queryClient.invalidateQueries({ queryKey: ["mrp-plan"] });
+      queryClient.invalidateQueries({ queryKey: ["planning-grid"] });
     },
     onError: (e: Error) => setError(e.message),
   });

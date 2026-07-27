@@ -19,6 +19,7 @@ import {
   PackageX,
   Plug,
   Radio,
+  Receipt,
   Rows3,
   Search,
   ShoppingCart,
@@ -62,9 +63,11 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: "/boms", label: "Bills of Materials", icon: Layers, keywords: ["bom", "recipe", "components"], featureKey: "boms" },
       { to: "/procurement", label: "Procurement", icon: ShoppingCart, keywords: ["suppliers", "purchase orders", "po", "vendors"], featureKey: "procurement" },
+      { to: "/sales", label: "Sales", icon: Receipt, keywords: ["orders", "customers", "sales orders", "so"], featureKey: "sales" },
       { to: "/lots", label: "Lots", icon: Boxes, keywords: ["batch", "traceability"], featureKey: "lots" },
       { to: "/warehouse", label: "Warehouse", icon: Warehouse, keywords: ["inventory", "stock", "on-hand", "on hand"], featureKey: "warehouse" },
-      { to: "/planning", label: "Planning", icon: CalendarRange, keywords: ["mrp", "forecast", "demand"], featureKey: "planning" },
+      { to: "/planning", label: "Planning", icon: CalendarRange, keywords: ["mrp", "forecast", "demand", "what to do", "shortages", "materials"], featureKey: "planning" },
+      { to: "/production", label: "Production", icon: Factory, keywords: ["work orders", "jobs", "make", "build", "wo"], featureKey: "production" },
     ],
   },
   {

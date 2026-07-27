@@ -25,7 +25,6 @@ from sqlalchemy.pool import StaticPool
 
 from app.core import background as background_module
 from app.core import redis_client
-from app.core.features import PREMIUM_FEATURES
 from app.db import session as db_session_module
 from app.db.base import Base
 from app.main import app
@@ -54,6 +53,7 @@ from app.models import (  # noqa: F401 - register models
     realtime,
     report_spec,
     routing,
+    sales,
     sensor,
     shift_forecast,
     shift_schedule,
@@ -63,6 +63,7 @@ from app.models import (  # noqa: F401 - register models
     tenant,
     user,
     work_center,
+    work_order,
     workflow,
 )
 from app.models.tenant import Org
@@ -128,23 +129,44 @@ async def client(test_engine, monkeypatch):
 # freshly-registered org's real (empty) default, not the blanket grant below.
 _ENTITLEMENT_DEFAULT_TEST_MODULES = {"test_feature_gating", "test_org_features_migration"}
 
+# What an org created during a test is entitled to. A static snapshot on
+# purpose - see _default_full_entitlements below for why this is not
+# app.core.features.PREMIUM_FEATURES. Adding a feature key to the registry
+# means adding it here too, or that feature's routes will 403 in tests.
+_GRANTED_IN_TESTS = [
+    "boms", "procurement", "sales", "production", "lots", "warehouse", "planning",
+    "plant_summary", "oee", "pace_tracking", "downtime", "downtime_tracking",
+    "throughput", "scrap", "shifts", "spc", "kpis", "kpi_dashboards",
+    "reports", "data_chat", "automl", "predictive", "simulation",
+    "rca_cases", "mfg_forecast", "computer_vision",
+]
+
 
 @pytest.fixture(autouse=True)
 def _default_full_entitlements(request):
     # ponytail: pre-existing tests (60+ files) predate per-org feature gating
     # and assume a fresh org can hit every router. Rather than hand-editing
     # every test file's local _register_and_login helper, grant every org
-    # created during a test PREMIUM_FEATURES by default, here in the one
-    # shared fixture module. Upgrade path: if a test needs to exercise a
-    # specific entitlement gap, have it override org.enabled_features
-    # directly (as test_feature_gating.py already does).
+    # created during a test the keys below, here in the one shared fixture
+    # module. Upgrade path: if a test needs to exercise a specific
+    # entitlement gap, have it override org.enabled_features directly (as
+    # test_feature_gating.py already does).
+    #
+    # The list is a STATIC snapshot, deliberately not derived from
+    # app.core.features. Deriving it meant a key added to the registry
+    # granted itself here too, so no test could ever notice the entitlement
+    # dimension and the `sales` key shipped 403-ing for every existing
+    # customer. Now a new key gets no access until it is added here, which is
+    # a moment to ask who is actually entitled to it. That question is
+    # enforced for real by tests/test_feature_migration_coverage.py; this
+    # snapshot only stops the suite from silently answering it for you.
     if request.module.__name__.rsplit(".", 1)[-1] in _ENTITLEMENT_DEFAULT_TEST_MODULES:
         yield
         return
 
     def _grant(mapper, connection, target):
         if not target.enabled_features:
-            target.enabled_features = list(PREMIUM_FEATURES)
+            target.enabled_features = list(_GRANTED_IN_TESTS)
 
     event.listen(Org, "before_insert", _grant)
     try:

@@ -165,10 +165,23 @@ Matching the buy side and the Phase 1 decisions:
   orphaning them.
 - An order line for an item with no BOM is valid; it plans as something to
   buy rather than build.
-- An order whose `needed_by` falls outside the grid's fixed 90-day window
-  still exists and still counts in the engine; it simply is not visible on
-  the grid until the window reaches it. This mirrors how out-of-window
-  forecasts already behave.
+- An order whose `needed_by` falls *after* the grid's fixed 90-day window
+  still exists but does not count yet; it slides into the plan as the window
+  reaches it, the same way a future-dated forecast does.
+- An order whose `needed_by` has *passed* still counts, in full. This is
+  where the sell side deliberately departs from the forecast side: a
+  forecast bucket in the past is spent, but an open order in the past is not
+  spent, it is late, and the goods are still owed. Dropping it would turn
+  the grid green for the most at-risk commitment in the shop. Lateness is
+  surfaced rather than silently folded in: `is_overdue` on the order, a
+  "Late" badge on the Sales list, and `committed_overdue` driving
+  "N ordered, late" on the planning row.
+
+  *Amended 2026-07-27, after implementation.* The original wording of these
+  two bullets was a single sentence claiming an out-of-window order "still
+  counts in the engine ... mirrors how out-of-window forecasts already
+  behave", which is self-contradictory: out-of-window forecasts do not
+  count. Code review caught it; the split above is the settled answer.
 - Quantities are validated at the trust boundary the same way the planning
   grid write validates them: positive, and within the `Numeric(12, 4)`
   column's range, rejected with a plain message rather than a 500.

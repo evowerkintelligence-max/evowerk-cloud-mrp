@@ -50,6 +50,11 @@ class MrpPlanLine(BaseModel):
     # but it offsets net_requirement the same way, so drafting an order removes
     # the item from the shortfall and a second generation can't double-order it.
     on_draft: Decimal
+    # Supply from work orders in flight (scheduled inside the horizon, or
+    # running whatever their date said). Kept separate from the two PO figures
+    # for the same reason they are kept separate from each other: the shop can
+    # see where each unit of cover is coming from.
+    in_production: Decimal
     net_requirement: Decimal
     # The stable "how much to order/build" field for API consumers and PO
     # generation. Equal to net_requirement, except for purchased items with a
@@ -142,7 +147,7 @@ async def compute_mrp_plan(
     forecasts through active BOMs so a forecast of a finished good becomes
     concrete requirements for the components it's built from.
 
-        net_requirement = max(0, gross_demand - on_hand - on_order - on_draft)
+        net_requirement = max(0, gross_demand - on_hand - on_order - on_draft - in_production)
         gross_demand    = independent_demand + dependent_demand
 
     - independent_demand: the item's own demand from both sources, combined
@@ -163,24 +168,39 @@ async def compute_mrp_plan(
       committed supply. Offsets the requirement like on_order (so drafting an
       order removes the shortfall and a repeat generation can't double-order),
       but reported separately so submitted vs still-a-draft stays visible.
+    - in_production: work orders in flight, added in _explode_and_net. A
+      scheduled job also seeds its own stored components as demand here, so the
+      two halves of a job always move together.
 
     The explosion/netting engine itself lives in _explode_and_net, seeded here
     from both demand sources - see that function for the full algorithm.
     Reused as-is (different seed) by services.mrp.compute_build_plan for the
     build calculator, which has no forecast rows to read.
     """
+    # Deferred: services.work_orders imports load_bom_children from this
+    # module, so importing it at module level would be a cycle.
+    from app.services.work_orders import load_scheduled_component_demand
+
     policy = await load_demand_policy(db, org_id)
     forecast_qty, forecast_dates = await load_forecast_demand(db, org_id, horizon_start, horizon_end)
     committed_qty, committed_dates = await load_committed_demand(
         db, org_id, horizon_start, horizon_end
     )
     independent = combine_demand(forecast_qty, committed_qty, policy)
+    # A scheduled job's components are demand in their own right. Without this,
+    # its finished good's supply below would zero that item's net requirement,
+    # _explode_and_net would never explode it, and the grid would read "all in
+    # stock" for a job that cannot actually run. Added before the empty-demand
+    # gate, because a shop with jobs and no typed forecast still has a plan.
+    scheduled_components = await load_scheduled_component_demand(db, org_id, horizon_end)
+    for item_id, qty in scheduled_components.items():
+        independent[item_id] = independent.get(item_id, Decimal(0)) + qty
     # Gate on the COMBINED map, not the forecast alone: a shop with real orders
     # and no typed estimates has genuine demand and must get a real plan.
     if not independent:
         return []
     need_by = earliest_dates(forecast_dates, committed_dates)
-    return await _explode_and_net(db, org_id, independent, need_by)
+    return await _explode_and_net(db, org_id, independent, need_by, horizon_end)
 
 
 async def _explode_and_net(
@@ -188,6 +208,7 @@ async def _explode_and_net(
     org_id: uuid.UUID,
     seed_gross: dict[uuid.UUID, Decimal],
     seed_due: dict[uuid.UUID, date] | None,
+    horizon_end: date,
 ) -> list[MrpPlanLine]:
     """The shared explosion/netting core behind compute_mrp_plan (seeded from
     forecasts) and compute_build_plan (seeded from a single build quantity).
@@ -226,11 +247,16 @@ async def _explode_and_net(
       for purchased items when the MOQ is higher. Explosion always uses the
       raw net, never the MOQ-rounded figure.
     """
+    # Deferred: services.work_orders imports load_bom_children from this
+    # module, so importing it at module level would be a cycle.
+    from app.services.work_orders import load_production_supply
+
     if not seed_gross:
         return []
     need_by = dict(seed_due) if seed_due else {}
 
     on_hand = await load_on_hand(db, org_id)
+    in_production = await load_production_supply(db, org_id, horizon_end)
     on_order = await _sum_by_item(
         db,
         select(
@@ -301,8 +327,9 @@ async def _explode_and_net(
         hand = on_hand.get(item_id, Decimal(0))
         order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
         draft_qty = max(Decimal(0), on_draft.get(item_id, Decimal(0)))
+        production_qty = max(Decimal(0), in_production.get(item_id, Decimal(0)))
         safety = item.safety_stock_qty or Decimal(0)
-        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty + safety)
+        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty - production_qty + safety)
         due = need_by.get(item_id)
 
         for child_id, qty_per in children.get(item_id, []):
@@ -336,6 +363,7 @@ async def _explode_and_net(
                 on_hand=hand,
                 on_order=order_qty,
                 on_draft=draft_qty,
+                in_production=production_qty,
                 net_requirement=net,
                 suggested_order_quantity=suggested_qty,
                 need_by_date=due,
@@ -384,4 +412,10 @@ async def compute_build_plan(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item has no active BOM - nothing to build")
 
     attempted_qty = build_quantity / (1 - yield_loss_pct / 100)
-    return await _explode_and_net(db, org_id, {item_id: attempted_qty}, None)
+    # The same window the planning grid uses, so an ad hoc build nets against
+    # jobs in flight exactly as planning does. Deferred import for the cycle
+    # noted in compute_mrp_plan (planning_grid imports this module).
+    from app.services.planning_grid import resolve_grid_window
+
+    _, horizon_end = resolve_grid_window()
+    return await _explode_and_net(db, org_id, {item_id: attempted_qty}, None, horizon_end)

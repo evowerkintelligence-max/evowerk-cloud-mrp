@@ -32,6 +32,7 @@ class GridDetailLineResponse(BaseModel):
     on_hand: Decimal
     on_order: Decimal
     on_draft: Decimal
+    in_production: Decimal
     net_requirement: Decimal
     suggested_order_quantity: Decimal
     need_by_date: date | None
@@ -104,6 +105,7 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
                 on_hand=line.on_hand,
                 on_order=line.on_order,
                 on_draft=line.on_draft,
+                in_production=line.in_production,
                 net_requirement=line.net_requirement,
                 suggested_order_quantity=line.suggested_order_quantity,
                 need_by_date=line.need_by_date,

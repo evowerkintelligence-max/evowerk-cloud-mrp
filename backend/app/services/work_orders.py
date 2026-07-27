@@ -100,6 +100,68 @@ async def reserved_by_higher_priority(
     return {item_id: total for item_id, total in rows if total is not None and total > 0}
 
 
+# Only these two statuses reach the plan. A done job has already delivered its
+# units into stock and a cancelled one never will, so counting either would
+# promise the shop something twice.
+PLANNED_STATUSES = ("scheduled", "in_progress")
+
+
+async def load_production_supply(
+    db: AsyncSession, org_id: uuid.UUID, horizon_end: date
+) -> dict[uuid.UUID, Decimal]:
+    """Incoming supply per item from jobs in flight.
+
+    A scheduled job counts only if it is due inside the window; a running job
+    counts whatever its schedule said, because it is happening now. There is
+    deliberately no lower bound on the scheduled case: a job that should have
+    started last week is still going to happen, matching the rule Phase 2
+    settled for late sales orders.
+    """
+    rows = (
+        await db.execute(
+            select(WorkOrder.item_id, func.sum(WorkOrder.quantity_planned))
+            .where(
+                WorkOrder.org_id == org_id,
+                WorkOrder.status.in_(PLANNED_STATUSES),
+                or_(WorkOrder.status == "in_progress", _rank() <= horizon_end),
+            )
+            .group_by(WorkOrder.item_id)
+        )
+    ).all()
+    return {item_id: total for item_id, total in rows if total is not None and total > 0}
+
+
+async def load_scheduled_component_demand(
+    db: AsyncSession, org_id: uuid.UUID, horizon_end: date
+) -> dict[uuid.UUID, Decimal]:
+    """What jobs not yet started will need.
+
+    Only `scheduled` jobs: a running job's components have already left stock,
+    so on_hand reflects them and counting them again would buy them twice. This
+    must always move together with load_production_supply's scheduled half, or
+    the plan under-orders components (supply counted, its demand dropped) or
+    over-orders them (the reverse).
+    """
+    rows = (
+        await db.execute(
+            select(
+                WorkOrderComponent.item_id,
+                func.sum(
+                    WorkOrderComponent.quantity_required - WorkOrderComponent.quantity_consumed
+                ),
+            )
+            .join(WorkOrder, WorkOrder.id == WorkOrderComponent.wo_id)
+            .where(
+                WorkOrder.org_id == org_id,
+                WorkOrder.status == "scheduled",
+                _rank() <= horizon_end,
+            )
+            .group_by(WorkOrderComponent.item_id)
+        )
+    ).all()
+    return {item_id: total for item_id, total in rows if total is not None and total > 0}
+
+
 async def blocking_job(
     db: AsyncSession, org_id: uuid.UUID, job: WorkOrder, item_id: uuid.UUID
 ) -> WorkOrder | None:

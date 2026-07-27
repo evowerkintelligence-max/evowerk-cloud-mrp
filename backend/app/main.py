@@ -16,6 +16,7 @@ from app.api.routes import (
     boms,
     cbm,
     computer_vision,
+    customers,
     data_chat,
     datasets,
     device_tokens,
@@ -111,6 +112,7 @@ app.include_router(items.router)
 app.include_router(boms.router, dependencies=[Depends(require_feature("boms"))])
 app.include_router(suppliers.router)
 app.include_router(purchase_orders.router, dependencies=[Depends(require_feature("procurement"))])
+app.include_router(customers.router, dependencies=[Depends(require_feature("sales"))])
 app.include_router(lots.router, dependencies=[Depends(require_feature("lots"))])
 app.include_router(locations.router)
 app.include_router(machines.router)

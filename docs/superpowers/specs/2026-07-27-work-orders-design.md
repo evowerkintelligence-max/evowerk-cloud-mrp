@@ -60,15 +60,19 @@ point at.
   and its components come from and its output goes to that location. Pulling
   one job's components from several locations at once is a warehouse
   feature, not a work-order one.
-- **No priority between scheduled jobs.** Reservations are held in the order
-  jobs were raised; there is no way to say one job outranks another and
-  should take contested stock. A shop that needs that is asking for
-  scheduling, which is the phase after this one.
+- **No hand-ranked job queue.** Contested stock is settled by need date
+  (section 3), not by a priority number someone maintains. Re-prioritising
+  is done by changing a job's date, which is a thing the shop already
+  understands, rather than by a second ordering concept that can disagree
+  with the dates.
 - **No work-order-to-sales-order link.** The grid already nets demand from
   open sales orders, so making to plan serves those orders implicitly.
   Adding an explicit link would add a visible concept for no gain today.
-- **No partial finishing.** A job is finished once, with its good and scrap
-  counts. Units are not booked in as they come off the line.
+- **No incremental booking.** Units are not added to stock as they come off
+  the line; a job is finished once. Finishing for less than planned is fully
+  supported and accounted for (section 2), which is the case that actually
+  matters; watching a job tick up in real time is an operations feature, not
+  an inventory one.
 - **No rescheduling of a running job.** `scheduled_start` can be changed
   while a job is scheduled, not after it starts.
 - **No money.** Consistent with Phase 2: no cost, labour rate or valuation
@@ -94,6 +98,10 @@ app.
 - `scrap_reason`: nullable free text captured at finish. A scrap count with
   no cause tells the shop its yield is poor without telling it why, which is
   the question the number always prompts next.
+- `remainder_disposition`: nullable, `not_started` | `consumed`. What
+  happened to the components of units never attempted, recorded so an
+  under-run that returned stock to the shelf can be explained a month later.
+  Null on a job that met or exceeded its planned quantity.
 - `status`: `scheduled` | `in_progress` | `done` | `cancelled`.
 - `location_id`: where components come from and finished goods go. Chosen
   when the job is raised, defaulting to the org default via
@@ -163,17 +171,36 @@ stamps `started_at`.
 units to stock, and stamps `finished_at`. Scrap needs no stock movement: the
 components left at start, so scrapped units simply never arrive.
 
+**Under-run is accounted for, not waved through.** When good plus scrap
+comes to less than planned, some units were never attempted, and their
+components were consumed at start but may well still be on the shelf. The
+app cannot tell which, and both wrong answers are bad: assume the material
+is still there and the books invent stock the shop does not have; assume it
+is gone and the shop is told to buy what is sitting in front of it. So
+finish asks, and the answer is required rather than defaulted:
+
+- `not_started`: the remainder's components are untouched and are returned
+  to stock, restoring lot-tracked quantities to the lots they came from.
+- `consumed`: the material was used or spoiled getting as far as the job
+  got, and stays consumed.
+
+Returned quantities are the remainder's share of each component's
+`quantity_required`, and the disposition is stored on the job so the
+decision is auditable later. The question is only asked on an under-run,
+so the ordinary finish stays two numbers and a button.
+
 **Cancel** from `scheduled` moves nothing, because nothing was consumed.
 From `in_progress` it returns every consumed component, restoring
 lot-tracked stock to the exact lots it was drawn from.
 
-Cancel means **the job never ran**. Because partial production is not
-tracked, returning the components assumes none of them were turned into
-anything or thrown away. A job where work has actually begun must be
-finished with its good and scrap counts instead, even if that is good 0 and
-scrap 12, or the returned components will be stock the shop does not
-physically have. The app cannot detect which case it is, so the confirmation
-says this in as many words rather than asking "are you sure".
+Cancel on a running job is exactly `finish(good 0, scrap 0,
+remainder not_started)`: nothing was made and every component is back on the
+shelf. It is kept as its own action because that is a real and common
+outcome worth one click, but it is defined in terms of finish rather than
+being a second path that moves stock its own way, and the confirmation says
+in as many words that it means nothing was made and all materials are back.
+A job where any work actually happened is finished instead, where the
+under-run question above is asked properly.
 
 ## 3. Holding, consuming and producing stock
 
@@ -192,16 +219,30 @@ would be the worst of both worlds, since that far-future job is not even in
 the plan the shop is looking at. A job with no `scheduled_start` holds
 immediately.
 
-Starting a job checks each component against what is actually free:
+**The more urgent job wins the material.** Claims are ranked by
+`scheduled_start`, earliest first, with the lower `wo_number` breaking ties
+so the ordering is total and stable. Starting a job counts only the claims
+that outrank it:
 
 ```
-available = on_hand - reserved by OTHER scheduled jobs at this location
+available = on_hand - reserved by scheduled jobs that outrank this one
 ```
 
-If that is short, the start is refused with a 409 naming the job holding the
-stock, so the answer is "WO-7 has them" rather than a bare shortage. The
-same figure drives whether the grid's Make button is enabled, so a job the
-user cannot start is not offered.
+So a job due Friday cannot be blocked by one due next month, and the job the
+shop needs soonest gets the seals. Whoever happens to click first decides
+nothing, which is the property that makes this a priority rule rather than a
+race.
+
+Re-prioritising is changing a job's date, using the edit path in section 2.
+That is deliberately the only lever: a separate priority number would be a
+second ordering concept free to disagree with the dates, and when the two
+disagree nobody can say which the plan followed.
+
+If a start is short, it is refused with a 409 naming the job holding the
+stock and when that job is due, so the answer is "WO-7 needs them on
+Friday" rather than a bare shortage. The same figure drives whether the
+grid's Make button is enabled, so a job the user cannot start is not
+offered.
 
 This is deliberately an execution-time guard only. It must **not** be
 subtracted from `on_hand` in the planning engine: section 4 already counts a
@@ -332,11 +373,10 @@ need to reach the user without being looked for:
 
 - **Late to start.** A `scheduled` job whose `scheduled_start` has passed.
   It is holding components while not making anything.
-- **Stalled.** An `in_progress` job still running after
-  `STALLED_JOB_DAYS` (7). This is the worse of the two and the one a shop
-  will actually hit: the components are already consumed, and the job counts
-  as incoming supply, so the plan is quietly promising 50 pumps that nobody
-  is making.
+- **Stalled.** An `in_progress` job running far longer than a job like it
+  should. This is the worse of the two and the one a shop will actually hit:
+  the components are already consumed, and the job counts as incoming
+  supply, so the plan is quietly promising 50 pumps that nobody is making.
 
 Both surface through `app/services/morning_brief.py`, which is already the
 app's "what needs a human today" list and is computed on request, so this
@@ -344,12 +384,31 @@ needs no scheduler and no new delivery mechanism. The planning grid's
 summary bar carries the count alongside its existing material warnings, so
 the condition is visible on the screen the shop opens first.
 
-Seven days is a heuristic, named as a constant rather than buried, and it is
-wrong for a shop whose normal build takes three weeks. Deriving an expected
-duration from the routing's cycle and setup times is the better answer and
-is left to the phase that makes routings load-bearing; until then a constant
-that is visible and easy to change beats a guess dressed up as a
-calculation.
+**"Far longer" is measured, not assumed.** A fixed number of days is wrong
+for any shop it was not chosen for, so the expected duration of a job comes
+from the best evidence available, in order:
+
+1. **Its routing.** Sum over the routing's steps of
+   `setup_time_seconds + cycle_time_seconds x quantity_planned`. This is the
+   shop's own stated intent for how long the work takes, and the data is
+   already there.
+2. **Its own history.** Failing a routing with usable times, the median
+   duration per unit of the last `DURATION_SAMPLE` (5) completed jobs for
+   the same item, scaled to this job's quantity. The median rather than the
+   mean so one job left open over a holiday does not move the bar.
+3. **A cold-start constant**, `DEFAULT_JOB_DAYS` (7), used only by a shop
+   with neither routing times nor a single completed job of that item. It is
+   what the app knows on day one, and it stops being used as soon as the
+   shop has told it anything better.
+
+A job is stalled once elapsed time exceeds
+`max(2 x expected, expected + 1 day)`. The additive term is the same lesson
+as the over-run guard's `+ 10`: doubling alone is far too tight at small
+values, and would call a two-hour job stalled after four hours.
+
+Per item, not per org, because a shop making both a five-minute bracket and
+a three-week assembly has no single sensible number, which is precisely the
+problem a constant cannot solve.
 
 ### Feeding plant analytics
 
@@ -385,8 +444,10 @@ every existing customer;
 House voice: lowercase, terse, no trailing period, concrete numbers or SKU
 interpolated. 400 for malformed input, 409 for state or stock conflicts.
 
-- Components held by another scheduled job: 409 naming the job that holds
-  them, so the user knows which job to cancel or start first.
+- Components held by a job that outranks this one: 409 naming that job and
+  its due date, so the user knows which job to move, cancel or start first.
+- Finishing below the planned quantity without a `remainder_disposition`:
+  400. It is required precisely because neither possible default is safe.
 - Components short at start: 409 naming the shortfall **and the location**.
   The location is added in the shared inventory and lot services rather than
   wrapped at this caller, so every existing caller's message improves too;
@@ -459,9 +520,27 @@ interpolated. 400 for malformed input, 409 for state or stock conflicts.
   refuses 5000.
 - Finishing into an existing lot number adds to that lot rather than
   creating a second lot with the same name.
-- A job in progress past the stalled threshold appears in the morning brief;
-  a job inside it does not.
 - A scheduled job past its date appears in the morning brief.
+- Expected duration comes from the routing when it has usable times, from
+  the median of completed jobs for that item when it does not, and from the
+  constant only when there is neither. A job inside its expected duration is
+  not flagged; the same job well past it is.
+- The history median ignores an outlier: four one-hour jobs and one job left
+  open for a week still expect roughly an hour.
+- Two items with very different durations are judged separately, so a job on
+  the slow one is not flagged while a job on the fast one is.
+- Under-run: finishing 30 good and 2 scrap against a planned 50 with
+  `not_started` returns the 18 units' components, restoring lot quantities
+  to their original lots; with `consumed` it returns nothing. Omitting the
+  disposition is refused.
+- Finishing at or above the planned quantity needs no disposition.
+- Cancelling a running job leaves stock exactly as it was before the start.
+- A job due sooner starts even though a job due later holds the stock, and
+  the later job is then refused with a message naming the earlier one.
+- Moving a job's date earlier moves it ahead in the queue, so re-prioritising
+  by date actually changes who can start.
+- A job never blocks itself, and ties between two jobs due the same day are
+  broken by `wo_number` rather than being non-deterministic.
 - An `in_progress` job nets as supply but does **not** re-raise component
   demand, since those components are already consumed.
 - `done` and `cancelled` jobs count for nothing.
@@ -482,15 +561,16 @@ These are consequences of decisions taken above, not gaps left unexamined.
   but nothing emails or notifies anyone. Push needs a scheduler the app does
   not have, and adding one to deliver two lines of text would be a poor
   trade.
-- **The stalled threshold is a constant, not a measurement.** Seven days
-  suits a shop whose jobs take hours or days and is simply wrong for one
-  whose jobs take a month. Section 6 records why, and the routing data
-  needed to do better already exists for the phase that wants it.
-- **Partial production is invisible.** A job is all-or-nothing between start
-  and finish, so a job abandoned halfway has to be finished with a scrap
-  count to stay honest. Section 2 makes the rule explicit because the app
-  cannot detect the case, which is the residual risk of not tracking
-  operations.
-- **Reservations are per job, not per priority.** Contested stock goes to
-  whoever starts first, and a shop that needs otherwise is asking for
-  scheduling.
+- **A brand new shop gets the cold-start constant.** With no routing times
+  and no completed jobs, stalled detection falls back to seven days until
+  the first job of an item completes. It self-corrects with use, but the
+  first week is a guess.
+- **Under-run returns components proportionally.** A job that made half its
+  units returns half of each remaining component, which is right for material
+  cut per unit and wrong for a setup piece consumed whole at the start of
+  the run. Getting that exact needs per-component consumption points, which
+  is operation tracking.
+- **The queue is ordered by date alone.** Two jobs due the same day are
+  settled by which was raised first, which is stable and explainable but has
+  nothing to do with which matters more. A shop that needs to say "this one
+  first regardless" is asking for scheduling.

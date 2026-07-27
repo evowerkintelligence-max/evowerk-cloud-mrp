@@ -27,6 +27,7 @@ interface ItemResponse {
   preferred_supplier_id: string | null;
   lead_time_days: number | null;
   min_order_qty: string | null;
+  safety_stock_qty: string | null;
   is_active: boolean;
   description: string | null;
   barcode: string | null;
@@ -60,7 +61,7 @@ interface ImportResult {
   errors: { row: number; sku: string | null; message: string }[];
 }
 
-const TABLE_COLUMN_COUNT = 11;
+const TABLE_COLUMN_COUNT = 12;
 
 function ItemHistoryRow({ itemId }: { itemId: string }) {
   const history = useQuery<AuditLogEntry[]>({
@@ -106,6 +107,7 @@ export function Items() {
   const [isLotTracked, setIsLotTracked] = useState(false);
   const [leadTimeDays, setLeadTimeDays] = useState("");
   const [minOrderQty, setMinOrderQty] = useState("");
+  const [safetyStockQty, setSafetyStockQty] = useState("");
   const [description, setDescription] = useState("");
   const [barcode, setBarcode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -245,6 +247,38 @@ export function Items() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const [pendingSafetyStockItemIds, setPendingSafetyStockItemIds] = useState<Set<string>>(new Set());
+  const setSafetyStock = useMutation({
+    mutationFn: async ({
+      itemId,
+      preferredSupplierId,
+      safetyStockQty: value,
+    }: {
+      itemId: string;
+      preferredSupplierId: string | null;
+      safetyStockQty: string | null;
+    }) => {
+      const res = await apiFetch(`/items/${itemId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ preferred_supplier_id: preferredSupplierId, safety_stock_qty: value }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to update safety stock");
+      }
+      return res.json();
+    },
+    onMutate: ({ itemId }) => setPendingSafetyStockItemIds((prev) => new Set(prev).add(itemId)),
+    onSettled: (_data, _err, { itemId }) =>
+      setPendingSafetyStockItemIds((prev) => {
+        const next = new Set(prev);
+        next.delete(itemId);
+        return next;
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["items"] }),
+    onError: (e: Error) => setError(e.message),
+  });
+
   const [pendingActiveItemIds, setPendingActiveItemIds] = useState<Set<string>>(new Set());
   const setActive = useMutation({
     mutationFn: async ({
@@ -325,6 +359,7 @@ export function Items() {
           is_lot_tracked: isLotTracked,
           lead_time_days: leadTimeDays === "" ? null : Number(leadTimeDays),
           min_order_qty: minOrderQty === "" ? null : minOrderQty,
+          safety_stock_qty: safetyStockQty === "" ? null : safetyStockQty,
           description: description === "" ? null : description,
           barcode: barcode === "" ? null : barcode,
         }),
@@ -340,6 +375,7 @@ export function Items() {
       setName("");
       setLeadTimeDays("");
       setMinOrderQty("");
+      setSafetyStockQty("");
       setDescription("");
       setBarcode("");
       setShowManualAdd(false);
@@ -468,6 +504,16 @@ export function Items() {
                       step="any"
                       value={minOrderQty}
                       onChange={(e) => setMinOrderQty(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Safety stock qty" htmlFor="safetyStockQty">
+                    <Input
+                      id="safetyStockQty"
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={safetyStockQty}
+                      onChange={(e) => setSafetyStockQty(e.target.value)}
                     />
                   </Field>
                   <Field label="Description" htmlFor="description">
@@ -611,6 +657,7 @@ export function Items() {
                       <TH>Lot tracked</TH>
                       <TH>Lead time (days)</TH>
                       <TH>Min order qty</TH>
+                      <TH>Safety stock qty</TH>
                       <TH>Description</TH>
                       <TH>Barcode</TH>
                       <TH>Status</TH>
@@ -711,6 +758,28 @@ export function Items() {
                                       itemId: item.id,
                                       preferredSupplierId: item.preferred_supplier_id,
                                       minOrderQty: value,
+                                    });
+                                  }}
+                                />
+                              </div>
+                            </TD>
+                            <TD>
+                              <div className="max-w-[110px]">
+                                <Label className="sr-only">Safety stock qty</Label>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step="any"
+                                  defaultValue={item.safety_stock_qty ?? ""}
+                                  disabled={!isOwner || pendingSafetyStockItemIds.has(item.id)}
+                                  onBlur={(e) => {
+                                    const raw = e.target.value;
+                                    const value = raw === "" ? null : raw;
+                                    if (value === item.safety_stock_qty) return;
+                                    setSafetyStock.mutate({
+                                      itemId: item.id,
+                                      preferredSupplierId: item.preferred_supplier_id,
+                                      safetyStockQty: value,
                                     });
                                   }}
                                 />

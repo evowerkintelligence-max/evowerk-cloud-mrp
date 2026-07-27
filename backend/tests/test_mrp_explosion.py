@@ -27,7 +27,14 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
 
 
 async def _create_item(
-    client, token, sku, name="Item", is_lot_tracked=False, lead_time_days=None, min_order_qty=None
+    client,
+    token,
+    sku,
+    name="Item",
+    is_lot_tracked=False,
+    lead_time_days=None,
+    min_order_qty=None,
+    safety_stock_qty=None,
 ):
     res = await client.post(
         "/items",
@@ -39,6 +46,7 @@ async def _create_item(
             "is_lot_tracked": is_lot_tracked,
             "lead_time_days": lead_time_days,
             "min_order_qty": str(min_order_qty) if min_order_qty is not None else None,
+            "safety_stock_qty": str(safety_stock_qty) if safety_stock_qty is not None else None,
         },
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -411,3 +419,43 @@ async def test_manufactured_item_ignores_lead_time_and_moq(client):
     assert lines["FG"]["is_manufactured"] is True
     assert _dec(lines["FG"]["suggested_order_quantity"]) == Decimal("10")  # not rounded to 1000
     assert lines["FG"]["suggested_order_date"] is None  # build, not buy - no order date
+
+
+async def test_safety_stock_inflates_net_requirement(client):
+    """Safety stock is demand on top of the forecast: 5 forecast + a 10 buffer
+    with nothing on hand or on order = buy 15, not 5. An item that leaves the
+    field unset must be untouched by the feature."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    buffered = await _create_item(client, token, "BUF", "Buffered Part", safety_stock_qty=10)
+    plain = await _create_item(client, token, "PLAIN", "Unbuffered Part")
+    await _forecast(client, token, buffered, 5)
+    await _forecast(client, token, plain, 5)
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert _dec(lines["BUF"]["gross_demand"]) == Decimal("5")
+    assert _dec(lines["BUF"]["on_hand"]) == Decimal("0")
+    assert _dec(lines["BUF"]["on_order"]) == Decimal("0")
+    assert _dec(lines["BUF"]["net_requirement"]) == Decimal("15")
+    assert _dec(lines["BUF"]["suggested_order_quantity"]) == Decimal("15")
+    # safety_stock_qty unset -> exactly the pre-feature numbers.
+    assert _dec(lines["PLAIN"]["net_requirement"]) == Decimal("5")
+
+
+async def test_safety_stock_on_assembly_explodes_to_components(client):
+    """A buffered assembly's inflated net is its components' gross - you can't
+    hold a buffer of finished goods without the parts to build it. Components
+    stack their own buffer on top."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    fg = await _create_item(client, token, "FG", "Widget", safety_stock_qty=10)
+    rod = await _create_item(client, token, "ROD", "Steel Rod", safety_stock_qty=7)
+    await _create_active_bom(client, token, fg, [(rod, 2)])
+    await _forecast(client, token, fg, 100)
+
+    plan = await client.get(f"/mrp/plan{HORIZON}", headers=headers)
+    lines = _by_sku(plan.json())
+    assert _dec(lines["FG"]["net_requirement"]) == Decimal("110")
+    assert _dec(lines["ROD"]["dependent_demand"]) == Decimal("220")  # 110 x 2
+    assert _dec(lines["ROD"]["net_requirement"]) == Decimal("227")  # + its own buffer

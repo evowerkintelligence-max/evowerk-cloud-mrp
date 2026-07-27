@@ -213,6 +213,18 @@ async def _explode_and_net(
     Demand-driven: items reached by neither `seed_gross` nor an explosion
     aren't planning actions, so they're omitted.
 
+    Safety stock (item.safety_stock_qty) is added to the net requirement
+    rather than subtracted from available stock - same arithmetic, but it says
+    *why*: the buffer is demand you must satisfy on top of the forecast, so
+    that a forecast miss or a late delivery eats the buffer instead of a
+    stockout. None means "no buffer policy", treated as 0 here, which is
+    byte-for-byte the pre-safety-stock formula - an org that never sets the
+    field sees no plan change at all. The buffer deliberately flows through
+    explosion untouched: an assembly's inflated net becomes its components'
+    gross, which is the correct multi-level behavior (buffering the parent
+    means actually having the parts to build the buffer). Components carry
+    their own buffer on top of that if they set one.
+
     Lead-time offsetting and MOQ rounding are modelled on top of the netting
     above:
     - need_by_date: the earliest date (from seed_due) reaching this item,
@@ -300,7 +312,8 @@ async def _explode_and_net(
         hand = on_hand.get(item_id, Decimal(0))
         order_qty = max(Decimal(0), on_order.get(item_id, Decimal(0)))
         draft_qty = max(Decimal(0), on_draft.get(item_id, Decimal(0)))
-        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty)
+        safety = item.safety_stock_qty or Decimal(0)
+        net = max(Decimal(0), total_gross - hand - order_qty - draft_qty + safety)
         due = need_by.get(item_id)
 
         for child_id, qty_per in children.get(item_id, []):

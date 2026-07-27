@@ -14,6 +14,16 @@ export function poStatusVariant(status: string): Variant {
   return PO_STATUS[status] ?? "neutral";
 }
 
+const SO_STATUS: Record<string, Variant> = {
+  open: "info",
+  done: "success",
+  cancelled: "danger",
+};
+
+export function soStatusVariant(status: string): Variant {
+  return SO_STATUS[status] ?? "neutral";
+}
+
 const ITEM_TYPE: Record<string, Variant> = {
   raw_material: "teal",
   component: "indigo",

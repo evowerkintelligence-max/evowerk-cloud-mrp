@@ -28,6 +28,7 @@ const Dashboard = lazyPage(() => import("./pages/Dashboard"), "Dashboard");
 const Items = lazyPage(() => import("./pages/Items"), "Items");
 const Boms = lazyPage(() => import("./pages/Boms"), "Boms");
 const Procurement = lazyPage(() => import("./pages/Procurement"), "Procurement");
+const Sales = lazyPage(() => import("./pages/Sales"), "Sales");
 const Lots = lazyPage(() => import("./pages/Lots"), "Lots");
 const Warehouse = lazyPage(() => import("./pages/Warehouse"), "Warehouse");
 const Planning = lazyPage(() => import("./pages/Planning"), "Planning");
@@ -159,6 +160,7 @@ export function App() {
             <Route path="/items" element={<Items />} />
             <Route path="/boms" element={<RequireFeature feature="boms"><Boms /></RequireFeature>} />
             <Route path="/procurement" element={<RequireFeature feature="procurement"><Procurement /></RequireFeature>} />
+            <Route path="/sales" element={<RequireFeature feature="sales"><Sales /></RequireFeature>} />
             <Route path="/lots" element={<RequireFeature feature="lots"><Lots /></RequireFeature>} />
             <Route path="/warehouse" element={<RequireFeature feature="warehouse"><Warehouse /></RequireFeature>} />
             <Route path="/planning" element={<RequireFeature feature="planning"><Planning /></RequireFeature>} />

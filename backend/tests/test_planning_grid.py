@@ -937,3 +937,76 @@ async def test_set_planned_quantity_audit_log_carries_quantity_needed_by_and_row
     assert first.event_metadata["rows_replaced"] == 0, "nothing existed yet to replace"
     assert second.event_metadata["quantity"] == "25"
     assert second.event_metadata["rows_replaced"] == 1, "the previous plan's one row must be counted"
+
+
+async def _create_customer(client, token, name="Northwind Ltd"):
+    res = await client.post(
+        "/customers", json={"name": name}, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _soon() -> str:
+    return str(_today() + timedelta(days=30))
+
+
+async def _create_order(client, token, customer, item, qty=10, needed_by=None):
+    res = await client.post(
+        "/sales-orders",
+        json={
+            "customer_id": customer["id"],
+            "needed_by": needed_by or _soon(),
+            "lines": [{"item_id": item["id"], "quantity_ordered": str(qty), "sequence": 0}],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+async def test_committed_quantity_appears_on_the_row(client):
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, customer, item, qty=40, needed_by=_soon())
+
+    grid = await _grid(client, token)
+    row = _product(grid, "WIDGET-1")
+    assert Decimal(row["committed_qty"]) == Decimal("40")
+
+
+async def test_a_product_with_only_committed_demand_still_gets_a_row(client):
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, customer, item, qty=15, needed_by=_soon())
+
+    grid = await _grid(client, token)
+    row = _product(grid, "WIDGET-1")
+    assert Decimal(row["planned_qty"]) == Decimal(0), "nothing was typed"
+    assert Decimal(row["committed_qty"]) == Decimal("15")
+    assert row["materials_status"] == "missing", "an order with no stock must show as short"
+
+
+async def test_committed_quantity_is_zero_without_orders(client):
+    token = await _register_and_login(client)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _plan(client, token, item, 10)
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert Decimal(row["committed_qty"]) == Decimal(0)
+
+
+async def test_a_cancelled_order_leaves_nothing_committed(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _plan(client, token, item, 10)
+    order = await _create_order(client, token, customer, item, qty=40, needed_by=_soon())
+    await client.post(f"/sales-orders/{order['id']}/cancel", headers=headers)
+
+    row = _product(await _grid(client, token), "WIDGET-1")
+    assert Decimal(row["committed_qty"]) == Decimal(0)
+    assert Decimal(row["planned_qty"]) == Decimal("10")

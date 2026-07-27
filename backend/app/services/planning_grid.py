@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.bom import Item
 from app.models.forecast import DemandForecast
 from app.models.procurement import Supplier
+from app.services.demand import load_committed_demand
 from app.services.demand_forecasting import DEFAULT_LOOKBACK_DAYS, compute_weekly_suggestions
 from app.services.demand_history import daily_consumption_by_item
 from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, load_on_hand
@@ -43,6 +44,10 @@ class GridProduct:
     # 1 only for an imported or legacy plan spread across several dates - the
     # frontend needs this to warn before collapsing them into one on edit.
     planned_bucket_count: int
+    # What customers have actually ordered inside the window, as opposed to
+    # planned_qty which is the estimate someone typed. Outstanding quantity on
+    # open sales orders only - see services.demand.load_committed_demand.
+    committed_qty: Decimal
     on_hand: Decimal
     # in_stock | arriving | missing, judged over the components reachable from
     # this product through active BOMs (or the product itself when it has none).
@@ -162,6 +167,7 @@ async def compute_planning_grid(
     planned = {
         item_id: (qty, first, count) for item_id, qty, first, count in forecast_rows
     }
+    committed_qty_by_item, _ = await load_committed_demand(db, org_id, horizon_start, horizon_end)
 
     produced = set(children)
     components = {child for kids in children.values() for child, _ in kids}
@@ -170,10 +176,17 @@ async def compute_planning_grid(
             db, org_id, datetime.now(timezone.utc) - timedelta(days=CONSUMPTION_LOOKBACK_DAYS)
         )
     )
-    product_ids = ((produced | consumed) - components) | set(planned)
+    # Committed items union in the same way planned ones do, outside the
+    # `- components` subtraction: a component sold to a customer directly is a
+    # legitimate product, and an order is a firmer claim to a row than a typed
+    # estimate is.
+    product_ids = ((produced | consumed) - components) | set(planned) | set(committed_qty_by_item)
     # ids that only made the cut because of consumption history - not a
-    # produced top-level item, and not something the user has forecast.
-    consumed_only_ids = (consumed - components) - produced - set(planned)
+    # produced top-level item, not something the user has forecast, and not
+    # something a customer has ordered.
+    consumed_only_ids = (
+        (consumed - components) - produced - set(planned) - set(committed_qty_by_item)
+    )
     if not product_ids:
         return PlanningGrid(
             horizon_start=horizon_start, horizon_end=horizon_end, products=[], to_buy=[]
@@ -249,6 +262,7 @@ async def compute_planning_grid(
                 planned_qty=qty,
                 needed_by=first_period,
                 planned_bucket_count=bucket_count,
+                committed_qty=committed_qty_by_item.get(product_id, Decimal(0)),
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,

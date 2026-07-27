@@ -103,6 +103,11 @@ def downgrade() -> None:
 # app.core.features so a later edit to that registry cannot rewrite history.
 _SALES_FEATURE = "sales"
 
+# See b2e9f4a71c83's GRANTS_FEATURES: declares what this migration hands to
+# orgs that already exist, so test_feature_migration_coverage can prove no
+# core key ships without a backfill.
+GRANTS_FEATURES = [_SALES_FEATURE]
+
 # jsonb_exists rather than the `?` operator: `?` collides with the DBAPI
 # paramstyle and would be read as a bind parameter.
 _OFFLINE_GRANT_SQL = """

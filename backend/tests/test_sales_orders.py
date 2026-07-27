@@ -405,3 +405,210 @@ async def test_orders_explode_through_a_bom(client):
 
     lines = await _plan_lines(client, token)
     assert Decimal(lines["SEAL-1"]["net_requirement"]) == Decimal("20")
+
+
+async def test_order_rejects_a_quantity_beyond_the_column_range(client):
+    """Numeric(12, 4) overflows on Postgres, which would be a 500 rather than
+    a message the user can act on. SQLite does not enforce precision, so only
+    this boundary check catches it."""
+    token = await _register_and_login(client)
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    res = await client.post(
+        "/sales-orders",
+        json={
+            "customer_id": customer["id"],
+            "needed_by": "2030-06-01",
+            "lines": [{"item_id": item["id"], "quantity_ordered": "100000000", "sequence": 0}],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 400
+
+
+async def _create_two_line_order(client, token, customer, first, second, needed_by="2030-06-01"):
+    res = await client.post(
+        "/sales-orders",
+        json={
+            "customer_id": customer["id"],
+            "needed_by": needed_by,
+            "lines": [
+                {"item_id": first[0]["id"], "quantity_ordered": str(first[1]), "sequence": 0},
+                {"item_id": second[0]["id"], "quantity_ordered": str(second[1]), "sequence": 1},
+            ],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+async def test_a_shortfall_on_one_line_rolls_back_the_other_lines_stock(client):
+    """The whole completion is one transaction, so a line that cannot be
+    covered must undo the stock the earlier lines already moved. A single-line
+    order cannot prove this: there is nothing to roll back."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    plenty = await _create_item(client, token, "PLENTY-1")
+    short = await _create_item(client, token, "SHORT-1")
+    await _give_stock(client, token, plenty, 100)
+    await _give_stock(client, token, short, 1)
+    order = await _create_two_line_order(client, token, customer, (plenty, 10), (short, 20))
+
+    res = await client.post(f"/sales-orders/{order['id']}/complete", headers=headers)
+    assert res.status_code == 409
+
+    plenty_inv = await client.get(f"/inventory/{plenty['id']}", headers=headers)
+    assert Decimal(plenty_inv.json()["quantity_on_hand"]) == Decimal("100"), (
+        "the covered line's stock must be put back when a later line is short"
+    )
+    short_inv = await client.get(f"/inventory/{short['id']}", headers=headers)
+    assert Decimal(short_inv.json()["quantity_on_hand"]) == Decimal("1")
+
+    still = await client.get(f"/sales-orders/{order['id']}", headers=headers)
+    assert still.json()["status"] == "open"
+    assert all(
+        Decimal(line["quantity_delivered"]) == Decimal(0) for line in still.json()["lines"]
+    ), "no line may record a delivery when the completion was refused"
+
+
+async def test_editing_an_open_orders_lines_replaces_them(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    first = await _create_item(client, token, "WIDGET-1")
+    second = await _create_item(client, token, "WIDGET-2")
+    order = await _create_order(client, token, customer, first, qty=10)
+
+    res = await client.patch(
+        f"/sales-orders/{order['id']}",
+        json=[{"item_id": second["id"], "quantity_ordered": "7", "sequence": 0}],
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    lines = res.json()["lines"]
+    assert len(lines) == 1
+    assert lines[0]["item_sku"] == "WIDGET-2"
+    assert Decimal(lines[0]["quantity_ordered"]) == Decimal("7")
+
+
+async def test_editing_rejects_an_empty_or_nonpositive_line_set(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    order = await _create_order(client, token, customer, item)
+
+    empty = await client.patch(f"/sales-orders/{order['id']}", json=[], headers=headers)
+    assert empty.status_code == 400
+    zero = await client.patch(
+        f"/sales-orders/{order['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "0", "sequence": 0}],
+        headers=headers,
+    )
+    assert zero.status_code == 400
+
+    # The refused edits left the original line alone.
+    lines = (await client.get(f"/sales-orders/{order['id']}", headers=headers)).json()["lines"]
+    assert Decimal(lines[0]["quantity_ordered"]) == Decimal("10")
+
+
+async def test_a_closed_order_cannot_be_edited(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    order = await _create_order(client, token, customer, item)
+    await client.post(f"/sales-orders/{order['id']}/cancel", headers=headers)
+
+    res = await client.patch(
+        f"/sales-orders/{order['id']}",
+        json=[{"item_id": item["id"], "quantity_ordered": "3", "sequence": 0}],
+        headers=headers,
+    )
+    assert res.status_code == 409
+
+
+async def test_listing_filters_by_status_and_searches(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    northwind = await _create_customer(client, token)
+    contoso = await _create_customer(client, token, name="Contoso")
+    item = await _create_item(client, token, "WIDGET-1")
+    await _create_order(client, token, northwind, item)
+    cancelled = await _create_order(client, token, contoso, item)
+    await client.post(f"/sales-orders/{cancelled['id']}/cancel", headers=headers)
+
+    open_only = await client.get("/sales-orders?status=open", headers=headers)
+    assert [o["customer_name"] for o in open_only.json()] == ["Northwind Ltd"]
+
+    by_customer = await client.get("/sales-orders?q=contoso", headers=headers)
+    assert [o["customer_name"] for o in by_customer.json()] == ["Contoso"]
+
+    by_number = await client.get("/sales-orders?q=2", headers=headers)
+    assert [o["so_number"] for o in by_number.json()] == [2]
+
+    page = await client.get("/sales-orders?limit=1&offset=1", headers=headers)
+    assert [o["so_number"] for o in page.json()] == [2]
+
+
+async def _add_member(test_engine, client, headers):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    org_id = (await client.get("/orgs/me", headers=headers)).json()["id"]
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        import uuid as uuid_module
+
+        session.add(
+            User(
+                org_id=uuid_module.UUID(org_id),
+                email="member@example.com",
+                hashed_password=hash_password(PASSWORD),
+                role="member",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    login = await client.post(
+        "/auth/login", json={"email": "member@example.com", "password": PASSWORD}
+    )
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+async def test_a_member_can_read_orders_but_not_raise_or_complete_them(client, test_engine):
+    """Completing an order moves stock, so that a plain member cannot do it is
+    worth pinning rather than inferring from the decorator."""
+    token = await _register_and_login(client, email="owner3@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await _create_item(client, token, "WIDGET-1")
+    await _give_stock(client, token, item, 50)
+    order = await _create_order(client, token, customer, item, qty=10)
+
+    member_headers = await _add_member(test_engine, client, headers)
+
+    assert (await client.get("/sales-orders", headers=member_headers)).status_code == 200
+    raise_attempt = await client.post(
+        "/sales-orders",
+        json={
+            "customer_id": customer["id"],
+            "needed_by": "2030-06-01",
+            "lines": [{"item_id": item["id"], "quantity_ordered": "1", "sequence": 0}],
+        },
+        headers=member_headers,
+    )
+    assert raise_attempt.status_code == 403
+    assert (
+        await client.post(f"/sales-orders/{order['id']}/complete", headers=member_headers)
+    ).status_code == 403
+    assert (
+        await client.post(f"/sales-orders/{order['id']}/cancel", headers=member_headers)
+    ).status_code == 403
+
+    inv = await client.get(f"/inventory/{item['id']}", headers=headers)
+    assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("50"), "no refused call may move stock"

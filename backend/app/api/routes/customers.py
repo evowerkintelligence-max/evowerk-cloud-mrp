@@ -4,14 +4,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
-from app.models.sales import Customer
+from app.models.sales import Customer, SalesOrder
 
 router = APIRouter(prefix="/customers", tags=["customers"])
 
@@ -133,6 +133,23 @@ async def _set_active(
     customer_id: uuid.UUID, is_active: bool, current: CurrentUser, db: AsyncSession
 ) -> CustomerResponse:
     customer = await get_or_404(db, Customer, current.org_id, customer_id, "Customer not found")
+    if not is_active:
+        # Deactivating drops the customer out of the order-entry picker while
+        # their open orders keep counting as demand, which leaves a live
+        # commitment attached to a customer nobody can select. Close the
+        # orders first (complete or cancel), then deactivate.
+        open_orders = await db.scalar(
+            select(func.count(SalesOrder.id)).where(
+                SalesOrder.org_id == current.org_id,
+                SalesOrder.customer_id == customer_id,
+                SalesOrder.status == "open",
+            )
+        )
+        if open_orders:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{customer.name} has {open_orders} open order(s), close them first",
+            )
     customer.is_active = is_active
     await db.flush()
     await log_event(

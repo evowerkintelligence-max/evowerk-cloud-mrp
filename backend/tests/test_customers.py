@@ -115,3 +115,41 @@ async def test_a_member_can_read_customers_but_not_create_them(client, test_engi
     assert create.status_code == 403
     listing = await client.get("/customers", headers=member_headers)
     assert listing.status_code == 200
+
+
+async def test_a_customer_with_open_orders_cannot_be_deactivated(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    customer = await _create_customer(client, token)
+    item = await client.post(
+        "/items",
+        json={
+            "sku": "WIDGET-1",
+            "name": "Widget",
+            "item_type": "finished_good",
+            "unit_of_measure": "ea",
+            "is_lot_tracked": False,
+        },
+        headers=headers,
+    )
+    assert item.status_code == 201, item.text
+    order = await client.post(
+        "/sales-orders",
+        json={
+            "customer_id": customer["id"],
+            "needed_by": "2030-06-01",
+            "lines": [{"item_id": item.json()["id"], "quantity_ordered": "5", "sequence": 0}],
+        },
+        headers=headers,
+    )
+    assert order.status_code == 201, order.text
+
+    refused = await client.post(f"/customers/{customer['id']}/deactivate", headers=headers)
+    assert refused.status_code == 409
+    assert "open order" in refused.json()["detail"]
+
+    # Closing the order releases the customer.
+    await client.post(f"/sales-orders/{order.json()['id']}/cancel", headers=headers)
+    allowed = await client.post(f"/customers/{customer['id']}/deactivate", headers=headers)
+    assert allowed.status_code == 200
+    assert allowed.json()["is_active"] is False

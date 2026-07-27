@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from collections import defaultdict
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -26,6 +27,10 @@ router = APIRouter(prefix="/sales-orders", tags=["sales-orders"])
 # MAX_PO_NUMBER_ATTEMPTS: two concurrent creates in one org can read the same
 # max and collide on uq_sos_org_number.
 MAX_SO_NUMBER_ATTEMPTS = 3
+
+# Numeric(12, 4) on SalesOrderLine.quantity_ordered: 8 digits before the
+# decimal point. Matches the planning grid write's own bound.
+MAX_LINE_QUANTITY = 100_000_000
 
 
 class SalesOrderLineInput(BaseModel):
@@ -81,18 +86,52 @@ def _so_to_response(so: SalesOrder, customer: Customer) -> SalesOrderResponse:
 
 
 async def _fetch_so_lines_with_items(
-    db: AsyncSession, so_id: uuid.UUID, *, for_update: bool = False
+    db: AsyncSession, org_id: uuid.UUID, so_id: uuid.UUID, *, for_update: bool = False
 ) -> list[tuple[SalesOrderLine, Item]]:
     query = (
         select(SalesOrderLine, Item)
         .join(Item, Item.id == SalesOrderLine.item_id)
-        .where(SalesOrderLine.so_id == so_id)
+        # so_id is already org-verified by every caller; the org_id filter is
+        # belt and braces, matching the rest of this module.
+        .where(SalesOrderLine.org_id == org_id, SalesOrderLine.so_id == so_id)
         .order_by(SalesOrderLine.sequence)
     )
     if for_update:
         query = query.with_for_update(of=SalesOrderLine)
     result = await db.execute(query)
     return result.all()
+
+
+def _line_to_response(line: SalesOrderLine, item: Item) -> SalesOrderLineResponse:
+    return SalesOrderLineResponse(
+        id=str(line.id),
+        item_id=str(line.item_id),
+        item_sku=item.sku,
+        item_name=item.name,
+        quantity_ordered=line.quantity_ordered,
+        quantity_delivered=line.quantity_delivered,
+        sequence=line.sequence,
+    )
+
+
+async def _fetch_lines_for_orders(
+    db: AsyncSession, org_id: uuid.UUID, so_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[SalesOrderLineResponse]]:
+    """Every line for a page of orders in one query, grouped by order."""
+    if not so_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(SalesOrderLine, Item)
+            .join(Item, Item.id == SalesOrderLine.item_id)
+            .where(SalesOrderLine.org_id == org_id, SalesOrderLine.so_id.in_(so_ids))
+            .order_by(SalesOrderLine.sequence)
+        )
+    ).all()
+    grouped: dict[uuid.UUID, list[SalesOrderLineResponse]] = defaultdict(list)
+    for line, item in rows:
+        grouped[line.so_id].append(_line_to_response(line, item))
+    return grouped
 
 
 async def _validate_lines(
@@ -103,6 +142,12 @@ async def _validate_lines(
     for line_in in lines_in:
         if line_in.quantity_ordered <= 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "quantity must be positive")
+        # Numeric(12, 4) holds 8 integer digits. Postgres raises a numeric
+        # overflow on anything larger, which would surface as a 500 rather
+        # than a message the user can act on. Same bound the planning grid
+        # write uses.
+        if line_in.quantity_ordered >= MAX_LINE_QUANTITY:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "that quantity is too large")
         try:
             item_id = uuid.UUID(line_in.item_id)
         except ValueError:
@@ -190,22 +235,14 @@ async def _detail_response(
     db: AsyncSession, so: SalesOrder, customer: Customer
 ) -> SalesOrderDetailResponse:
     lines = [
-        SalesOrderLineResponse(
-            id=str(line.id),
-            item_id=str(line.item_id),
-            item_sku=item.sku,
-            item_name=item.name,
-            quantity_ordered=line.quantity_ordered,
-            quantity_delivered=line.quantity_delivered,
-            sequence=line.sequence,
-        )
-        for line, item in await _fetch_so_lines_with_items(db, so.id)
+        _line_to_response(line, item)
+        for line, item in await _fetch_so_lines_with_items(db, so.org_id, so.id)
     ]
     base = _so_to_response(so, customer)
     return SalesOrderDetailResponse(**base.model_dump(), lines=lines)
 
 
-@router.get("", response_model=list[SalesOrderResponse])
+@router.get("", response_model=list[SalesOrderDetailResponse])
 async def list_sales_orders(
     q: str | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
@@ -226,8 +263,19 @@ async def list_sales_orders(
     if status_filter:
         query = query.where(SalesOrder.status == status_filter)
     query = query.order_by(SalesOrder.so_number).limit(limit).offset(offset)
-    result = await db.execute(query)
-    return [_so_to_response(so, customer) for so, customer in result.all()]
+    rows = (await db.execute(query)).all()
+
+    # The list has to show the product and quantity, so the lines ship with it.
+    # One grouped query for the whole page rather than one per row: the panel
+    # renders up to `limit` orders, and a per-row fetch made that many
+    # round trips.
+    lines_by_so = await _fetch_lines_for_orders(db, current.org_id, [so.id for so, _ in rows])
+    return [
+        SalesOrderDetailResponse(
+            **_so_to_response(so, customer).model_dump(), lines=lines_by_so.get(so.id, [])
+        )
+        for so, customer in rows
+    ]
 
 
 @router.get("/{so_id}", response_model=SalesOrderDetailResponse)
@@ -266,6 +314,9 @@ async def update_sales_order_lines(
                 sequence=line_in.sequence,
             )
         )
+    # Only child rows changed, so SQLAlchemy's onupdate never fires on the
+    # parent; touch it so updated_at still means "last changed".
+    so.updated_at = datetime.now(timezone.utc)
     await db.flush()
 
     await log_event(
@@ -300,15 +351,18 @@ async def complete_sales_order(
     location_id = await resolve_location_id(db, current.org_id, None)
 
     moved: dict[str, str] = {}
-    for line, item in await _fetch_so_lines_with_items(db, so.id, for_update=True):
+    for line, item in await _fetch_so_lines_with_items(db, current.org_id, so.id, for_update=True):
         outstanding = line.quantity_ordered - line.quantity_delivered
         if outstanding <= 0:
             continue
-        # Two paths on purpose, do not collapse them into one: lot-tracked
-        # stock lives in its own subsystem and apply_inventory_delta refuses
-        # it outright, while non-lot stock has no lots to draw from. Both
-        # raise 409 with a usable message when short, so there is no
-        # pre-flight availability check here.
+        # Two paths on purpose, do not collapse them into one. Lot-tracked
+        # stock lives in its own subsystem; apply_inventory_delta does not
+        # check for it, so sending a lot-tracked item down that path would
+        # silently write an InventoryBalance row alongside the lots and
+        # double-count the stock. This branch IS the guard. Non-lot stock has
+        # no lots to draw from and must take the other path. Both raise 409
+        # with a usable message when short, so there is no pre-flight
+        # availability check here.
         if item.is_lot_tracked:
             consumed = await consume_lot_fefo(
                 db,

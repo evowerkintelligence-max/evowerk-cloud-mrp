@@ -18,7 +18,9 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import ensure_utc
+from app.models.bom import Item
 from app.models.pace_tracking import PaceSession, PaceTap
+from app.models.work_order import WorkOrder
 from app.services import datasets as ds_service
 
 _PAUSE_FIELD = {"breakdown": "unplanned_dt_min", "setup": "planned_dt_min", "other": "other_dt_min"}
@@ -32,11 +34,37 @@ async def start_session(
     line: str,
     operator: str,
     target_rate: float | None,
+    work_order_id: uuid.UUID | None = None,
 ) -> PaceSession:
-    session = PaceSession(org_id=org_id, created_by=created_by, line=line, operator=operator, target_rate=target_rate)
+    session = PaceSession(
+        org_id=org_id,
+        created_by=created_by,
+        line=line,
+        operator=operator,
+        target_rate=target_rate,
+        work_order_id=work_order_id,
+    )
     db.add(session)
     await db.flush()
     return session
+
+
+async def linked_job_labels(
+    db: AsyncSession, session: PaceSession
+) -> tuple[int | None, str | None]:
+    """The job number and product SKU behind a linked session, or (None, None).
+    One query, and none at all for the unlinked sessions that are still the
+    common case."""
+    if session.work_order_id is None:
+        return None, None
+    row = (
+        await db.execute(
+            select(WorkOrder.wo_number, Item.sku)
+            .join(Item, Item.id == WorkOrder.item_id)
+            .where(WorkOrder.id == session.work_order_id)
+        )
+    ).first()
+    return (row[0], row[1]) if row is not None else (None, None)
 
 
 async def tap_counts(db: AsyncSession, session_id: uuid.UUID) -> tuple[int, int]:
@@ -136,6 +164,14 @@ async def stop_session(
     if session.target_rate is not None:
         header.append("target_rate")
         row.append(session.target_rate)
+    # Same conditional shape as target_rate above: an unlinked session's CSV
+    # keeps exactly the columns it has today, so every shipped OEE dashboard
+    # reading these datasets is unaffected, while a linked session gains the one
+    # column that lets OEE group by what was actually being made.
+    _, product_sku = await linked_job_labels(db, session)
+    if session.work_order_id is not None:
+        header.append("product")
+        row.append(product_sku)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)

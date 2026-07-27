@@ -15,6 +15,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.pace_tracking import PaceSession
+from app.models.work_order import WorkOrder
 from app.services import pace_tracking as pace_service
 
 router = APIRouter(prefix="/pace", tags=["pace-tracking"])
@@ -27,6 +28,9 @@ class PaceSessionCreateRequest(BaseModel):
     line: str = Field(..., min_length=1)
     operator: str = Field(..., min_length=1)
     target_rate: Optional[float] = Field(default=None, gt=0)
+    # Optional: the free-text line/operator session is still the whole feature
+    # for a shop not running work orders.
+    work_order_id: Optional[uuid.UUID] = None
 
 
 class PaceTapRequest(BaseModel):
@@ -54,11 +58,17 @@ class PaceSessionResponse(BaseModel):
     unplanned_dt_min: float
     planned_dt_min: float
     other_dt_min: float
+    work_order_id: Optional[str]
+    # Both null unless the session is linked. They ride the response so the UI
+    # can say what a session is running without a second round trip.
+    wo_number: Optional[int]
+    product_sku: Optional[str]
 
 
 async def _to_response(db: AsyncSession, session: PaceSession) -> PaceSessionResponse:
     good, reject = await pace_service.tap_counts(db, session.id)
     reasons = await pace_service.reason_counts(db, session.id)
+    wo_number, product_sku = await pace_service.linked_job_labels(db, session)
     return PaceSessionResponse(
         id=str(session.id),
         line=session.line,
@@ -75,6 +85,9 @@ async def _to_response(db: AsyncSession, session: PaceSession) -> PaceSessionRes
         unplanned_dt_min=session.unplanned_dt_min,
         planned_dt_min=session.planned_dt_min,
         other_dt_min=session.other_dt_min,
+        work_order_id=str(session.work_order_id) if session.work_order_id else None,
+        wo_number=wo_number,
+        product_sku=product_sku,
     )
 
 
@@ -88,9 +101,22 @@ async def create_session(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if req.work_order_id is not None:
+        # Checked here rather than trusting the FK: a cross-org id would
+        # otherwise be accepted and leak that org's product into this org's
+        # dataset.
+        job = await db.scalar(
+            select(WorkOrder).where(
+                WorkOrder.org_id == current.org_id, WorkOrder.id == req.work_order_id
+            )
+        )
+        if job is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "job not found")
+
     session = await pace_service.start_session(
         db, org_id=current.org_id, created_by=current.id,
         line=req.line, operator=req.operator, target_rate=req.target_rate,
+        work_order_id=req.work_order_id,
     )
     await db.commit()
     await db.refresh(session)

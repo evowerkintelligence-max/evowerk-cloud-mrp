@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -253,3 +254,202 @@ async def test_editing_rejects_a_bad_quantity(client):
     # The refused edits left the original quantity alone.
     still = await client.get(f"/work-orders/{job['id']}", headers=headers)
     assert still.json()["quantity_planned"] == "10.0000"
+
+
+def _in_days(days: int) -> str:
+    return (datetime.now(timezone.utc).date() + timedelta(days=days)).isoformat()
+
+
+async def _give_stock(client, token, item, qty):
+    res = await client.post(
+        f"/inventory/{item['id']}/adjust",
+        json={"quantity": str(qty), "reason_code": "found_stock"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["applied"] is True
+    return res
+
+
+async def _receive_into_lot(client, token, item, qty, lot_number):
+    """Gives a lot-tracked item real on-hand stock via a received PO lot. Lot
+    stock cannot be seeded any other way, so this needs a supplier too."""
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await client.post(
+        "/suppliers", json={"name": f"Acme Metals {lot_number}"}, headers=headers
+    )
+    assert supplier.status_code == 201, supplier.text
+    po = await client.post(
+        "/purchase-orders", json={"supplier_id": supplier.json()["id"]}, headers=headers
+    )
+    po_id = po.json()["id"]
+    lines = await client.patch(
+        f"/purchase-orders/{po_id}",
+        json=[{"item_id": item["id"], "quantity_ordered": str(qty), "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    line_id = lines.json()["lines"][0]["id"]
+    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
+    recv = await client.post(
+        f"/purchase-orders/{po_id}/receive",
+        json=[{"po_line_id": line_id, "quantity": str(qty), "lot_number": lot_number}],
+        headers=headers,
+    )
+    assert recv.status_code == 200, recv.text
+
+
+async def _start(client, token, job):
+    return await client.post(
+        f"/work-orders/{job['id']}/start", headers={"Authorization": f"Bearer {token}"}
+    )
+
+
+async def test_starting_consumes_the_stored_requirements(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    await _give_stock(client, token, seal, 100)
+    job = await _raise_job(client, token, pump, qty=10)
+
+    res = await _start(client, token, job)
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "in_progress"
+    assert res.json()["started_at"] is not None
+
+    inv = await client.get(f"/inventory/{seal['id']}", headers=headers)
+    assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("80")
+
+
+async def test_a_shortfall_on_one_component_rolls_back_the_others(client):
+    """One transaction, so a job short on its third component must undo the
+    first two. A single-component job cannot prove this."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    plenty_a = await _create_item(client, token, "PLENTY-A")
+    plenty_b = await _create_item(client, token, "PLENTY-B")
+    short = await _create_item(client, token, "SHORT-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(plenty_a, 1), (plenty_b, 1), (short, 1)])
+    await _give_stock(client, token, plenty_a, 100)
+    await _give_stock(client, token, plenty_b, 100)
+    await _give_stock(client, token, short, 1)
+    job = await _raise_job(client, token, pump, qty=10)
+
+    res = await _start(client, token, job)
+    assert res.status_code == 409
+
+    for item, expected in ((plenty_a, "100"), (plenty_b, "100"), (short, "1")):
+        inv = await client.get(f"/inventory/{item['id']}", headers=headers)
+        assert Decimal(inv.json()["quantity_on_hand"]) == Decimal(expected), item["sku"]
+    still = await client.get(f"/work-orders/{job['id']}", headers=headers)
+    assert still.json()["status"] == "scheduled"
+
+
+async def test_the_more_urgent_job_wins_contested_stock(client):
+    """Claims rank by scheduled_start, so a job due sooner starts even though
+    a later job was raised first and holds the material."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 150)
+
+    later = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(30))
+    sooner = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(2))
+
+    assert (await _start(client, token, sooner)).status_code == 200
+
+    refused = await _start(client, token, later)
+    assert refused.status_code == 409
+    assert "SEAL-1" in refused.json()["detail"]
+
+
+async def test_a_later_job_cannot_block_a_sooner_one(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 150)
+
+    await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(30))
+    sooner = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(2))
+
+    assert (await _start(client, token, sooner)).status_code == 200, (
+        "a job due next month must not hold stock a job due this week needs"
+    )
+
+
+async def test_a_job_scheduled_beyond_the_horizon_holds_nothing(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 150)
+
+    await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(400))
+    near = await _raise_job(client, token, pump, qty=100, scheduled_start=_in_days(2))
+
+    assert (await _start(client, token, near)).status_code == 200
+
+
+async def test_a_job_does_not_block_itself(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 10)
+    job = await _raise_job(client, token, pump, qty=10)
+
+    assert (await _start(client, token, job)).status_code == 200
+
+
+async def test_starting_twice_is_refused(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 100)
+    job = await _raise_job(client, token, pump, qty=10)
+
+    assert (await _start(client, token, job)).status_code == 200
+    assert (await _start(client, token, job)).status_code == 409
+
+    inv = await client.get(f"/inventory/{seal['id']}", headers=headers)
+    assert Decimal(inv.json()["quantity_on_hand"]) == Decimal("90"), "stock must come off once"
+
+
+async def test_a_started_job_cannot_be_edited(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "SEAL-1")
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 1)])
+    await _give_stock(client, token, seal, 100)
+    job = await _raise_job(client, token, pump, qty=10)
+    await _start(client, token, job)
+
+    res = await client.patch(
+        f"/work-orders/{job['id']}", json={"quantity_planned": "20"}, headers=headers
+    )
+    assert res.status_code == 409
+
+
+async def test_starting_a_lot_tracked_component_draws_from_lots(client):
+    """A lot-tracked component cannot go through apply_inventory_delta, so
+    this pins the other branch."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    seal = await _create_item(client, token, "TRACKED-SEAL", is_lot_tracked=True)
+    pump = await _create_item(client, token, "PUMP-1")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    await _receive_into_lot(client, token, seal, qty=100, lot_number="LOT-A")
+    job = await _raise_job(client, token, pump, qty=10)
+
+    assert (await _start(client, token, job)).status_code == 200
+
+    lots = await client.get("/lots", headers=headers)
+    remaining = sum(Decimal(lot["quantity_remaining"]) for lot in lots.json())
+    assert remaining == Decimal("80")

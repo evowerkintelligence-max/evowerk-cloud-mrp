@@ -15,10 +15,19 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.bom import Item
+from app.models.inventory import InventoryBalance
 from app.models.location import Location
-from app.models.work_order import WorkOrder, WorkOrderComponent
+from app.models.lot import Lot, LotTransaction
+from app.models.work_order import WorkOrder, WorkOrderComponent, WorkOrderComponentLot
+from app.services.inventory import apply_inventory_delta
 from app.services.locations import resolve_location_id
-from app.services.work_orders import active_bom_id, component_requirements
+from app.services.lots import consume_lot_fefo
+from app.services.work_orders import (
+    active_bom_id,
+    blocking_job,
+    component_requirements,
+    reserved_by_higher_priority,
+)
 
 router = APIRouter(prefix="/work-orders", tags=["work-orders"])
 
@@ -38,8 +47,9 @@ class WorkOrderCreateRequest(BaseModel):
     scheduled_start: date | None = None
     location_id: str | None = None
     notes: str | None = None
-    # Validated here but not acted on until Task 4, which wires it to the
-    # start path. Not dead: this is where the field first appears on the wire.
+    # Raise and start in the one request, so the grid's Make button is one
+    # click. Shares the create's transaction: a job that cannot be started is
+    # not raised either.
     start_now: bool = False
 
 
@@ -155,6 +165,169 @@ async def _detail_response(
     return _wo_to_response(wo, item, location, components)
 
 
+def _plain(quantity: Decimal) -> str:
+    """20.0000 reads as 20 in a message a shop-floor user has to act on."""
+    return format(quantity.normalize(), "f")
+
+
+async def _lock_component_stock(
+    db: AsyncSession, org_id: uuid.UUID, location_id: uuid.UUID, item_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, Decimal]:
+    """On-hand at this location per item, from whichever subsystem holds it,
+    with those rows locked for the rest of the transaction. Lot-tracked items
+    count only active, non-depleted lots, the same stock consume_lot_fefo is
+    willing to draw from, so the check and the consume agree.
+    """
+    balances = (
+        await db.execute(
+            select(InventoryBalance.item_id, InventoryBalance.quantity_on_hand)
+            .where(
+                InventoryBalance.org_id == org_id,
+                InventoryBalance.location_id == location_id,
+                InventoryBalance.item_id.in_(item_ids),
+            )
+            .order_by(InventoryBalance.item_id)
+            .with_for_update()
+        )
+    ).all()
+    lots = (
+        await db.execute(
+            select(Lot.item_id, Lot.quantity_remaining)
+            .where(
+                Lot.org_id == org_id,
+                Lot.location_id == location_id,
+                Lot.item_id.in_(item_ids),
+                Lot.status == "active",
+                Lot.quantity_remaining > 0,
+            )
+            .order_by(Lot.item_id, Lot.id)
+            .with_for_update()
+        )
+    ).all()
+    on_hand: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
+    for item_id, quantity in (*balances, *lots):
+        on_hand[item_id] += quantity
+    return on_hand
+
+
+async def _start_job(db: AsyncSession, job: WorkOrder, current: CurrentUser) -> None:
+    """Take the job's components off the shelf and mark it running.
+
+    Writes, never commits: the caller owns the transaction, so a job short on
+    its third component rolls back the first two rather than half-consuming
+    itself. That is also why there is no pre-flight availability sweep here.
+    """
+    if job.status != "scheduled":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {job.wo_number} is {job.status}")
+
+    rows = (
+        await db.execute(
+            select(WorkOrderComponent, Item)
+            .join(Item, Item.id == WorkOrderComponent.item_id)
+            .where(WorkOrderComponent.org_id == current.org_id, WorkOrderComponent.wo_id == job.id)
+            .order_by(Item.id)
+        )
+    ).all()
+
+    # Lock the stock this start is about to read and write, ordered by item
+    # id, BEFORE computing availability. Two jobs sharing components would
+    # otherwise both read the same free quantity and both pass, and the
+    # loser would fail later with a confusing shortfall instead of a
+    # reservation message. The deterministic order is what stops two jobs
+    # locking the same pair in opposite orders and deadlocking. The suite
+    # runs on SQLite where FOR UPDATE is a no-op, so this is guaranteed by
+    # the query and by review, not by a concurrency test.
+    on_hand = await _lock_component_stock(
+        db, current.org_id, job.location_id, [item.id for _, item in rows]
+    )
+    reserved = await reserved_by_higher_priority(db, current.org_id, job)
+
+    moved: dict[str, str] = {}
+    for component, item in rows:
+        free = on_hand.get(item.id, Decimal(0)) - reserved.get(item.id, Decimal(0))
+        if free < component.quantity_required:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                await _shortfall_detail(db, job, item, component.quantity_required - free, reserved),
+            )
+
+        # Two paths on purpose, do not collapse them. apply_inventory_delta
+        # does not check for lot tracking, so sending a lot-tracked item
+        # down it would write an InventoryBalance row alongside the lots and
+        # double-count the stock. This branch IS the guard.
+        if item.is_lot_tracked:
+            consumptions = await consume_lot_fefo(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                location_id=job.location_id,
+                quantity=component.quantity_required,
+            )
+            for entry in consumptions:
+                db.add(
+                    WorkOrderComponentLot(
+                        org_id=current.org_id,
+                        wo_component_id=component.id,
+                        lot_id=entry.lot.id,
+                        quantity=entry.quantity,
+                    )
+                )
+                db.add(
+                    LotTransaction(
+                        org_id=current.org_id,
+                        lot_id=entry.lot.id,
+                        transaction_type="consumption",
+                        quantity=entry.quantity,
+                        reason="work order",
+                        created_by=current.id,
+                    )
+                )
+        else:
+            await apply_inventory_delta(
+                db,
+                org_id=current.org_id,
+                item_id=item.id,
+                location_id=job.location_id,
+                delta=-component.quantity_required,
+                transaction_type="consumption",
+                created_by=current.id,
+                reason="work order",
+            )
+        component.quantity_consumed = component.quantity_required
+        moved[item.sku] = str(component.quantity_required)
+
+    job.status = "in_progress"
+    job.started_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    await log_event(
+        db,
+        action="work_order.started",
+        org_id=current.org_id,
+        actor_user_id=current.id,
+        target=str(job.id),
+        metadata={"wo_number": job.wo_number, "moved": moved},
+    )
+
+
+async def _shortfall_detail(
+    db: AsyncSession,
+    job: WorkOrder,
+    item: Item,
+    shortfall: Decimal,
+    reserved: dict[uuid.UUID, Decimal],
+) -> str:
+    """Both extra lookups live here, on the refusal path only, so the start
+    that succeeds pays for neither."""
+    location = await get_or_404(db, Location, job.org_id, job.location_id, "Location not found")
+    detail = f"{item.sku}: {_plain(shortfall)} short at {location.code}"
+    holder = await blocking_job(db, job.org_id, job, item.id) if reserved.get(item.id) else None
+    if holder is not None:
+        due = holder.scheduled_start.isoformat() if holder.scheduled_start else "now"
+        detail += f", WO-{holder.wo_number} needs them on {due}"
+    return detail
+
+
 @router.post("", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_work_order(
     body: WorkOrderCreateRequest,
@@ -229,6 +402,8 @@ async def create_work_order(
         target=str(wo.id),
         metadata={"wo_number": wo.wo_number, "item_id": str(item_id)},
     )
+    if body.start_now:
+        await _start_job(db, wo, current)
     await db.commit()
     location = await get_or_404(db, Location, current.org_id, location_id, "Location not found")
     return await _detail_response(db, wo, item, location)
@@ -278,6 +453,27 @@ async def get_work_order(
     db: AsyncSession = Depends(get_db),
 ):
     wo = await get_or_404(db, WorkOrder, current.org_id, wo_id, "Work order not found")
+    item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+    location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
+    return await _detail_response(db, wo, item, location)
+
+
+@router.post("/{wo_id}/start", response_model=WorkOrderResponse)
+async def start_work_order(
+    wo_id: uuid.UUID,
+    current: CurrentUser = Depends(require_role("owner", "manager")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Begin the job: its components leave stock now, so what the shop is
+    holding and what the system says match while the job is running."""
+    # Locked, not just read: two concurrent starts would otherwise both see
+    # `scheduled` and both consume.
+    wo = await get_or_404(
+        db, WorkOrder, current.org_id, wo_id, "Work order not found", for_update=True
+    )
+    await _start_job(db, wo, current)
+    await db.commit()
+
     item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
     location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
     return await _detail_response(db, wo, item, location)

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.bom import Bom
+from app.models.work_order import WorkOrder, WorkOrderComponent
 from app.services.mrp import load_bom_children
+from app.services.planning_grid import resolve_grid_window
+
+# A job with no scheduled_start is due now, so it outranks every dated job.
+# date.min as the sort key expresses that without a second branch in SQL.
+_UNDATED_RANKS_FIRST = date.min
 
 
 async def active_bom_id(db: AsyncSession, org_id: uuid.UUID, item_id: uuid.UUID) -> uuid.UUID | None:
@@ -34,3 +42,80 @@ async def component_requirements(
     """
     children = await load_bom_children(db, org_id)
     return [(child_id, qty_per * quantity) for child_id, qty_per in children.get(item_id, [])]
+
+
+def _rank() -> ColumnElement[date]:
+    return func.coalesce(WorkOrder.scheduled_start, _UNDATED_RANKS_FIRST)
+
+
+def _outranks(org_id: uuid.UUID, job: WorkOrder, horizon_end: date) -> list[ColumnElement[bool]]:
+    """Scheduled jobs at the same location whose claim on stock comes ahead of
+    `job`. Shared by the reservation total and by the refusal message's lookup
+    of who is holding the material, so the two can never disagree about who
+    outranks whom.
+    """
+    rank = _rank()
+    job_rank = job.scheduled_start or _UNDATED_RANKS_FIRST
+    return [
+        WorkOrder.org_id == org_id,
+        WorkOrder.status == "scheduled",
+        WorkOrder.id != job.id,
+        WorkOrder.location_id == job.location_id,
+        rank <= horizon_end,
+        # Outranks this job: due sooner, or due the same day and raised
+        # earlier. Spelled out rather than as a tuple comparison, which
+        # SQLAlchemy does not render portably to SQLite.
+        or_(rank < job_rank, and_(rank == job_rank, WorkOrder.wo_number < job.wo_number)),
+    ]
+
+
+async def reserved_by_higher_priority(
+    db: AsyncSession, org_id: uuid.UUID, job: WorkOrder
+) -> dict[uuid.UUID, Decimal]:
+    """Component quantity per item held by scheduled jobs that outrank `job`.
+
+    Ranking is by scheduled_start, earliest first, with wo_number breaking
+    ties so the order is total and stable. Whoever clicks first decides
+    nothing, which is what makes this a priority rule rather than a race.
+
+    Only jobs inside the planning horizon hold stock, the same bound the
+    engine applies. A job scheduled for next quarter is intent, not a claim
+    on today's shelf, and letting it block this week's work would be the
+    worst of both worlds since it is not even in the plan being looked at.
+    """
+    _, horizon_end = resolve_grid_window()
+    rows = (
+        await db.execute(
+            select(
+                WorkOrderComponent.item_id,
+                func.sum(
+                    WorkOrderComponent.quantity_required - WorkOrderComponent.quantity_consumed
+                ),
+            )
+            .join(WorkOrder, WorkOrder.id == WorkOrderComponent.wo_id)
+            .where(*_outranks(org_id, job, horizon_end))
+            .group_by(WorkOrderComponent.item_id)
+        )
+    ).all()
+    return {item_id: total for item_id, total in rows if total is not None and total > 0}
+
+
+async def blocking_job(
+    db: AsyncSession, org_id: uuid.UUID, job: WorkOrder, item_id: uuid.UUID
+) -> WorkOrder | None:
+    """The most urgent job holding `item_id` ahead of `job`, so a refusal can
+    say who took the stock rather than only that it is gone. Called on the
+    refusal path only, so the happy path pays nothing for it.
+    """
+    _, horizon_end = resolve_grid_window()
+    return await db.scalar(
+        select(WorkOrder)
+        .join(WorkOrderComponent, WorkOrderComponent.wo_id == WorkOrder.id)
+        .where(
+            *_outranks(org_id, job, horizon_end),
+            WorkOrderComponent.item_id == item_id,
+            WorkOrderComponent.quantity_required > WorkOrderComponent.quantity_consumed,
+        )
+        .order_by(_rank(), WorkOrder.wo_number)
+        .limit(1)
+    )

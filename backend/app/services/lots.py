@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.lot import Lot
+from app.services.locations import location_code
 
 # Two concurrent receipts/transfers could both try to create the same new
 # (item, lot_number, location) row. Each attempt runs in its own SAVEPOINT so a
@@ -206,8 +207,10 @@ async def consume_lot_fefo(
         remaining -= take
 
     if remaining > 0:
+        # Named only here, on the way out: the happy path never needs it.
+        code = await location_code(db, location_id)
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Only {quantity - remaining} of {quantity} available as active, unheld stock at this location",
+            f"Only {quantity - remaining} of {quantity} available as active, unheld stock at {code}",
         )
     return consumed

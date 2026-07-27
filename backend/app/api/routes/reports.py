@@ -20,6 +20,7 @@ from app.services.reports import (
     get_saved_report_or_404,
     list_saved_reports,
     narrate_report,
+    reject_retired_kind_sections,
     render,
 )
 
@@ -78,6 +79,7 @@ async def list_custom_reports(current: CurrentUser = Depends(get_current_user), 
 async def create_custom_report(
     req: SavedReportWriteRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
+    reject_retired_kind_sections(req.sections)
     report = SavedReport(
         org_id=current.org_id,
         name=req.name,
@@ -108,6 +110,7 @@ async def update_custom_report(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    reject_retired_kind_sections(req.sections)
     report = await get_saved_report_or_404(db, current.org_id, report_id)
     report.name = req.name
     report.sections = [s.model_dump(mode="json") for s in req.sections]
@@ -171,6 +174,7 @@ async def create_inbox_item(
     req: InboxItemCreateRequest, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     spec = ReportSectionSpec(**req.model_dump(exclude={"label"}))
+    reject_retired_kind_sections([spec])
     item = ReportInboxItem(
         org_id=current.org_id, created_by=current.id, label=req.label,
         spec=spec.model_dump(mode="json"),

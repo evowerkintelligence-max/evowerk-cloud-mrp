@@ -53,6 +53,7 @@ class GridProductResponse(BaseModel):
     on_hand: Decimal
     materials_status: str
     missing_materials: list[str]
+    arriving_is_drafted: bool
     ready_by: date | None
     ready_by_unknown: bool
     suggested_qty: Decimal | None
@@ -119,6 +120,7 @@ def _product_to_response(product: GridProduct) -> GridProductResponse:
         on_hand=product.on_hand,
         materials_status=product.materials_status,
         missing_materials=product.missing_materials,
+        arriving_is_drafted=product.arriving_is_drafted,
         ready_by=product.ready_by,
         ready_by_unknown=product.ready_by_unknown,
         suggested_qty=product.suggested_qty,

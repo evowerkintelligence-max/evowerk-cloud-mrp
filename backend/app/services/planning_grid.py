@@ -65,6 +65,12 @@ class GridProduct:
     # this product through active BOMs (or the product itself when it has none).
     materials_status: str
     missing_materials: list[str]
+    # Meaningful only when materials_status == "arriving": true when every
+    # covering component is on a draft PO only, none of them actually
+    # submitted or in flight. A draft can still be edited or cancelled, so
+    # this is the difference between "on the way" and "nothing has been
+    # sent to a supplier yet".
+    arriving_is_drafted: bool
     # Earliest date the planned quantity can actually be finished: today when
     # every component is on the shelf, otherwise today plus the longest lead
     # time among the components that must still arrive. None when nothing is
@@ -300,6 +306,13 @@ async def compute_planning_grid(
 
         missing_materials: list[str] = []
         arriving = False
+        # True only as long as every "arriving" component's shortfall is
+        # covered solely by a draft PO (on_order and in_production both 0).
+        # A draft is still being edited and can be changed or cancelled
+        # outright, unlike a submitted PO or a job already in flight, so a
+        # row covered only by drafts must not read "Arriving" as if
+        # something had actually been sent to a supplier.
+        arriving_is_drafted = True
         ready_by = horizon_start
         # An arriving/missing component with no lead time on file makes the
         # whole product's ready_by unknowable, not same-day: see
@@ -324,6 +337,8 @@ async def compute_planning_grid(
                     ready_by = max(ready_by, horizon_start + timedelta(days=lead_days))
             elif line.on_hand < line.gross_demand:
                 arriving = True
+                if line.on_order > 0 or line.in_production > 0:
+                    arriving_is_drafted = False
                 if lead_days is None:
                     unknown_lead = True
                 else:
@@ -395,6 +410,7 @@ async def compute_planning_grid(
                 on_hand=on_hand.get(product_id, Decimal(0)),
                 materials_status=status,
                 missing_materials=missing_materials,
+                arriving_is_drafted=arriving and arriving_is_drafted,
                 # Committed demand counts as something to make: a row that
                 # exists only because a customer ordered it still needs a
                 # date, and a blank one on a red row is the least useful

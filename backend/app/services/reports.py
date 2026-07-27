@@ -55,6 +55,23 @@ KINDS = ("inventory-analytics", "rca", "scenario", "dataset")
 # _resolve_kind_report_sections). Never add a kind here to bring it back -
 # these stay permanently unbuildable, only tolerated in stored specs.
 RETIRED_KINDS = ("mrp-plan",)
+
+
+def reject_retired_kind_sections(sections: list[ReportSectionSpec]) -> None:
+    """Creation/update-time guard for saved_reports and report_inbox_items:
+    a NEW spec must not be allowed to reference a retired report_kind, only
+    an old one that already exists is tolerated (see RETIRED_KINDS and
+    _resolve_kind_report_sections, which silently drops the section at
+    render time rather than failing the whole report - the right behavior
+    for a spec that predates the retirement, wrong behavior for one being
+    saved today with no excuse not to know better)."""
+    for section in sections:
+        if section.type == "kind_report" and section.report_kind in RETIRED_KINDS:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"report_kind '{section.report_kind}' has been retired and can no longer "
+                "be used in a new report section",
+            )
 FORMATS = {
     "csv": "text/csv",
     "html": "text/html; charset=utf-8",

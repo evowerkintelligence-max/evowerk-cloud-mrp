@@ -468,6 +468,65 @@ async def test_ready_by_is_null_when_an_arriving_component_has_no_lead_time_on_f
     assert row["ready_by_unknown"] is True
 
 
+async def test_arriving_is_not_drafted_when_covered_by_a_submitted_po(client):
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2", lead_time_days=10)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await client.post("/suppliers", json={"name": "Sealtech"}, headers=headers)
+    po = await client.post(
+        "/purchase-orders", json={"supplier_id": supplier.json()["id"]}, headers=headers
+    )
+    po_id = po.json()["id"]
+    await client.patch(
+        f"/purchase-orders/{po_id}",
+        json=[{"item_id": seal["id"], "quantity_ordered": "500", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    submit = await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
+    assert submit.status_code == 200, submit.text
+
+    await _plan(client, token, pump, 50)
+    grid = await _grid(client, token)
+
+    row = _product(grid, "PUMP-A2")
+    assert row["materials_status"] == "arriving"
+    assert row["arriving_is_drafted"] is False, (
+        "a submitted PO has actually gone to the supplier, so this must not read as drafted"
+    )
+
+
+async def test_arriving_is_drafted_when_covered_only_by_a_draft_po(client):
+    """A draft PO is still being edited and can be changed or cancelled
+    outright, unlike a submitted one - see PurchaseOrder status handling. A
+    row covered only by a draft must not read "Arriving" as if something had
+    actually been sent to a supplier."""
+    token = await _register_and_login(client)
+    seal = await _create_item(client, token, "SEAL-V2", lead_time_days=10)
+    pump = await _create_item(client, token, "PUMP-A2")
+    await _create_active_bom(client, token, pump, [(seal, 2)])
+    headers = {"Authorization": f"Bearer {token}"}
+    supplier = await client.post("/suppliers", json={"name": "Sealtech"}, headers=headers)
+    po = await client.post(
+        "/purchase-orders", json={"supplier_id": supplier.json()["id"]}, headers=headers
+    )
+    po_id = po.json()["id"]
+    await client.patch(
+        f"/purchase-orders/{po_id}",
+        json=[{"item_id": seal["id"], "quantity_ordered": "500", "unit_price": "1", "sequence": 0}],
+        headers=headers,
+    )
+    # Deliberately never submitted: the PO stays a draft.
+
+    await _plan(client, token, pump, 50)
+    grid = await _grid(client, token)
+
+    row = _product(grid, "PUMP-A2")
+    assert row["materials_status"] == "arriving"
+    assert row["arriving_is_drafted"] is True
+
+
 async def test_to_buy_lists_shortfalls_with_supplier_and_urgency(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

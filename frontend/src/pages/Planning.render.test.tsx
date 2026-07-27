@@ -23,6 +23,7 @@ const GRID = {
       on_hand: "8.0000",
       materials_status: "missing",
       missing_materials: ["ALU-6061", "SEAL-V2"],
+      arriving_is_drafted: false,
       ready_by: "2026-08-19",
       ready_by_unknown: false,
       suggested_qty: null,
@@ -44,6 +45,7 @@ const GRID = {
       on_hand: "240.0000",
       materials_status: "in_stock",
       missing_materials: [],
+      arriving_is_drafted: false,
       ready_by: "2026-07-26",
       ready_by_unknown: false,
       suggested_qty: null,
@@ -140,6 +142,28 @@ describe("Planning grid", () => {
     const housingRow = html.slice(html.indexOf("Housing kit"));
     expect(pumpRow).toContain("text-destructive");
     expect(housingRow).toContain("text-success");
+  });
+
+  it("says Arriving when a shortfall is covered by a real, submitted PO or job", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], materials_status: "arriving", arriving_is_drafted: false }],
+      }),
+    );
+    expect(html).toContain("Arriving");
+    expect(html).not.toContain("Drafted, not ordered yet");
+  });
+
+  it("does not claim Arriving when the only cover is a draft PO nobody sent", () => {
+    const html = render((qc) =>
+      qc.setQueryData(["planning-grid"], {
+        ...GRID,
+        products: [{ ...GRID.products[0], materials_status: "arriving", arriving_is_drafted: true }],
+      }),
+    );
+    expect(html).toContain("Drafted, not ordered yet");
+    expect(html).not.toMatch(/>Arriving</);
   });
 
   it("invites the user to add a bill of materials when there is nothing to plan", () => {
@@ -392,6 +416,22 @@ describe("Planning grid", () => {
   it("keeps CSV import available behind a button", () => {
     const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
     expect(html).toContain("Import from CSV");
+  });
+
+  it("hides Import from CSV from a manager, whose submit would 403", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], GRID);
+      qc.setQueryData(["org-me"], { role: "manager" });
+    });
+    expect(html).not.toContain("Import from CSV");
+  });
+
+  it("hides Import from CSV from a member", () => {
+    const html = render((qc) => {
+      qc.setQueryData(["planning-grid"], GRID);
+      qc.setQueryData(["org-me"], { role: "member" });
+    });
+    expect(html).not.toContain("Import from CSV");
   });
 });
 

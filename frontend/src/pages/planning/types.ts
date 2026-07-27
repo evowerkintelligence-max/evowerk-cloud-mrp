@@ -34,6 +34,11 @@ export interface GridProduct {
   on_hand: string;
   materials_status: "in_stock" | "arriving" | "missing";
   missing_materials: string[];
+  /** Meaningful only when materials_status is "arriving": true when every
+   * covering component sits on a draft PO only, none of them actually
+   * submitted or in flight. A draft can still be edited or cancelled, so
+   * this is "on the way" versus "nothing sent to a supplier yet". */
+  arriving_is_drafted: boolean;
   ready_by: string | null;
   /** True when ready_by is null because a component's lead time is not on
    * file, as opposed to null because nothing is planned. Same null, two
@@ -90,7 +95,11 @@ export function materialsStatusLabel(product: GridProduct): string {
     const count = product.missing_materials.length;
     return `${count} missing`;
   }
-  if (product.materials_status === "arriving") return "Arriving";
+  if (product.materials_status === "arriving") {
+    // A draft PO is not a promise: it can still be edited or cancelled
+    // outright, so this must not claim something is actually on its way.
+    return product.arriving_is_drafted ? "Drafted, not ordered yet" : "Arriving";
+  }
   return "All in stock";
 }
 

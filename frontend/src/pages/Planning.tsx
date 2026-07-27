@@ -46,6 +46,12 @@ export function Planning() {
   // than the manager-allowed quantity edit above), so this check is deliberately
   // narrower than canEdit.
   const canOrder = currentUser.data?.role === "owner";
+  // POST /forecasts/import is also owner-only. Kept as its own check rather
+  // than reused from canOrder: the two happen to share a role today, but
+  // nothing ties an ordering permission to an import permission, and the
+  // 403 a non-owner got on submit is the exact bug this button now avoids
+  // showing them in the first place.
+  const canImport = currentUser.data?.role === "owner";
   const grid = useQuery<PlanningGridResponse>({
     queryKey: ["planning-grid"],
     queryFn: async () => {
@@ -71,13 +77,15 @@ export function Planning() {
         title="Planning"
         description="Type how many you plan to make. Green is in stock, amber is on the way, red is missing."
         actions={
-          <Button variant="secondary" size="sm" onClick={() => setShowImport((v) => !v)}>
-            Import from CSV
-          </Button>
+          canImport && (
+            <Button variant="secondary" size="sm" onClick={() => setShowImport((v) => !v)}>
+              Import from CSV
+            </Button>
+          )
         }
       />
 
-      {showImport && <ImportForecastsCsvSection items={items.data ?? []} />}
+      {canImport && showImport && <ImportForecastsCsvSection items={items.data ?? []} />}
 
       {grid.isError && <Alert variant="destructive">{(grid.error as Error).message}</Alert>}
       {error && <Alert variant="destructive">{error}</Alert>}

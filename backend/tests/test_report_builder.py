@@ -446,6 +446,53 @@ async def test_kind_report_section_rejects_unknown_kind(client):
     assert res.status_code == 400
 
 
+async def test_creating_a_report_with_a_retired_kind_is_rejected(client):
+    """Unlike the old-spec render tolerance below, a NEW spec has no excuse
+    to reference a kind that's been retired - reject it at creation instead
+    of silently accepting it and letting the section render empty forever."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "Old plan", "sections": [{"type": "kind_report", "report_kind": "mrp-plan"}]},
+    )
+
+    assert res.status_code == 400
+    assert "retired" in res.json()["detail"].lower()
+
+
+async def test_updating_a_report_to_add_a_retired_kind_is_rejected(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    created = await client.post(
+        "/reports/custom", headers=headers,
+        json={"name": "Fine for now", "sections": []},
+    )
+    report_id = created.json()["id"]
+
+    res = await client.put(
+        f"/reports/custom/{report_id}", headers=headers,
+        json={"name": "Fine for now", "sections": [{"type": "kind_report", "report_kind": "mrp-plan"}]},
+    )
+
+    assert res.status_code == 400
+    assert "retired" in res.json()["detail"].lower()
+
+
+async def test_inbox_item_with_a_retired_kind_is_rejected(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post(
+        "/reports/inbox", headers=headers,
+        json={"label": "Old plan", "type": "kind_report", "report_kind": "mrp-plan"},
+    )
+
+    assert res.status_code == 400
+    assert "retired" in res.json()["detail"].lower()
+
+
 async def test_kind_report_section_with_retired_kind_still_renders_other_sections(client, test_engine):
     """A report saved before the "mrp-plan" export was retired still carries
     it in its stored spec (KINDS no longer includes it). Rendering must skip

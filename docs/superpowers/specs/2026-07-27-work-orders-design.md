@@ -34,7 +34,10 @@ point at.
 - Close the loop on the screen where the decision is made, so the grid's
   "you need 50 pumps" becomes one button.
 - Let a shop plan ahead: a job can be scheduled today and started tomorrow,
-  and a scheduled job reserves its components rather than being invisible.
+  and a scheduled job holds its components so another job cannot quietly
+  eat them first.
+- Make the schedule date mean something: a job late to start says so, and a
+  job scheduled beyond the planning horizon does not distort today's plan.
 - Stop the grid double-counting: a job in flight is incoming supply, so the
   app never tells you to make the same 50 pumps twice.
 - Produce real yield data (planned vs good vs scrap, with start and finish
@@ -51,8 +54,11 @@ point at.
 - **No cross-location sourcing within one job.** A job names one location,
   and its components come from and its output goes to that location. Pulling
   one job's components from several locations at once is a warehouse
-  feature, not a work-order one, and would need an allocation model this
-  phase deliberately avoids.
+  feature, not a work-order one.
+- **No priority between scheduled jobs.** Reservations are held in the order
+  jobs were raised; there is no way to say one job outranks another and
+  should take contested stock. A shop that needs that is asking for
+  scheduling, which is the phase after this one.
 - **No work-order-to-sales-order link.** The grid already nets demand from
   open sales orders, so making to plan serves those orders implicitly.
   Adding an explicit link would add a visible concept for no gain today.
@@ -84,7 +90,10 @@ app.
 - `location_id`: where components come from and finished goods go. Chosen
   when the job is raised, defaulting to the org default via
   `resolve_location_id(db, org_id, None)`.
-- `scheduled_start`: nullable date. When the shop intends to begin.
+- `scheduled_start`: nullable date. When the shop intends to begin. Drives
+  the horizon bound in section 4 and the late flag on the Production page,
+  which is derived in the response rather than stored, exactly as Phase 2
+  derives a sales order's `is_overdue`.
 - `started_at`, `finished_at`: the timing half of the yield data.
 - `notes`, `created_by`, `created_at`, `updated_at`.
 
@@ -119,7 +128,8 @@ scheduled ──start──> in_progress ──finish──> done
 ```
 
 **Raise** computes the component requirements from the item's active BOM and
-writes them, but moves no stock. The job is `scheduled`. From the grid's
+writes them, but moves no stock. The job is `scheduled`, and from this
+moment it holds those components against other jobs (section 3). From the grid's
 Make button the common path is raise-and-start in one action; raising for a
 later date is the same call with `scheduled_start` set and `start_now`
 false.
@@ -136,7 +146,42 @@ From `in_progress` it returns every consumed component, restoring
 lot-tracked stock to the exact lots it was drawn from. It is the escape
 hatch for a mis-keyed job.
 
-## 3. Consuming and producing stock
+## 3. Holding, consuming and producing stock
+
+### Reservations
+
+A scheduled job holds its components. Reserved quantity per item and
+location is the outstanding requirement across `scheduled` jobs:
+`sum(quantity_required - quantity_consumed)`. It is computed from
+`WorkOrderComponent` on demand, not stored, because a stored counter is a
+second source of truth that can drift from the rows it summarises.
+
+Starting a job checks each component against what is actually free:
+
+```
+available = on_hand - reserved by OTHER scheduled jobs at this location
+```
+
+If that is short, the start is refused with a 409 naming the job holding the
+stock, so the answer is "WO-7 has them" rather than a bare shortage. The
+same figure drives whether the grid's Make button is enabled, so a job the
+user cannot start is not offered.
+
+This is deliberately an execution-time guard only. It must **not** be
+subtracted from `on_hand` in the planning engine: section 4 already counts a
+scheduled job's components as demand, and netting the same reservation twice
+would tell the shop to buy components it has already got.
+
+Blocking is genuinely what the shop wants here. Two scheduled jobs each
+needing 100 of 150 on hand means one of them cannot run, and saying so when
+the second is started beats discovering it halfway through.
+
+Under concurrency the check is advisory: two simultaneous starts can both
+read the same free quantity and pass. The physical consumption below is
+still guarded, so one of them fails there instead, with a shortfall message
+rather than a reservation message.
+
+### Stock paths
 
 There is no single stock path, and this is the part most likely to be got
 wrong. `apply_inventory_delta` maintains `InventoryBalance` and does not
@@ -170,6 +215,21 @@ component requirements as demand**:
 - `in_progress`: supply of the finished good only, because its components
   have physically left stock and `on_hand` already reflects them.
 
+**The schedule date bounds this.** A scheduled job counts only when its
+`scheduled_start` falls on or before the horizon end; a job scheduled for
+next quarter is not this quarter's plan and neither its supply nor its
+component demand is counted. Both move together, always: counting the supply
+without the component demand would under-order components, and the reverse
+would over-order them.
+
+There is deliberately no lower bound, matching the rule Phase 2 settled for
+late sales orders. A job that should have started last week is still going
+to happen, so it keeps counting rather than vanishing from the plan on the
+morning it slips. A job with no `scheduled_start` counts as immediate.
+
+An `in_progress` job is unbounded by date: it is running now, whatever its
+schedule said.
+
 The component figures come from `WorkOrderComponent`, not from re-exploding
 the BOM, so a job always plans against the recipe it was raised on.
 
@@ -194,7 +254,10 @@ running.
 
 **Production page.** Lists scheduled, running and recent jobs with number,
 product, planned quantity, location, status and timing, and is where a job
-is started, finished or cancelled. It mirrors the Sales and Procurement
+is started, finished or cancelled. A scheduled job whose `scheduled_start`
+has passed carries a Late badge, the same treatment and wording Phase 2 gave
+an overdue sales order, so the app has one vocabulary for "this should have
+happened by now". It mirrors the Sales and Procurement
 pages, so the app needs no third set of conventions. Raising a job for a
 later date is done here, where the date and location inputs live, rather
 than adding either to the grid row.
@@ -237,6 +300,8 @@ every existing customer;
 House voice: lowercase, terse, no trailing period, concrete numbers or SKU
 interpolated. 400 for malformed input, 409 for state or stock conflicts.
 
+- Components held by another scheduled job: 409 naming the job that holds
+  them, so the user knows which job to cancel or start first.
 - Components short at start: 409 naming the shortfall **and the location**.
   The location is added in the shared inventory and lot services rather than
   wrapped at this caller, so every existing caller's message improves too;
@@ -275,6 +340,21 @@ interpolated. 400 for malformed input, 409 for state or stock conflicts.
 - A `scheduled` job nets as supply *and* raises demand for its components,
   so a scheduled job with no stock leaves the grid asking for its
   components rather than reading "all in stock".
+- A scheduled job holds its components: with 150 on hand and two scheduled
+  jobs needing 100 each, the second is refused at start, and the message
+  names the job holding the stock.
+- Starting the holding job first, then the second, still refuses the
+  second, now as a plain shortfall.
+- Cancelling the holding job releases the stock and the second job starts.
+- A job's own reservation never blocks itself.
+- Reservations do not reach the planning engine: a scheduled job with
+  exactly enough components on hand leaves a net requirement of zero for
+  those components, not a request to buy them again.
+- A job scheduled beyond the horizon end contributes neither supply nor
+  component demand; moving its date inside the horizon makes both appear
+  together.
+- A scheduled job whose date has passed still counts, and reports itself as
+  late to start.
 - An `in_progress` job nets as supply but does **not** re-raise component
   demand, since those components are already consumed.
 - `done` and `cancelled` jobs count for nothing.
@@ -288,12 +368,13 @@ interpolated. 400 for malformed input, 409 for state or stock conflicts.
 
 ## Known limitations
 
-- **A scheduled job reserves components but does not hold them.** The
-  reservation is arithmetic in the plan, not a physical allocation, so
-  another job started first can consume the stock and the scheduled job will
-  then 409 at start. Real allocation needs the model this phase's non-goals
-  exclude.
-- **`scheduled_start` does not drive anything.** It records intent and
-  orders the Production page; nothing warns when a scheduled job is overdue
-  to start, and the engine treats a job scheduled for tomorrow the same as
-  one scheduled for next quarter.
+- **The reservation check is advisory under concurrency.** Two starts racing
+  can both read the same free quantity and pass it; the physical consumption
+  still guards, so one fails there with a shortfall message instead of a
+  reservation one. Closing this properly means locking every component row
+  for the duration of a start, which costs more in contention than the race
+  costs in confusion.
+- **Nothing chases a late job.** A scheduled job past its date says so
+  wherever it is displayed, but no notification goes out and nothing
+  escalates; a job scheduled and forgotten stays quietly late, holding its
+  components, until someone looks at the Production page.

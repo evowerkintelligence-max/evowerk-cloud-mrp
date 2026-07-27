@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useDatasets, ColumnChecklist } from "../analytics/shared";
 import { RunResultsPanel } from "./RunResultsPanel";
 import { TASKS, THOROUGHNESS, type AutoMLTaskType, useAutoMLRun, useAlgorithms, useCreateAutoMLRun } from "./api";
@@ -195,7 +196,7 @@ export function AutoMLRun() {
               {task === "classification" && (
                 <div className="flex items-end">
                   <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={handleImbalance} onChange={(e) => setHandleImbalance(e.target.checked)} />
+                    <Checkbox checked={handleImbalance} onChange={(e) => setHandleImbalance(e.target.checked)} />
                     Handle class imbalance (class_weight="balanced")
                   </label>
                 </div>
@@ -226,6 +227,8 @@ export function AutoMLRun() {
       )}
 
       {!isNew && isFailed && <Alert variant="destructive">{runData?.error ?? "Training failed."}</Alert>}
+
+      {!isNew && isDone && runData && <RunResultsPanel runData={runData} />}
 
       {!isNew && runData?.retrained_from_run_id && (
         <p className="text-xs text-muted-foreground">

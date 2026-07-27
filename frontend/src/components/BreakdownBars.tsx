@@ -10,7 +10,7 @@ export function BreakdownBars({ items }: { items: { label: string; value: number
           </span>
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary">
             <div
-              className="h-full rounded-full bg-primary/70"
+              className="h-full rounded-full bg-gradient-to-r from-primary/60 to-primary transition-[width] duration-500"
               style={{ width: `${(Math.abs(item.value) / max) * 100}%` }}
             />
           </div>

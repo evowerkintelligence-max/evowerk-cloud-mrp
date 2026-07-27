@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Boxes, CheckCircle2, ShoppingCart } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
+import { StatCard } from "@/components/StatCard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -196,6 +198,35 @@ export function BuildCalculatorPanel() {
           <Button onClick={onCalculate} loading={calculate.isPending}>
             Calculate
           </Button>
+
+          {plan && (
+            <div className="grid grid-cols-3 gap-4">
+              {[
+                {
+                  label: "Components",
+                  value: plan.lines.length,
+                  icon: <Boxes />,
+                  tone: "primary" as const,
+                },
+                {
+                  label: "To order",
+                  value: orderableLines.length,
+                  icon: <ShoppingCart />,
+                  tone: "info" as const,
+                },
+                {
+                  label: "Covered by stock",
+                  value: plan.lines.filter(
+                    (l) => !l.is_manufactured && Number(l.net_requirement) <= 0,
+                  ).length,
+                  icon: <CheckCircle2 />,
+                  tone: "success" as const,
+                },
+              ].map((s) => (
+                <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} tone={s.tone} />
+              ))}
+            </div>
+          )}
 
           {plan && (
             <TableWrap>

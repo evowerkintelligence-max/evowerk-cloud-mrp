@@ -339,26 +339,26 @@ function HealthPanel({ id }: { id: string }) {
       ))}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Rows</div>
-          <div className="mt-1 text-xl font-semibold">{fmt(h.row_count)}</div>
-        </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Duplicate rows</div>
-          <div className="mt-1 text-xl font-semibold" style={{ color: h.duplicate_rows_pct > 5 ? C.red : undefined }}>
-            {fmt(h.duplicate_rows)} ({h.duplicate_rows_pct}%)
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Null cells</div>
-          <div className="mt-1 text-xl font-semibold" style={{ color: h.null_cells_pct > 25 ? C.red : undefined }}>
-            {fmt(h.total_null_cells)} ({h.null_cells_pct}%)
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Columns</div>
-          <div className="mt-1 text-xl font-semibold">{h.column_count}</div>
-        </Card>
+        <StatCard label="Rows" value={fmt(h.row_count)} tone="primary" />
+        <StatCard
+          label="Duplicate rows"
+          tone="accent"
+          value={
+            <span className={h.duplicate_rows_pct > 5 ? "text-destructive" : undefined}>
+              {fmt(h.duplicate_rows)} ({h.duplicate_rows_pct}%)
+            </span>
+          }
+        />
+        <StatCard
+          label="Null cells"
+          tone="warning"
+          value={
+            <span className={h.null_cells_pct > 25 ? "text-destructive" : undefined}>
+              {fmt(h.total_null_cells)} ({h.null_cells_pct}%)
+            </span>
+          }
+        />
+        <StatCard label="Columns" value={h.column_count} tone="success" />
       </div>
 
       <Card>

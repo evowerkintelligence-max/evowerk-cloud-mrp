@@ -315,7 +315,7 @@ export function Kpis() {
             <Input value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="manufacturing, quality" />
           </Field>
           <Field label="Breakdown (optional)" hint="Group this KPI by a column — per-machine averages, or a Pareto of a reason column.">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-3">
               <Select
                 value={form.breakdownGroupCol}
                 onChange={(e) => setForm((f) => ({ ...f, breakdownGroupCol: e.target.value }))}

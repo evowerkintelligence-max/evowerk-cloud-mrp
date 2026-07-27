@@ -14,6 +14,7 @@ import {
   paceStatus,
   pct,
   rankedBarOption,
+  token,
 } from "./shared";
 
 interface ThroughputResult {
@@ -87,7 +88,7 @@ export function Throughput() {
                   height={300}
                   option={{
                     tooltip: TOOLTIP,
-                    legend: { textStyle: { color: "#64748b", fontSize: 11 }, top: 4 },
+                    legend: { textStyle: { color: token("--muted-foreground"), fontSize: 11 }, top: 4 },
                     grid: { top: 40, bottom: 28, left: 56, right: 20 },
                     xAxis: {
                       type: "category",

@@ -70,7 +70,7 @@ function chartOption(spec: ChartSpec): EChartsOption {
     const s0 = spec.series[0];
     return {
       tooltip: TOOLTIP,
-      legend: { textStyle: { color: "#64748b", fontSize: 11 }, bottom: 0 },
+      legend: { textStyle: { color: AXIS_LABEL.color, fontSize: 11 }, bottom: 0 },
       series: [
         {
           type: "pie",
@@ -80,14 +80,14 @@ function chartOption(spec: ChartSpec): EChartsOption {
             value: s0?.data?.[i] ?? 0,
             itemStyle: { color: palette[i % palette.length] },
           })),
-          label: { color: "#94a3b8", fontSize: 11 },
+          label: { color: AXIS_LABEL.color, fontSize: 11 },
         },
       ],
     };
   }
   return {
     tooltip: TOOLTIP,
-    legend: spec.series.length > 1 ? { textStyle: { color: "#64748b", fontSize: 11 }, top: 0 } : undefined,
+    legend: spec.series.length > 1 ? { textStyle: { color: AXIS_LABEL.color, fontSize: 11 }, top: 0 } : undefined,
     grid: { top: spec.series.length > 1 ? 32 : 12, right: 16, bottom: 32, left: 48 },
     xAxis: { type: "category", data: spec.x_labels, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE },
     yAxis: { type: "value", axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },

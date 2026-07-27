@@ -2,7 +2,7 @@ import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { StatCard } from "@/components/StatCard";
-import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt, oeeColor, pct, rankedBarOption } from "./shared";
+import { AXIS_LABEL, AXIS_LINE, C, EChart, EngineScreen, SPLIT_LINE, TOOLTIP, fmt, oeeColor, pct, rankedBarOption, token } from "./shared";
 
 interface TrendPoint {
   date: string;
@@ -65,7 +65,7 @@ function Trend({ trend }: { trend: TrendPoint[] }) {
             tooltip: TOOLTIP,
             legend: {
               data: hasScrap ? ["OEE", "Scrap rate"] : ["OEE"],
-              textStyle: { color: "#64748b", fontSize: 11 },
+              textStyle: { color: token("--muted-foreground"), fontSize: 11 },
               top: 4,
               icon: "circle",
               itemWidth: 8,

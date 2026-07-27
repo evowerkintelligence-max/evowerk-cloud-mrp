@@ -57,16 +57,27 @@ export const C = {
   violet: "#a78bfa",
 };
 
+// echarts paints series/axes/gridlines onto a <canvas>, and a canvas 2D
+// context can't resolve CSS custom properties the way the DOM does — so read
+// each design-system token's HSL channels off the document root and hand
+// echarts a concrete hsl() string. The app is dark-only at runtime
+// (index.html hardcodes <html class="dark">, no light/dark toggle), so
+// resolving once at module load stays correct.
+export function token(name: string, alpha?: number): string {
+  const ch = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return alpha === undefined ? `hsl(${ch})` : `hsl(${ch} / ${alpha})`;
+}
+
 export const TOOLTIP = {
   trigger: "axis" as const,
-  backgroundColor: "#1e293b",
-  borderColor: "#334155",
-  textStyle: { color: "#e2e8f0", fontSize: 12 },
+  backgroundColor: token("--card"),
+  borderColor: token("--border"),
+  textStyle: { color: token("--foreground"), fontSize: 12 },
 };
 
-export const AXIS_LABEL = { color: "#64748b", fontSize: 10 };
-export const SPLIT_LINE = { lineStyle: { color: "rgba(100,116,139,0.15)" } };
-export const AXIS_LINE = { lineStyle: { color: "rgba(100,116,139,0.25)" } };
+export const AXIS_LABEL = { color: token("--muted-foreground"), fontSize: 10 };
+export const SPLIT_LINE = { lineStyle: { color: token("--muted-foreground", 0.15) } };
+export const AXIS_LINE = { lineStyle: { color: token("--muted-foreground", 0.25) } };
 
 // Live-style pace status: on-pace / behind / ahead against whichever target
 // is in play (a mapped plan column, or an auto-baseline average).
@@ -134,7 +145,7 @@ export function paretoOption({
 }): echarts.EChartsOption {
   return {
     tooltip: TOOLTIP,
-    legend: { textStyle: { color: "#64748b", fontSize: 11 }, top: 4 },
+    legend: { textStyle: { color: token("--muted-foreground"), fontSize: 11 }, top: 4 },
     grid: { top: 40, bottom: 40, left: 56, right: 56 },
     xAxis: {
       type: "category",
@@ -209,7 +220,7 @@ export function rankedBarOption({
     yAxis: {
       type: "category",
       data: categories,
-      axisLabel: { color: "#94a3b8", fontSize: 12, fontWeight: 600 },
+      axisLabel: { color: token("--foreground"), fontSize: 12, fontWeight: 600 },
       axisLine: AXIS_LINE,
       axisTick: { show: false },
     },
@@ -221,7 +232,7 @@ export function rankedBarOption({
         label: {
           show: true,
           position: "right",
-          color: "#94a3b8",
+          color: token("--foreground"),
           fontSize: 11,
           fontWeight: 600,
           formatter: (p: { dataIndex?: number }) => formatter(values[p.dataIndex ?? 0], p.dataIndex ?? 0),

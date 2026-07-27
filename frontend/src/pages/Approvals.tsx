@@ -8,9 +8,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { humanize } from "@/lib/status";
 import type { OrgMeResponse } from "./Warehouse";
+
+// pending is amber (needs attention), approved green, rejected red — same
+// success/warning/danger semantics the rest of the app uses for statuses.
+function approvalStatusVariant(status: string) {
+  if (status === "approved") return "success" as const;
+  if (status === "rejected") return "danger" as const;
+  return "warning" as const;
+}
 
 interface AdjustmentRequest {
   id: string;
@@ -194,6 +204,7 @@ export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
                 <TH>Delta</TH>
                 <TH>Counted / Expected</TH>
                 <TH>Reason</TH>
+                <TH>Status</TH>
                 <TH>Requested</TH>
                 {isOwner && <TH>Actions</TH>}
               </TR>
@@ -212,6 +223,9 @@ export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
                   <TD className="text-muted-foreground">
                     {req.reason_code}
                     {req.reason_note ? `: ${req.reason_note}` : ""}
+                  </TD>
+                  <TD>
+                    <Badge variant={approvalStatusVariant(req.status)}>{humanize(req.status)}</Badge>
                   </TD>
                   <TD className="text-muted-foreground">
                     {new Date(req.requested_at).toLocaleString()}

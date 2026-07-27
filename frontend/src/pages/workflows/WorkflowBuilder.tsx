@@ -469,7 +469,7 @@ export function WorkflowBuilder() {
             {runs.data?.map((r) => (
               <div key={r.id} className="rounded-md border border-border">
                 <button
-                  className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm"
+                  className="flex w-full items-center justify-between gap-3 rounded-md px-4 py-2.5 text-left text-sm transition-colors hover:bg-secondary/20"
                   onClick={() => setExpandedRun(expandedRun === r.id ? null : r.id)}
                 >
                   <span className="flex items-center gap-2">
@@ -493,7 +493,7 @@ export function WorkflowBuilder() {
                           </Badge>
                         )}
                         {typeof e.payload.error === "string" && (
-                          <span className="truncate text-rose-300">{e.payload.error}</span>
+                          <span className="truncate text-destructive">{e.payload.error}</span>
                         )}
                       </div>
                     ))}

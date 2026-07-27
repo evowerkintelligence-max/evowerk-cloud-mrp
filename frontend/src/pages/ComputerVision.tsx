@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Hash, ShieldCheck } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { STAT_TONES, StatCard } from "@/components/StatCard";
 import { Field } from "@/components/Field";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -102,16 +104,14 @@ export function ComputerVision() {
           </CardHeader>
           <CardContent className="space-y-4">
             <Alert>{analyze.data.summary}</Alert>
-            {analyze.data.compliance_pct !== null && (
-              <div className="rounded-md border border-border p-3">
-                <div className="text-xs text-muted-foreground">Compliance</div>
-                <div className="text-xl font-semibold">{analyze.data.compliance_pct}%</div>
-              </div>
-            )}
-            {analyze.data.count !== null && (
-              <div className="rounded-md border border-border p-3">
-                <div className="text-xs text-muted-foreground">Count</div>
-                <div className="text-xl font-semibold">{analyze.data.count}</div>
+            {(analyze.data.compliance_pct !== null || analyze.data.count !== null) && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {analyze.data.compliance_pct !== null && (
+                  <StatCard label="Compliance" value={`${analyze.data.compliance_pct}%`} icon={<ShieldCheck />} tone={STAT_TONES[0]} />
+                )}
+                {analyze.data.count !== null && (
+                  <StatCard label="Count" value={analyze.data.count} icon={<Hash />} tone={STAT_TONES[1]} />
+                )}
               </div>
             )}
             <div className="space-y-2">

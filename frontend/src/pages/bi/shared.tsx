@@ -1,5 +1,5 @@
 import * as echarts from "echarts";
-import { AXIS_LABEL, AXIS_LINE, C, SPLIT_LINE, TOOLTIP, fmt, gradientAreaSeries, rankedBarOption } from "../analytics/shared";
+import { AXIS_LABEL, AXIS_LINE, C, SPLIT_LINE, TOOLTIP, fmt, gradientAreaSeries, rankedBarOption, token } from "../analytics/shared";
 
 export const CHART_TYPES = ["bar", "horizontal_bar", "line", "area", "pie", "donut"] as const;
 export type ChartType = (typeof CHART_TYPES)[number];
@@ -69,10 +69,10 @@ const TOOLBOX: echarts.EChartsOption["toolbox"] = {
   right: 4,
   top: 0,
   itemSize: 13,
-  iconStyle: { borderColor: "#64748b" },
-  emphasis: { iconStyle: { borderColor: "#e2e8f0" } },
+  iconStyle: { borderColor: token("--muted-foreground") },
+  emphasis: { iconStyle: { borderColor: token("--foreground") } },
   feature: {
-    saveAsImage: { title: "Save as image", backgroundColor: "#171717" },
+    saveAsImage: { title: "Save as image", backgroundColor: token("--card") },
     restore: { title: "Reset zoom" },
   },
 };
@@ -91,9 +91,9 @@ function dataZoomFor(length: number, axis: "x" | "y"): echarts.EChartsOption["da
       [axisKey]: 0,
       ...(axis === "x" ? { bottom: 4, height: 16 } : { right: 4, width: 14 }),
       borderColor: "transparent",
-      fillerColor: "rgba(100,116,139,0.2)",
-      handleStyle: { color: "#64748b" },
-      textStyle: { color: "#64748b", fontSize: 10 },
+      fillerColor: token("--muted-foreground", 0.2),
+      handleStyle: { color: token("--muted-foreground") },
+      textStyle: { color: token("--muted-foreground"), fontSize: 10 },
     } as echarts.DataZoomComponentOption,
   ];
 }
@@ -206,8 +206,8 @@ function pieLikeOption(
   radius: [string, string],
 ): echarts.EChartsOption {
   return {
-    tooltip: { trigger: "item", backgroundColor: "#1e293b", borderColor: "#334155", textStyle: { color: "#e2e8f0", fontSize: 12 }, valueFormatter: (v) => fmt(Number(v)) },
-    legend: { textStyle: { color: "#64748b", fontSize: 11 }, bottom: 0 },
+    tooltip: { ...TOOLTIP, trigger: "item" as const, valueFormatter: (v) => fmt(Number(v)) },
+    legend: { textStyle: { color: token("--muted-foreground"), fontSize: 11 }, bottom: 0 },
     color: palette,
     toolbox: TOOLBOX,
     series: [
@@ -216,8 +216,8 @@ function pieLikeOption(
         type: "pie",
         radius,
         avoidLabelOverlap: true,
-        itemStyle: { borderColor: "#171717", borderWidth: 2 },
-        label: { color: "#94a3b8", fontSize: 11 },
+        itemStyle: { borderColor: token("--card"), borderWidth: 2 },
+        label: { color: token("--foreground"), fontSize: 11 },
         data: data.map((d) => ({ name: d.category, value: d.value })),
       },
     ],

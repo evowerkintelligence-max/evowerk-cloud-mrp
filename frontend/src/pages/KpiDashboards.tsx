@@ -83,7 +83,7 @@ function KpiCard({ card }: { card: DashboardCard }) {
         ) : (
           <>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-semibold tabular-nums">{card.value ?? "—"}</span>
+              <span className="text-3xl font-extrabold tracking-tight tabular-nums">{card.value ?? "—"}</span>
               {card.unit && <span className="text-sm text-muted-foreground">{card.unit}</span>}
               {card.eval && <span className="text-lg text-muted-foreground">{TREND_ARROW[card.eval.trend]}</span>}
             </div>

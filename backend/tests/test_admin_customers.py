@@ -5,6 +5,7 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from app.api.routes import admin as admin_routes
 from app.core.security import hash_password
 from app.db import session as db_session
 from app.models.staff import StaffAccount
@@ -136,6 +137,19 @@ async def test_create_customer_duplicate_owner_email_409s(client):
         json={"org_name": "Other Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
     )
     assert dupe.status_code == 409, dupe.text
+
+
+async def test_create_customer_when_random_password_has_no_digit(client, monkeypatch):
+    # secrets.token_urlsafe returns a digit-free string ~1 draw in 215, which
+    # UserCreate's password policy rejects - forced here so the endpoint can't
+    # go back to depending on that coin flip (it used to 500).
+    monkeypatch.setattr(admin_routes.secrets, "token_urlsafe", lambda n: "a" * n)
+    staff_token = await _make_staff_token(client)
+    res = await client.post(
+        "/admin/customers", headers=_h(staff_token),
+        json={"org_name": "New Co", "owner_email": "owner@newco.example", "enabled_features": ["oee"]},
+    )
+    assert res.status_code == 201, res.text
 
 
 async def test_patch_unknown_customer_404s(client):

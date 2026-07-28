@@ -1,26 +1,12 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import {
-  ArrowUpRight,
-  BarChart3,
-  Boxes,
-  CalendarRange,
-  Database,
-  Layers,
-  LayoutGrid,
-  Package,
-  RefreshCw,
-  ShieldCheck,
-  ShoppingCart,
-  Sparkles,
-  Sunrise,
-  Truck,
-  Warehouse,
-} from "lucide-react";
+import { Cog, Database, Factory, Gauge, Layers, Package, RefreshCw, ShieldCheck, ShoppingCart, Sparkles, Sunrise, Truck } from "lucide-react";
 import { apiFetch } from "../api/client";
+import { useCurrentUser } from "@/lib/currentUser";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
+import { ExploreGrid, type ExploreCardItem } from "@/components/ExploreGrid";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -90,36 +76,15 @@ function useCount(key: string, path: string) {
   });
 }
 
-const LINKS = [
-  { to: "/boms", label: "Bills of Materials", description: "Component structures and versions", icon: Layers },
-  { to: "/procurement", label: "Procurement", description: "Suppliers and purchase orders", icon: ShoppingCart },
-  { to: "/lots", label: "Lots", description: "Lot-tracked stock and holds", icon: Boxes },
-  { to: "/warehouse", label: "Warehouse", description: "On-hand inventory and storage locations", icon: Warehouse },
-  { to: "/planning", label: "Planning", description: "What to make and what to order", icon: CalendarRange },
-  { to: "/analytics", label: "Analytics", description: "OEE, downtime, throughput, scrap, shifts, SPC", icon: BarChart3 },
-  { to: "/datasets", label: "Datasets", description: "Upload, clean, and query production data", icon: Database },
-  { to: "/bi", label: "BI Dashboards", description: "Build charts and save them to dashboards", icon: LayoutGrid },
-  { to: "/ask", label: "Ask", description: "Natural-language Q&A over your data", icon: Sparkles },
+/** The 4 Explore categories - each opens a hub page listing that section's
+ * pages (see pages/CategoryHub.tsx), which stays in sync with the sidebar
+ * since both read from lib/nav.ts's NAV_SECTIONS. */
+const EXPLORE_CATEGORIES: ExploreCardItem[] = [
+  { to: "/explore/operations", label: "Operations", description: "BOMs, procurement, planning, and the shop floor", icon: Factory },
+  { to: "/explore/data-reports", label: "Data & Reports", description: "Datasets, SQL, dashboards, and reporting", icon: Database },
+  { to: "/explore/analytics", label: "Analytics", description: "OEE, downtime, throughput, scrap, and shifts", icon: Gauge },
+  { to: "/explore/system", label: "System", description: "Integrations, workflows, and alerts", icon: Cog },
 ];
-
-/** Cycled per explore-card index so the grid reads as multi-color, not monochrome. */
-const EXPLORE_TONES = [
-  {
-    card: "hover:border-primary/40 hover:shadow-glow-sm",
-    icon: "bg-primary/10 text-primary ring-primary/20",
-    title: "group-hover:text-primary",
-  },
-  {
-    card: "hover:border-accent/40 hover:shadow-[0_0_18px_-4px_hsl(var(--accent)/0.45)]",
-    icon: "bg-accent/10 text-accent ring-accent/20",
-    title: "group-hover:text-accent",
-  },
-  {
-    card: "hover:border-success/40 hover:shadow-[0_0_18px_-4px_hsl(var(--success)/0.45)]",
-    icon: "bg-success/10 text-success ring-success/20",
-    title: "group-hover:text-success",
-  },
-] as const;
 
 export function Dashboard() {
   const org = useQuery<OrgResponse>({
@@ -130,6 +95,10 @@ export function Dashboard() {
       return res.json();
     },
   });
+  // Same ["org-me"] cache as the query above, just with enabled_features on the type -
+  // used only to gate the Ask card below.
+  const currentUser = useCurrentUser();
+  const hasAsk = (currentUser.data?.enabled_features ?? []).includes("data_chat");
 
   const items = useCount("items", "/items");
   const suppliers = useCount("suppliers", "/suppliers");
@@ -307,39 +276,28 @@ export function Dashboard() {
       <h2 className="mb-4 mt-10 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Explore
       </h2>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {LINKS.map((l, i) => {
-          const t = EXPLORE_TONES[i % EXPLORE_TONES.length];
-          return (
-            <Link key={l.to} to={l.to} className="group rounded-lg focus-visible:outline-none">
-              <Card
-                className={cn(
-                  "relative h-full transition-all duration-300 hover:-translate-y-1 group-focus-visible:ring-2 group-focus-visible:ring-ring",
-                  t.card,
-                )}
-              >
-                <ArrowUpRight className="absolute right-4 top-4 size-4 text-muted-foreground opacity-0 transition-all duration-300 group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:opacity-100" />
-                <CardContent className="flex items-start gap-4 p-5">
-                  <div
-                    className={cn(
-                      "flex size-11 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset transition-transform duration-300 group-hover:scale-110 [&_svg]:size-5",
-                      t.icon,
-                    )}
-                  >
-                    <l.icon />
-                  </div>
-                  <div className="space-y-1">
-                    <CardTitle className={cn("text-base transition-colors", t.title)}>
-                      {l.label}
-                    </CardTitle>
-                    <CardDescription>{l.description}</CardDescription>
-                  </div>
-                </CardContent>
-              </Card>
+      <ExploreGrid items={EXPLORE_CATEGORIES} />
+
+      {hasAsk && (
+        <Card className="mt-8">
+          <CardContent className="flex flex-col items-start gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
+                <Sparkles className="size-5" />
+              </div>
+              <div>
+                <CardTitle className="text-base">Ask a question</CardTitle>
+                <CardDescription>Natural-language Q&A over your production data</CardDescription>
+              </div>
+            </div>
+            <Link to="/ask">
+              <Button>
+                <Sparkles /> Ask
+              </Button>
             </Link>
-          );
-        })}
-      </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Bell, ChevronDown, ChevronRight, LogOut, Search } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Bell, ChevronDown, ChevronRight, LogOut, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
 import { useCurrentUser } from "@/lib/currentUser";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/BrandMark";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -11,6 +13,7 @@ import { ALL_NAV_ITEMS, NAV_SECTIONS, findNavMatch, isNavItemVisible, type NavIt
 import { cn } from "@/lib/utils";
 
 const COLLAPSE_KEY = "evowerk.nav.collapsed";
+const SIDEBAR_OPEN_KEY = "evowerk.nav.sidebarOpen";
 
 function loadCollapsed(): Record<string, boolean> {
   try {
@@ -18,6 +21,27 @@ function loadCollapsed(): Record<string, boolean> {
   } catch {
     return {};
   }
+}
+
+function loadSidebarOpen(): boolean {
+  return localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false";
+}
+
+/** Breadcrumb connector styled like a flowchart edge (line + arrowhead) instead of a plain chevron or slash. */
+function FlowConnector() {
+  return (
+    <svg
+      width="20"
+      height="12"
+      viewBox="0 0 20 12"
+      fill="none"
+      aria-hidden
+      className="hidden shrink-0 text-muted-foreground/50 sm:inline"
+    >
+      <line x1="0" y1="6" x2="14" y2="6" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M11 2L15 6L11 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function Brand() {
@@ -66,6 +90,98 @@ function SideNavLink({ item }: { item: NavItem }) {
   );
 }
 
+interface AlertRuleSummary {
+  id: string;
+  name: string;
+  severity: "critical" | "warning" | "info";
+  enabled: boolean;
+}
+
+const SEV_BADGE = { critical: "danger", warning: "warning", info: "info" } as const;
+
+function NotificationsMenu() {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const rules = useQuery<AlertRuleSummary[]>({
+    queryKey: ["alert-rules"],
+    queryFn: async () => {
+      const res = await apiFetch("/alerts/rules");
+      if (!res.ok) throw new Error("Failed to load alerts");
+      return res.json();
+    },
+    enabled: open,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const enabled = (rules.data ?? []).filter((r) => r.enabled);
+  const criticalCount = enabled.filter((r) => r.severity === "critical").length;
+
+  return (
+    <div ref={rootRef} className="relative">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Notifications"
+        title="Notifications"
+      >
+        <Bell />
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-2 w-80 animate-scale-in overflow-hidden rounded-xl border border-border bg-popover shadow-overlay">
+          <div className="border-b border-border px-4 py-3">
+            <p className="text-sm font-medium text-foreground">Alert rules</p>
+            <p className="text-xs text-muted-foreground">
+              {rules.isLoading
+                ? "Loading…"
+                : enabled.length === 0
+                  ? "No enabled alert rules."
+                  : `${enabled.length} enabled${criticalCount ? `, ${criticalCount} critical` : ""}`}
+            </p>
+          </div>
+          <div className="max-h-64 overflow-y-auto p-2">
+            {enabled.map((r) => (
+              <div key={r.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+                <Badge variant={SEV_BADGE[r.severity]}>{r.severity}</Badge>
+                <span className="truncate text-foreground">{r.name}</span>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-border p-2">
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={() => {
+                setOpen(false);
+                navigate("/alerts");
+              }}
+            >
+              View all alerts
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -73,6 +189,7 @@ export function AppShell() {
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
+  const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
 
   const org = useCurrentUser();
 
@@ -91,6 +208,14 @@ export function AppShell() {
     setCollapsed((prev) => {
       const next = { ...prev, [label]: !prev[label] };
       localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function toggleSidebar() {
+    setSidebarOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem(SIDEBAR_OPEN_KEY, String(next));
       return next;
     });
   }
@@ -128,7 +253,12 @@ export function AppShell() {
       <div className="app-backdrop" />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={visibleNavItems} />
       <div className="mx-auto flex min-h-screen max-w-[1680px]">
-        <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-border/70 bg-card/40 md:flex">
+        <aside
+          className={cn(
+            "sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-border/70 bg-card/40 md:flex",
+            !sidebarOpen && "md:hidden",
+          )}
+        >
           <div className="flex h-14 shrink-0 items-center border-b border-border/60 px-5">
             <Brand />
           </div>
@@ -198,10 +328,20 @@ export function AppShell() {
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-border/70 bg-background/70 px-5 backdrop-blur-md">
             <div className="flex min-w-0 items-center gap-2 text-sm">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hidden shrink-0 md:inline-flex"
+                onClick={toggleSidebar}
+                aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+                title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              >
+                {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+              </Button>
               {match ? (
                 <>
                   <span className="hidden text-muted-foreground sm:inline">{match.section}</span>
-                  <span className="hidden text-muted-foreground/50 sm:inline">/</span>
+                  <FlowConnector />
                   <span className="truncate font-medium text-foreground">{match.label}</span>
                 </>
               ) : (
@@ -222,15 +362,7 @@ export function AppShell() {
                   Ctrl K
                 </kbd>
               </button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => navigate("/alerts")}
-                aria-label="Alerts"
-                title="Alerts"
-              >
-                <Bell />
-              </Button>
+              <NotificationsMenu />
             </div>
           </header>
 

@@ -25,6 +25,10 @@ function lazyPage(loader: () => Promise<Record<string, unknown>>, name: string) 
 }
 
 const Dashboard = lazyPage(() => import("./pages/Dashboard"), "Dashboard");
+const OperationsHub = lazyPage(() => import("./pages/CategoryHub"), "OperationsHub");
+const DataReportsHub = lazyPage(() => import("./pages/CategoryHub"), "DataReportsHub");
+const AnalyticsHub = lazyPage(() => import("./pages/CategoryHub"), "AnalyticsHub");
+const SystemHub = lazyPage(() => import("./pages/CategoryHub"), "SystemHub");
 const Items = lazyPage(() => import("./pages/Items"), "Items");
 const Boms = lazyPage(() => import("./pages/Boms"), "Boms");
 const Procurement = lazyPage(() => import("./pages/Procurement"), "Procurement");
@@ -35,23 +39,17 @@ const Planning = lazyPage(() => import("./pages/Planning"), "Planning");
 const Production = lazyPage(() => import("./pages/Production"), "Production");
 const Datasets = lazyPage(() => import("./pages/analytics/Datasets"), "Datasets");
 const DatasetDetail = lazyPage(() => import("./pages/analytics/DatasetDetail"), "DatasetDetail");
-const SqlEditor = lazyPage(() => import("./pages/SqlEditor"), "SqlEditor");
 const Simulation = lazyPage(() => import("./pages/Simulation"), "Simulation");
 const Oee = lazyPage(() => import("./pages/analytics/Oee"), "Oee");
-const PaceTracking = lazyPage(() => import("./pages/analytics/PaceTracking"), "PaceTracking");
 const PlantSummary = lazyPage(() => import("./pages/analytics/PlantSummary"), "PlantSummary");
 const Downtime = lazyPage(() => import("./pages/analytics/Downtime"), "Downtime");
-const DowntimeTracking = lazyPage(() => import("./pages/analytics/DowntimeTracking"), "DowntimeTracking");
 const Throughput = lazyPage(() => import("./pages/analytics/Throughput"), "Throughput");
 const Scrap = lazyPage(() => import("./pages/analytics/Scrap"), "Scrap");
 const Shifts = lazyPage(() => import("./pages/analytics/Shifts"), "Shifts");
-const Spc = lazyPage(() => import("./pages/analytics/Spc"), "Spc");
 const Ask = lazyPage(() => import("./pages/Ask"), "Ask");
 const BiDashboards = lazyPage(() => import("./pages/bi/Dashboards"), "Dashboards");
 const ChartBuilder = lazyPage(() => import("./pages/bi/ChartBuilder"), "ChartBuilder");
 const BiDashboardDetail = lazyPage(() => import("./pages/bi/DashboardDetail"), "DashboardDetail");
-const Workflows = lazyPage(() => import("./pages/workflows/Workflows"), "Workflows");
-const WorkflowBuilder = lazyPage(() => import("./pages/workflows/WorkflowBuilder"), "WorkflowBuilder");
 const ReportBuilder = lazyPage(() => import("./pages/ReportBuilder"), "ReportBuilder");
 const AutoML = lazyPage(() => import("./pages/AutoML"), "AutoML");
 const AutoMLRun = lazyPage(() => import("./pages/automl/AutoMLRun"), "AutoMLRun");
@@ -62,7 +60,6 @@ const KpiDashboards = lazyPage(() => import("./pages/KpiDashboards"), "KpiDashbo
 const Integrations = lazyPage(() => import("./pages/Integrations"), "Integrations");
 const Realtime = lazyPage(() => import("./pages/Realtime"), "Realtime");
 const RcaCases = lazyPage(() => import("./pages/RcaCases"), "RcaCases");
-const RunHistory = lazyPage(() => import("./pages/workflows/RunHistory"), "RunHistory");
 const Predictive = lazyPage(() => import("./pages/Predictive"), "Predictive");
 const MfgForecast = lazyPage(() => import("./pages/MfgForecast"), "MfgForecast");
 const ComputerVision = lazyPage(() => import("./pages/ComputerVision"), "ComputerVision");
@@ -158,6 +155,10 @@ export function App() {
             }
           >
             <Route path="/" element={<Dashboard />} />
+            <Route path="/explore/operations" element={<OperationsHub />} />
+            <Route path="/explore/data-reports" element={<DataReportsHub />} />
+            <Route path="/explore/analytics" element={<AnalyticsHub />} />
+            <Route path="/explore/system" element={<SystemHub />} />
             <Route path="/items" element={<Items />} />
             <Route path="/boms" element={<RequireFeature feature="boms"><Boms /></RequireFeature>} />
             <Route path="/procurement" element={<RequireFeature feature="procurement"><Procurement /></RequireFeature>} />
@@ -165,28 +166,28 @@ export function App() {
             <Route path="/lots" element={<RequireFeature feature="lots"><Lots /></RequireFeature>} />
             <Route path="/warehouse" element={<RequireFeature feature="warehouse"><Warehouse /></RequireFeature>} />
             <Route path="/planning" element={<RequireFeature feature="planning"><Planning /></RequireFeature>} />
-            <Route path="/production" element={<RequireFeature feature="production"><Production /></RequireFeature>} />
+            <Route path="/production" element={<Production />} />
+            <Route path="/production-setup" element={<Navigate to="/production" replace />} />
             <Route path="/analytics" element={<Navigate to="/analytics/oee" replace />} />
             <Route path="/analytics/oee" element={<RequireFeature feature="oee"><Oee /></RequireFeature>} />
-            <Route path="/analytics/pace-tracking" element={<RequireFeature feature="pace_tracking"><PaceTracking /></RequireFeature>} />
+            <Route path="/analytics/pace-tracking" element={<Navigate to="/analytics/oee" replace />} />
             <Route path="/analytics/plant-summary" element={<RequireFeature feature="plant_summary"><PlantSummary /></RequireFeature>} />
             <Route path="/analytics/downtime" element={<RequireFeature feature="downtime"><Downtime /></RequireFeature>} />
-            <Route path="/analytics/downtime-tracking" element={<RequireFeature feature="downtime_tracking"><DowntimeTracking /></RequireFeature>} />
+            <Route path="/analytics/downtime-tracking" element={<Navigate to="/analytics/downtime" replace />} />
             <Route path="/analytics/throughput" element={<RequireFeature feature="throughput"><Throughput /></RequireFeature>} />
             <Route path="/analytics/scrap" element={<RequireFeature feature="scrap"><Scrap /></RequireFeature>} />
             <Route path="/analytics/shifts" element={<RequireFeature feature="shifts"><Shifts /></RequireFeature>} />
-            <Route path="/analytics/spc" element={<RequireFeature feature="spc"><Spc /></RequireFeature>} />
+            <Route path="/analytics/spc" element={<Navigate to="/datasets" replace />} />
             <Route path="/datasets" element={<Datasets />} />
             <Route path="/datasets/:id" element={<DatasetDetail />} />
-            <Route path="/sql-editor" element={<SqlEditor />} />
+            <Route path="/sql-editor" element={<Navigate to="/datasets" replace />} />
             <Route path="/simulation" element={<RequireFeature feature="simulation"><Simulation /></RequireFeature>} />
             <Route path="/ask" element={<RequireFeature feature="data_chat"><Ask /></RequireFeature>} />
             <Route path="/bi" element={<BiDashboards />} />
             <Route path="/bi/new" element={<ChartBuilder />} />
             <Route path="/bi/:id" element={<BiDashboardDetail />} />
-            <Route path="/workflows" element={<Workflows />} />
-            <Route path="/workflows/:id" element={<WorkflowBuilder />} />
-            <Route path="/runs" element={<RunHistory />} />
+            <Route path="/workflows" element={<Navigate to="/" replace />} />
+            <Route path="/runs" element={<Navigate to="/" replace />} />
             <Route path="/report-builder" element={<RequireFeature feature="reports"><ReportBuilder /></RequireFeature>} />
             <Route path="/automl" element={<RequireFeature feature="automl"><TemplatesHome /></RequireFeature>} />
             <Route path="/automl/runs/:id" element={<RequireFeature feature="automl"><AutoMLTemplateResultsView /></RequireFeature>} />

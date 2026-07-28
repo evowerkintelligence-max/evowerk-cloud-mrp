@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { EChart } from "@/pages/analytics/shared";
-import { controlChart, NELSON_RULE_DESCRIPTIONS, type SpcPoint } from "@/pages/analytics/Spc";
+import { controlChart, NELSON_RULE_DESCRIPTIONS, type SpcPoint } from "@/pages/analytics/shared";
 
 interface SensorAnomaly {
   id: string;

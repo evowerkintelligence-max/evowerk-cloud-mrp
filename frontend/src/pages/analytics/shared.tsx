@@ -95,6 +95,78 @@ export function oeeColor(pct: number): string {
   return C.red;
 }
 
+export interface SpcPoint {
+  label: string;
+  value: number;
+  range_value?: number;
+  in_control: boolean;
+  violations?: number[];
+}
+
+// Mirrors backend/app/analytics/spc_calc.py RULE_DESCRIPTIONS.
+export const NELSON_RULE_DESCRIPTIONS: Record<number, string> = {
+  1: "Point beyond 3σ (outside control limits)",
+  2: "9 points in a row on the same side of the centerline",
+  3: "6 points in a row steadily increasing or decreasing",
+  4: "14 points in a row alternating up and down",
+  5: "2 of 3 points beyond 2σ on the same side",
+  6: "4 of 5 points beyond 1σ on the same side",
+  7: "15 points in a row within 1σ of the centerline (stratification)",
+  8: "8 points in a row beyond 1σ with none within 1σ (mixture)",
+};
+
+/** Control chart (with Western Electric/Nelson rule violations) shared by the
+ * Dataset Quality tab's defect-rate trend - the standalone SPC analytics page
+ * used it too before being removed. */
+export function controlChart(points: SpcPoint[], value: (p: SpcPoint) => number | undefined, cl: number, ucl: number, lcl: number, name: string) {
+  return {
+    tooltip: {
+      ...TOOLTIP,
+      formatter: (params: unknown) => {
+        const p = (Array.isArray(params) ? params[0] : params) as { dataIndex: number };
+        const pt = points[p.dataIndex];
+        if (!pt) return "";
+        const lines = [pt.label, `${name}: ${value(pt) ?? "—"}`];
+        for (const rule of pt.violations ?? []) {
+          lines.push(`⚠ Rule ${rule}: ${NELSON_RULE_DESCRIPTIONS[rule] ?? "control-chart rule violation"}`);
+        }
+        return lines.join("<br/>");
+      },
+    },
+    grid: { top: 24, bottom: 28, left: 56, right: 88 },
+    xAxis: {
+      type: "category" as const,
+      data: points.map((p) => p.label),
+      axisLabel: AXIS_LABEL,
+      axisLine: AXIS_LINE,
+      boundaryGap: false,
+    },
+    yAxis: { type: "value" as const, scale: true, axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },
+    series: [
+      {
+        name,
+        type: "line" as const,
+        symbol: "circle" as const,
+        symbolSize: 6,
+        data: points.map((p) => ({
+          value: value(p),
+          itemStyle: p.in_control ? { color: C.blue } : { color: C.red, borderColor: token("--foreground"), borderWidth: 1 },
+        })),
+        lineStyle: { width: 1.5, color: C.blue },
+        markLine: {
+          silent: true,
+          symbol: "none" as const,
+          data: [
+            { yAxis: ucl, lineStyle: { color: C.red, type: "dashed" as const }, label: { formatter: `UCL ${ucl}`, color: C.red, fontSize: 10, position: "end" as const } },
+            { yAxis: cl, lineStyle: { color: C.green, type: "solid" as const, opacity: 0.6 }, label: { formatter: `CL ${cl}`, color: C.green, fontSize: 10, position: "end" as const } },
+            { yAxis: lcl, lineStyle: { color: C.red, type: "dashed" as const }, label: { formatter: `LCL ${lcl}`, color: C.red, fontSize: 10, position: "end" as const } },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 function hexToRgb(hex: string): string {
   const n = parseInt(hex.slice(1), 16);
   return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
@@ -448,6 +520,7 @@ export function EngineScreen<T>({
   path,
   fields,
   runLabel,
+  showHeader = true,
   children,
 }: {
   title: string;
@@ -455,6 +528,8 @@ export function EngineScreen<T>({
   path: string;
   fields: EngineField[];
   runLabel?: string;
+  /** False when an outer page (e.g. a merged tab view) already renders its own PageHeader. */
+  showHeader?: boolean;
   children: (result: T, requestBody: Record<string, unknown>) => ReactNode;
 }) {
   const [datasetId, setDatasetId] = useState("");
@@ -563,7 +638,7 @@ export function EngineScreen<T>({
 
   return (
     <div className="space-y-8">
-      <PageHeader title={title} description={description} />
+      {showHeader && <PageHeader title={title} description={description} />}
 
       {error && <Alert variant="destructive">{error}</Alert>}
 

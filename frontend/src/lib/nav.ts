@@ -1,6 +1,4 @@
 import {
-  Activity,
-  AlertTriangle,
   BarChart3,
   Bell,
   Boxes,
@@ -12,7 +10,6 @@ import {
   FileStack,
   FlaskConical,
   Gauge,
-  History,
   LayoutDashboard,
   LayoutGrid,
   Layers,
@@ -25,13 +22,10 @@ import {
   ShoppingCart,
   Sparkles,
   Target,
-  Terminal,
-  Timer,
   TimerOff,
   TrendingUp,
   Users,
   Warehouse,
-  Workflow,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -45,6 +39,8 @@ export interface NavItem {
   keywords?: string[];
   /** Gates this item to orgs with this key in their enabled_features - see frontend/src/lib/features.ts. Absent = always visible (System pages, Datasets, SQL Editor, BI Dashboards). */
   featureKey?: string;
+  /** One-line blurb shown on the Explore category hub cards (see pages/CategoryHub.tsx). Absent for items not surfaced there. */
+  description?: string;
 }
 
 export interface NavSection {
@@ -61,39 +57,35 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     label: "Operations",
     items: [
-      { to: "/boms", label: "Bills of Materials", icon: Layers, keywords: ["bom", "recipe", "components"], featureKey: "boms" },
-      { to: "/procurement", label: "Procurement", icon: ShoppingCart, keywords: ["suppliers", "purchase orders", "po", "vendors"], featureKey: "procurement" },
-      { to: "/sales", label: "Sales", icon: Receipt, keywords: ["orders", "customers", "sales orders", "so"], featureKey: "sales" },
-      { to: "/lots", label: "Lots", icon: Boxes, keywords: ["batch", "traceability"], featureKey: "lots" },
-      { to: "/warehouse", label: "Warehouse", icon: Warehouse, keywords: ["inventory", "stock", "on-hand", "on hand"], featureKey: "warehouse" },
-      { to: "/planning", label: "Planning", icon: CalendarRange, keywords: ["mrp", "forecast", "demand", "what to do", "shortages", "materials"], featureKey: "planning" },
-      { to: "/production", label: "Production", icon: Factory, keywords: ["work orders", "jobs", "make", "build", "wo"], featureKey: "production" },
+      { to: "/boms", label: "Bills of Materials", icon: Layers, keywords: ["bom", "recipe", "components"], featureKey: "boms", description: "Component structures and versions" },
+      { to: "/procurement", label: "Procurement", icon: ShoppingCart, keywords: ["suppliers", "purchase orders", "po", "vendors"], featureKey: "procurement", description: "Suppliers and purchase orders" },
+      { to: "/sales", label: "Sales", icon: Receipt, keywords: ["orders", "customers", "sales orders", "so"], featureKey: "sales", description: "Customer orders and fulfillment" },
+      { to: "/lots", label: "Lots", icon: Boxes, keywords: ["batch", "traceability"], featureKey: "lots", description: "Lot-tracked stock and holds" },
+      { to: "/warehouse", label: "Warehouse", icon: Warehouse, keywords: ["inventory", "stock", "on-hand", "on hand"], featureKey: "warehouse", description: "On-hand inventory and storage locations" },
+      { to: "/planning", label: "Planning", icon: CalendarRange, keywords: ["mrp", "forecast", "demand", "what to do", "shortages", "materials"], featureKey: "planning", description: "What to make and what to order" },
+      { to: "/production", label: "Production", icon: Factory, keywords: ["work orders", "jobs", "make", "build", "wo", "work centers", "workcenter", "machines", "equipment", "routings", "routing", "cells", "stations"], description: "Work orders, work centers, machines, and routings" },
     ],
   },
   {
     label: "Data & Reports",
     items: [
-      { to: "/datasets", label: "Datasets", icon: Database, keywords: ["upload", "csv", "data"] },
-      { to: "/sql-editor", label: "SQL Editor", icon: Terminal, keywords: ["query", "sql"] },
-      { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, keywords: ["charts", "business intelligence"] },
-      { to: "/report-builder", label: "Report Builder", icon: FileStack, keywords: ["reports", "export", "pdf"], featureKey: "reports" },
-      { to: "/ask", label: "Ask", icon: Sparkles, keywords: ["chat", "natural language", "q&a", "assistant"], featureKey: "data_chat" },
+      { to: "/datasets", label: "Datasets", icon: Database, keywords: ["upload", "csv", "data", "query", "sql"], description: "Upload, clean, and query production data" },
+      { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, keywords: ["charts", "business intelligence"], description: "Build charts and save them to dashboards" },
+      { to: "/report-builder", label: "Report Builder", icon: FileStack, keywords: ["reports", "export", "pdf"], featureKey: "reports", description: "Generate and export formatted reports" },
+      { to: "/ask", label: "Ask", icon: Sparkles, keywords: ["chat", "natural language", "q&a", "assistant"], featureKey: "data_chat", description: "Natural-language Q&A over your data" },
     ],
   },
   {
     label: "Plant Analytics",
     items: [
-      { to: "/analytics/plant-summary", label: "Plant Summary", icon: Factory, keywords: ["overview", "rollup"], featureKey: "plant_summary" },
-      { to: "/analytics/oee", label: "OEE", icon: Gauge, keywords: ["overall equipment effectiveness", "availability", "performance"], featureKey: "oee" },
-      { to: "/analytics/pace-tracking", label: "Pace Tracking", icon: Timer, keywords: ["manual entry", "tap", "operator"], featureKey: "pace_tracking" },
-      { to: "/analytics/downtime", label: "Downtime", icon: TimerOff, keywords: ["stoppage", "downtime analysis"], featureKey: "downtime" },
-      { to: "/analytics/downtime-tracking", label: "Downtime Tracking", icon: AlertTriangle, keywords: ["live downtime", "andon"], featureKey: "downtime_tracking" },
-      { to: "/analytics/throughput", label: "Throughput", icon: BarChart3, keywords: ["units per hour", "rate", "production rate"], featureKey: "throughput" },
-      { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX, keywords: ["defect", "reject", "quality", "fpq", "first pass"], featureKey: "scrap" },
-      { to: "/analytics/shifts", label: "Shifts", icon: Users, keywords: ["shift schedule"], featureKey: "shifts" },
-      { to: "/analytics/spc", label: "SPC", icon: Activity, keywords: ["statistical process control", "control chart"], featureKey: "spc" },
-      { to: "/kpis", label: "KPIs", icon: Target, keywords: ["metrics", "targets"], featureKey: "kpis" },
-      { to: "/kpis/dashboards", label: "KPI Dashboards", icon: Rows3, keywords: ["kpi wall", "tv mode"], featureKey: "kpi_dashboards" },
+      { to: "/analytics/plant-summary", label: "Plant Summary", icon: Factory, keywords: ["overview", "rollup"], featureKey: "plant_summary", description: "Rolled-up view across every line" },
+      { to: "/analytics/oee", label: "OEE", icon: Gauge, keywords: ["overall equipment effectiveness", "availability", "performance"], featureKey: "oee", description: "Availability, performance, and quality" },
+      { to: "/analytics/downtime", label: "Downtime", icon: TimerOff, keywords: ["stoppage", "downtime analysis", "live downtime", "andon", "tracking"], featureKey: "downtime", description: "Live tracking and Pareto analysis of downtime" },
+      { to: "/analytics/throughput", label: "Throughput", icon: BarChart3, keywords: ["units per hour", "rate", "production rate"], featureKey: "throughput", description: "Units produced per hour" },
+      { to: "/analytics/scrap", label: "Scrap & Quality", icon: PackageX, keywords: ["defect", "reject", "quality", "fpq", "first pass"], featureKey: "scrap", description: "Defects, rejects, and first-pass yield" },
+      { to: "/analytics/shifts", label: "Shifts", icon: Users, keywords: ["shift schedule"], featureKey: "shifts", description: "Shift schedules and coverage" },
+      { to: "/kpis", label: "KPIs", icon: Target, keywords: ["metrics", "targets"], featureKey: "kpis", description: "Targets and metrics by team" },
+      { to: "/kpis/dashboards", label: "KPI Dashboards", icon: Rows3, keywords: ["kpi wall", "tv mode"], featureKey: "kpi_dashboards", description: "TV-mode KPI walls" },
     ],
   },
   {
@@ -110,11 +102,9 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     label: "System",
     items: [
-      { to: "/integrations", label: "Integrations", icon: Plug, keywords: ["erp", "api", "webhook"] },
-      { to: "/realtime", label: "Realtime", icon: Radio, keywords: ["live", "streaming"] },
-      { to: "/workflows", label: "Workflows", icon: Workflow, keywords: ["automation", "triggers"] },
-      { to: "/runs", label: "Run History", icon: History, keywords: ["logs", "execution history"] },
-      { to: "/alerts", label: "Alerts", icon: Bell, keywords: ["notifications"] },
+      { to: "/integrations", label: "Integrations", icon: Plug, keywords: ["erp", "api", "webhook"], description: "Connect ERPs, APIs, and webhooks" },
+      { to: "/realtime", label: "Realtime", icon: Radio, keywords: ["live", "streaming"], description: "Live streaming data sources" },
+      { to: "/alerts", label: "Alerts", icon: Bell, keywords: ["notifications"], description: "Threshold rules and scan results" },
     ],
   },
 ];

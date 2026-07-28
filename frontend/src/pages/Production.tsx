@@ -1,14 +1,762 @@
+import { FormEvent, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ChevronDown, ChevronRight, Cog, Route as RouteIcon, Wrench } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { PageTabs } from "@/components/PageTabs";
+import { Field } from "@/components/Field";
+import { EmptyState } from "@/components/EmptyState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
+import { ItemSelect } from "@/components/ItemSelect";
+import { humanize } from "@/lib/status";
+import { useCurrentUser } from "@/lib/currentUser";
 import { JobsPanel } from "./production/JobsPanel";
 
+interface WorkCenterResponse {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+  machine_capacity: number;
+  default_cycle_time_seconds: number | null;
+  default_mtbf_hours: number | null;
+  default_mttr_hours: number | null;
+}
+
+interface MachineResponse {
+  id: string;
+  work_center_id: string;
+  code: string;
+  name: string;
+  status: string;
+  mtbf_hours: number | null;
+  mttr_hours: number | null;
+  needs_review: boolean;
+}
+
+interface RoutingStepResponse {
+  id: string;
+  sequence: number;
+  work_center_id: string;
+  cycle_time_seconds: number | null;
+  setup_time_seconds: number | null;
+}
+
+interface RoutingResponse {
+  id: string;
+  item_id: string;
+  version: number;
+  status: string;
+  steps: RoutingStepResponse[];
+}
+
+interface ItemResponse {
+  id: string;
+  sku: string;
+  name: string;
+}
+
+function statusVariant(status: string) {
+  if (status === "active") return "success" as const;
+  if (status === "retired" || status === "archived") return "neutral" as const;
+  return "warning" as const; // inactive / draft
+}
+
+/** Empty string -> null, so an untouched optional number field isn't sent as 0. */
+function optionalNumber(value: string): number | null {
+  return value.trim() === "" ? null : Number(value);
+}
+
+function useWorkCenters() {
+  return useQuery<WorkCenterResponse[]>({
+    queryKey: ["work-centers"],
+    queryFn: async () => {
+      const res = await apiFetch("/work-centers");
+      if (!res.ok) throw new Error("Failed to load work centers");
+      return res.json();
+    },
+  });
+}
+
+function WorkCentersPanel() {
+  const queryClient = useQueryClient();
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [capacity, setCapacity] = useState("1");
+  const [cycleTime, setCycleTime] = useState("");
+  const [mtbf, setMtbf] = useState("");
+  const [mttr, setMttr] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const workCenters = useWorkCenters();
+
+  const createWorkCenter = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/work-centers", {
+        method: "POST",
+        body: JSON.stringify({
+          code,
+          name,
+          machine_capacity: Number(capacity) || 1,
+          default_cycle_time_seconds: optionalNumber(cycleTime),
+          default_mtbf_hours: optionalNumber(mtbf),
+          default_mttr_hours: optionalNumber(mttr),
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to create work center");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setCode("");
+      setName("");
+      setCapacity("1");
+      setCycleTime("");
+      setMtbf("");
+      setMttr("");
+      queryClient.invalidateQueries({ queryKey: ["work-centers"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    createWorkCenter.mutate();
+  }
+
+  return (
+    <div>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
+
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Add a work center</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Code" htmlFor="wc-code">
+              <Input id="wc-code" value={code} onChange={(e) => setCode(e.target.value)} required />
+            </Field>
+            <Field label="Name" htmlFor="wc-name">
+              <Input id="wc-name" value={name} onChange={(e) => setName(e.target.value)} required />
+            </Field>
+            <Field label="Machines in parallel" htmlFor="wc-capacity">
+              <Input
+                id="wc-capacity"
+                type="number"
+                min="1"
+                step="1"
+                value={capacity}
+                onChange={(e) => setCapacity(e.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Cycle time (s)" htmlFor="wc-cycle" hint="Optional default for routing steps">
+              <Input
+                id="wc-cycle"
+                type="number"
+                min="0"
+                step="0.01"
+                value={cycleTime}
+                onChange={(e) => setCycleTime(e.target.value)}
+              />
+            </Field>
+            <Field label="MTBF (hours)" htmlFor="wc-mtbf" hint="Optional">
+              <Input
+                id="wc-mtbf"
+                type="number"
+                min="0"
+                step="0.01"
+                value={mtbf}
+                onChange={(e) => setMtbf(e.target.value)}
+              />
+            </Field>
+            <Field label="MTTR (hours)" htmlFor="wc-mttr" hint="Optional">
+              <Input
+                id="wc-mttr"
+                type="number"
+                min="0"
+                step="0.01"
+                value={mttr}
+                onChange={(e) => setMttr(e.target.value)}
+              />
+            </Field>
+            <div className="flex items-end">
+              <Button type="submit" className="w-full" loading={createWorkCenter.isPending}>
+                Add work center
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      {workCenters.data && workCenters.data.length === 0 ? (
+        <EmptyState
+          icon={<Cog />}
+          title="No work centers yet"
+          description="A work center is a station or cell that production passes through."
+        />
+      ) : (
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Code</TH>
+                <TH>Name</TH>
+                <TH>Status</TH>
+                <TH>Capacity</TH>
+                <TH>Cycle time (s)</TH>
+                <TH>MTBF (h)</TH>
+                <TH>MTTR (h)</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {workCenters.data?.map((wc) => (
+                <TR key={wc.id}>
+                  <TD className="font-medium">{wc.code}</TD>
+                  <TD>{wc.name}</TD>
+                  <TD>
+                    <Badge variant={statusVariant(wc.status)}>{humanize(wc.status)}</Badge>
+                  </TD>
+                  <TD className="text-muted-foreground">{wc.machine_capacity}</TD>
+                  <TD className="text-muted-foreground">{wc.default_cycle_time_seconds ?? "-"}</TD>
+                  <TD className="text-muted-foreground">{wc.default_mtbf_hours ?? "-"}</TD>
+                  <TD className="text-muted-foreground">{wc.default_mttr_hours ?? "-"}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
+    </div>
+  );
+}
+
+function MachinesPanel() {
+  const queryClient = useQueryClient();
+  const [workCenterId, setWorkCenterId] = useState("");
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [mtbf, setMtbf] = useState("");
+  const [mttr, setMttr] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const workCenters = useWorkCenters();
+  const machines = useQuery<MachineResponse[]>({
+    queryKey: ["machines"],
+    queryFn: async () => {
+      const res = await apiFetch("/machines");
+      if (!res.ok) throw new Error("Failed to load machines");
+      return res.json();
+    },
+  });
+
+  const createMachine = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/machines", {
+        method: "POST",
+        body: JSON.stringify({
+          work_center_id: workCenterId,
+          code,
+          name,
+          mtbf_hours: optionalNumber(mtbf),
+          mttr_hours: optionalNumber(mttr),
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? "Failed to create machine");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setCode("");
+      setName("");
+      setMtbf("");
+      setMttr("");
+      queryClient.invalidateQueries({ queryKey: ["machines"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    createMachine.mutate();
+  }
+
+  const workCenterLabel = (id: string) => {
+    const wc = workCenters.data?.find((w) => w.id === id);
+    return wc ? `${wc.code} - ${wc.name}` : id;
+  };
+
+  return (
+    <div>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
+
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Add a machine</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {workCenters.data && workCenters.data.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Add a work center first - every machine belongs to one.
+            </p>
+          ) : (
+            <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Field label="Work center" htmlFor="machine-wc">
+                <Select
+                  id="machine-wc"
+                  value={workCenterId}
+                  onChange={(e) => setWorkCenterId(e.target.value)}
+                  required
+                >
+                  <option value="" disabled>
+                    Select a work center
+                  </option>
+                  {workCenters.data?.map((wc) => (
+                    <option key={wc.id} value={wc.id}>
+                      {wc.code} - {wc.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Code" htmlFor="machine-code">
+                <Input id="machine-code" value={code} onChange={(e) => setCode(e.target.value)} required />
+              </Field>
+              <Field label="Name" htmlFor="machine-name">
+                <Input id="machine-name" value={name} onChange={(e) => setName(e.target.value)} required />
+              </Field>
+              <Field label="MTBF (hours)" htmlFor="machine-mtbf" hint="Optional">
+                <Input
+                  id="machine-mtbf"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={mtbf}
+                  onChange={(e) => setMtbf(e.target.value)}
+                />
+              </Field>
+              <Field label="MTTR (hours)" htmlFor="machine-mttr" hint="Optional">
+                <Input
+                  id="machine-mttr"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={mttr}
+                  onChange={(e) => setMttr(e.target.value)}
+                />
+              </Field>
+              <div className="flex items-end">
+                <Button type="submit" className="w-full" loading={createMachine.isPending}>
+                  Add machine
+                </Button>
+              </div>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+
+      {machines.data && machines.data.length === 0 ? (
+        <EmptyState icon={<Wrench />} title="No machines yet" />
+      ) : (
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Code</TH>
+                <TH>Name</TH>
+                <TH>Work center</TH>
+                <TH>Status</TH>
+                <TH>MTBF (h)</TH>
+                <TH>MTTR (h)</TH>
+                <TH>Review</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {machines.data?.map((m) => (
+                <TR key={m.id}>
+                  <TD className="font-medium">{m.code}</TD>
+                  <TD>{m.name}</TD>
+                  <TD className="text-muted-foreground">{workCenterLabel(m.work_center_id)}</TD>
+                  <TD>
+                    <Badge variant={statusVariant(m.status)}>{humanize(m.status)}</Badge>
+                  </TD>
+                  <TD className="text-muted-foreground">{m.mtbf_hours ?? "-"}</TD>
+                  <TD className="text-muted-foreground">{m.mttr_hours ?? "-"}</TD>
+                  <TD>{m.needs_review ? <Badge variant="warning">Needs review</Badge> : ""}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
+    </div>
+  );
+}
+
+// POST /routings/{id}/steps replaces the whole step list, so "add a step" sends
+// the existing steps back alongside the new one.
+function RoutingRow({
+  routing,
+  workCenters,
+  itemLabel,
+  onError,
+}: {
+  routing: RoutingResponse;
+  workCenters: WorkCenterResponse[];
+  itemLabel: string;
+  onError: (message: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
+  const [stepWorkCenterId, setStepWorkCenterId] = useState("");
+  const [cycleTime, setCycleTime] = useState("");
+  const [setupTime, setSetupTime] = useState("");
+
+  const addStep = useMutation({
+    mutationFn: async () => {
+      const nextSequence = Math.max(0, ...routing.steps.map((s) => s.sequence)) + 1;
+      const steps = [
+        ...routing.steps.map((s) => ({
+          sequence: s.sequence,
+          work_center_id: s.work_center_id,
+          cycle_time_seconds: s.cycle_time_seconds,
+          setup_time_seconds: s.setup_time_seconds,
+        })),
+        {
+          sequence: nextSequence,
+          work_center_id: stepWorkCenterId,
+          cycle_time_seconds: optionalNumber(cycleTime),
+          setup_time_seconds: optionalNumber(setupTime),
+        },
+      ];
+      const res = await apiFetch(`/routings/${routing.id}/steps`, {
+        method: "POST",
+        body: JSON.stringify(steps),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : "Failed to add step");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setStepWorkCenterId("");
+      setCycleTime("");
+      setSetupTime("");
+      queryClient.invalidateQueries({ queryKey: ["routings"] });
+    },
+    onError: (e: Error) => onError(e.message),
+  });
+
+  const activate = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/routings/${routing.id}/activate`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : "Failed to activate routing");
+      }
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["routings"] }),
+    onError: (e: Error) => onError(e.message),
+  });
+
+  const workCenterLabel = (id: string) => {
+    const wc = workCenters.find((w) => w.id === id);
+    return wc ? `${wc.code} - ${wc.name}` : id;
+  };
+
+  return (
+    <>
+      <TR>
+        <TD className="w-6">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-muted-foreground hover:text-foreground"
+            title={expanded ? "Collapse" : "Show steps"}
+          >
+            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+          </button>
+        </TD>
+        <TD className="font-medium">{itemLabel}</TD>
+        <TD className="text-muted-foreground">v{routing.version}</TD>
+        <TD>
+          <Badge variant={statusVariant(routing.status)}>{humanize(routing.status)}</Badge>
+        </TD>
+        <TD className="text-muted-foreground">{routing.steps.length}</TD>
+        <TD>
+          {routing.status === "draft" && (
+            <Button size="sm" variant="secondary" loading={activate.isPending} onClick={() => activate.mutate()}>
+              Activate
+            </Button>
+          )}
+        </TD>
+      </TR>
+      {expanded && (
+        <TR>
+          <TD colSpan={6}>
+            <div className="space-y-4 py-2">
+              {routing.steps.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No steps yet.</p>
+              ) : (
+                <TableWrap>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Seq</TH>
+                        <TH>Work center</TH>
+                        <TH>Cycle time (s)</TH>
+                        <TH>Setup time (s)</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {routing.steps.map((s) => (
+                        <TR key={s.id}>
+                          <TD className="font-medium">{s.sequence}</TD>
+                          <TD>{workCenterLabel(s.work_center_id)}</TD>
+                          <TD className="text-muted-foreground">{s.cycle_time_seconds ?? "-"}</TD>
+                          <TD className="text-muted-foreground">{s.setup_time_seconds ?? "-"}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableWrap>
+              )}
+
+              {routing.status === "draft" && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addStep.mutate();
+                  }}
+                  className="grid gap-4 sm:grid-cols-[1fr_160px_160px_auto] sm:items-end"
+                >
+                  <Field label="Work center" htmlFor={`step-wc-${routing.id}`}>
+                    <Select
+                      id={`step-wc-${routing.id}`}
+                      value={stepWorkCenterId}
+                      onChange={(e) => setStepWorkCenterId(e.target.value)}
+                      required
+                    >
+                      <option value="" disabled>
+                        Select a work center
+                      </option>
+                      {workCenters.map((wc) => (
+                        <option key={wc.id} value={wc.id}>
+                          {wc.code} - {wc.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Cycle time (s)" htmlFor={`step-cycle-${routing.id}`}>
+                    <Input
+                      id={`step-cycle-${routing.id}`}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={cycleTime}
+                      onChange={(e) => setCycleTime(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Setup time (s)" htmlFor={`step-setup-${routing.id}`}>
+                    <Input
+                      id={`step-setup-${routing.id}`}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={setupTime}
+                      onChange={(e) => setSetupTime(e.target.value)}
+                    />
+                  </Field>
+                  <Button type="submit" variant="secondary" loading={addStep.isPending}>
+                    Add step
+                  </Button>
+                </form>
+              )}
+            </div>
+          </TD>
+        </TR>
+      )}
+    </>
+  );
+}
+
+function RoutingsPanel() {
+  const queryClient = useQueryClient();
+  const [itemId, setItemId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const workCenters = useWorkCenters();
+  const items = useQuery<ItemResponse[]>({
+    queryKey: ["items"],
+    queryFn: async () => {
+      const res = await apiFetch("/items");
+      if (!res.ok) throw new Error("Failed to load items");
+      return res.json();
+    },
+  });
+  const routings = useQuery<RoutingResponse[]>({
+    queryKey: ["routings"],
+    queryFn: async () => {
+      const res = await apiFetch("/routings");
+      if (!res.ok) throw new Error("Failed to load routings");
+      return res.json();
+    },
+  });
+
+  // item_id is a query param on this endpoint, not a body field.
+  const createRouting = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/routings?item_id=${encodeURIComponent(itemId)}`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : "Failed to create routing");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setItemId("");
+      queryClient.invalidateQueries({ queryKey: ["routings"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const itemLabel = (id: string) => {
+    const item = items.data?.find((i) => i.id === id);
+    return item ? `${item.sku} - ${item.name}` : id;
+  };
+
+  return (
+    <div>
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          {error}
+        </Alert>
+      )}
+
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Create a draft routing</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setError(null);
+              createRouting.mutate();
+            }}
+            className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end"
+          >
+            <Field label="For item" htmlFor="routing-item">
+              <ItemSelect id="routing-item" items={items.data} value={itemId} onChange={setItemId} required />
+            </Field>
+            <Button type="submit" loading={createRouting.isPending}>
+              Create draft
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {routings.data && routings.data.length === 0 ? (
+        <EmptyState
+          icon={<RouteIcon />}
+          title="No routings yet"
+          description="A routing is the ordered list of work centers an item passes through."
+        />
+      ) : (
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH />
+                <TH>Item</TH>
+                <TH>Version</TH>
+                <TH>Status</TH>
+                <TH>Steps</TH>
+                <TH />
+              </TR>
+            </THead>
+            <TBody>
+              {routings.data?.map((routing) => (
+                <RoutingRow
+                  key={routing.id}
+                  routing={routing}
+                  workCenters={workCenters.data ?? []}
+                  itemLabel={itemLabel(routing.item_id)}
+                  onError={setError}
+                />
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      )}
+    </div>
+  );
+}
+
+const SETUP_TABS = [
+  { value: "work-centers", label: "Work Centers" },
+  { value: "machines", label: "Machines" },
+  { value: "routings", label: "Routings" },
+] as const;
+const ALL_TABS = [{ value: "jobs", label: "Jobs" } as const, ...SETUP_TABS];
+
+type Tab = (typeof ALL_TABS)[number]["value"];
+
 export function Production() {
+  const org = useCurrentUser();
+  // enabled_features isn't known until org-me resolves - default optimistically to
+  // "jobs" (the common case) rather than the setup tabs, and only bump off it once
+  // loading has actually settled and the org turns out not to have the feature.
+  const hasJobs = (org.data?.enabled_features ?? []).includes("production");
+  const tabs = hasJobs ? ALL_TABS : SETUP_TABS;
+  const tabValues = new Set<string>(tabs.map((t) => t.value));
+
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const [tab, setTab] = useState<Tab>(
+    requestedTab && tabValues.has(requestedTab) ? (requestedTab as Tab) : "jobs",
+  );
+
+  useEffect(() => {
+    if (!org.isLoading && !hasJobs && tab === "jobs") setTab("work-centers");
+  }, [org.isLoading, hasJobs, tab]);
+
   return (
     <div>
       <PageHeader
         title="Production"
-        description="The jobs on the floor: what is scheduled, what is running, and what was made."
+        description="The jobs on the floor, and the work centers, machines, and routings behind them."
+        actions={<PageTabs tabs={[...tabs]} active={tab} onChange={setTab} />}
       />
-      <JobsPanel />
+      <div key={tab} className="animate-fade-in">
+        {tab === "jobs" && hasJobs && <JobsPanel />}
+        {tab === "work-centers" && <WorkCentersPanel />}
+        {tab === "machines" && <MachinesPanel />}
+        {tab === "routings" && <RoutingsPanel />}
+      </div>
     </div>
   );
 }

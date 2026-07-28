@@ -142,9 +142,9 @@ resource "azurerm_container_app" "backend" {
   }
 
   ingress {
-    external_enabled           = false
-    target_port                = 8000
-    transport                  = "http"
+    external_enabled = false
+    target_port      = 8000
+    transport        = "http"
     # Internal ingress still enforces HTTPS by default (Azure terminates TLS
     # at its own edge either way), but nginx's proxy_pass talks plain HTTP to
     # this upstream - without this, every proxied request 301s to https://

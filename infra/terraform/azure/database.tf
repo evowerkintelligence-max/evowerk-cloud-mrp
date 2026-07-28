@@ -30,8 +30,9 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_login    = var.db_username
   administrator_password = random_password.db_password.result
 
-  delegated_subnet_id = azurerm_subnet.postgres.id
-  private_dns_zone_id = azurerm_private_dns_zone.postgres.id
+  delegated_subnet_id           = azurerm_subnet.postgres.id
+  private_dns_zone_id           = azurerm_private_dns_zone.postgres.id
+  public_network_access_enabled = false
 
   backup_retention_days = 7
 

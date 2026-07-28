@@ -144,6 +144,24 @@ resource "azurerm_container_app" "backend" {
         name  = "GEMINI_MODEL"
         value = var.gemini_model
       }
+      # Explicit, so the data_dir default ("./data") never resolves against
+      # whatever the working directory happens to be - it has to land on the
+      # mount below or uploads are lost on the next revision.
+      env {
+        name  = "DATA_DIR"
+        value = "/app/data"
+      }
+
+      volume_mounts {
+        name = "backend-data"
+        path = "/app/data"
+      }
+    }
+
+    volume {
+      name         = "backend-data"
+      storage_name = azurerm_container_app_environment_storage.backend_data.name
+      storage_type = "AzureFile"
     }
 
     # ponytail: scale-to-zero, sized for a dev/test subscription funded by

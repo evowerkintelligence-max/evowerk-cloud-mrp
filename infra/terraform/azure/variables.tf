@@ -81,6 +81,12 @@ variable "gemini_model" {
   default     = "gemini-3.6-flash"
 }
 
+variable "dataset_storage_quota_gb" {
+  description = "Size of the Azure Files share backing the backend's data_dir (uploaded datasets, AutoML artifacts). Standard file shares bill for what you use, not the quota, so this is a cap rather than a cost."
+  type        = number
+  default     = 100
+}
+
 variable "backend_cpu" {
   description = "vCPU for the backend Container App (Consumption plan requires specific valid cpu/memory pairs)"
   type        = number

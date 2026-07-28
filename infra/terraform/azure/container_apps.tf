@@ -140,6 +140,10 @@ resource "azurerm_container_app" "backend" {
         name        = "GEMINI_API_KEY"
         secret_name = "gemini-api-key"
       }
+      env {
+        name  = "GEMINI_MODEL"
+        value = var.gemini_model
+      }
     }
 
     # ponytail: scale-to-zero, sized for a dev/test subscription funded by

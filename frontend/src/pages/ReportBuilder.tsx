@@ -319,7 +319,7 @@ export function ReportBuilder() {
                 {reports.data?.map((r) => (
                   <TR key={r.id}>
                     <TD className="font-medium">
-                      <button className="hover:underline" onClick={() => startEdit(r)}>{r.name}</button>
+                      <button className="hover:underline" onClick={() => startEdit(r)}>{r.name || "Untitled report"}</button>
                     </TD>
                     <TD className="text-muted-foreground">{r.sections.length}</TD>
                     <TD className="text-muted-foreground">{new Date(r.updated_at).toLocaleString()}</TD>
@@ -347,7 +347,7 @@ export function ReportBuilder() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="ghost" onClick={() => setEditingId(null)}>Back to list</Button>
-            <Button loading={save.isPending} onClick={() => save.mutate()}>Save</Button>
+            <Button loading={save.isPending} disabled={!name.trim()} onClick={() => save.mutate()}>Save</Button>
             {editingId !== "new" && (
               <>
                 <Button variant="secondary" onClick={viewReport}>View</Button>

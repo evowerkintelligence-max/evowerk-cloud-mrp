@@ -93,7 +93,9 @@ class Settings(BaseSettings):
     # narration). Optional: unset means every caller uses its deterministic
     # fallback path instead of a live model call - see app/services/llm.py.
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-2.5-flash is retired: it still appears in models.list() but
+    # generateContent 404s for keys issued after its cutoff.
+    gemini_model: str = "gemini-3.6-flash"
 
 
 @lru_cache

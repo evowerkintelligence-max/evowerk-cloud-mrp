@@ -75,6 +75,12 @@ variable "gemini_api_key" {
   sensitive   = true
 }
 
+variable "gemini_model" {
+  description = "Gemini model id. Pinned here so a retired model can be rolled forward without rebuilding the backend image - Google retires models for new API keys while still listing them in models.list()."
+  type        = string
+  default     = "gemini-3.6-flash"
+}
+
 variable "backend_cpu" {
   description = "vCPU for the backend Container App (Consumption plan requires specific valid cpu/memory pairs)"
   type        = number

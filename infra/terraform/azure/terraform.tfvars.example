@@ -18,6 +18,10 @@ jwt_secret_key = ""
 # Get one from https://aistudio.google.com/apikey
 gemini_api_key = "REPLACE_ME"
 
+# Override when Google retires the default. A retired model still appears in
+# models.list() but returns 404 on generateContent for newer API keys.
+# gemini_model = "gemini-3.6-flash"
+
 # Must already be pushed to the ACR repos this module creates before you
 # apply the Container Apps - see README.md for the two-phase apply.
 image_tag = "latest"

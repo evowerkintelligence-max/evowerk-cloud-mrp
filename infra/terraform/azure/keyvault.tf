@@ -69,6 +69,13 @@ resource "azurerm_key_vault_secret" "mfa_key" {
   depends_on   = [azurerm_role_assignment.kv_secrets_officer_current]
 }
 
+resource "azurerm_key_vault_secret" "gemini_api_key" {
+  name         = "gemini-api-key"
+  value        = var.gemini_api_key
+  key_vault_id = azurerm_key_vault.main.id
+  depends_on   = [azurerm_role_assignment.kv_secrets_officer_current]
+}
+
 resource "azurerm_key_vault_secret" "database_url" {
   name         = "database-url"
   value        = local.database_url

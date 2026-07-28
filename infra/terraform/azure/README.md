@@ -55,7 +55,7 @@ already exist in ACR, but ACR is created by this same Terraform.
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars - at minimum: mfa_encryption_key
+# edit terraform.tfvars - at minimum: mfa_encryption_key, gemini_api_key
 
 terraform init
 

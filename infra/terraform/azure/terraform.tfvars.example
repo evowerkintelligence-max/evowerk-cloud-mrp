@@ -13,6 +13,11 @@ mfa_encryption_key = "REPLACE_ME"
 # Leave empty to auto-generate a random one instead.
 jwt_secret_key = ""
 
+# Powers data chat, report narration, and computer vision. Without it those
+# features fall back to their deterministic paths instead of calling a model.
+# Get one from https://aistudio.google.com/apikey
+gemini_api_key = "REPLACE_ME"
+
 # Must already be pushed to the ACR repos this module creates before you
 # apply the Container Apps - see README.md for the two-phase apply.
 image_tag = "latest"

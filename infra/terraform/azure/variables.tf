@@ -69,6 +69,12 @@ variable "mfa_encryption_key" {
   sensitive   = true
 }
 
+variable "gemini_api_key" {
+  description = "Gemini API key for the LLM-backed features (data chat, report narration, computer vision). Get one from https://aistudio.google.com/apikey"
+  type        = string
+  sensitive   = true
+}
+
 variable "backend_cpu" {
   description = "vCPU for the backend Container App (Consumption plan requires specific valid cpu/memory pairs)"
   type        = number

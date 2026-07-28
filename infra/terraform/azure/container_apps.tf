@@ -91,6 +91,12 @@ resource "azurerm_container_app" "backend" {
     identity            = azurerm_user_assigned_identity.container_apps.id
   }
 
+  secret {
+    name                = "gemini-api-key"
+    key_vault_secret_id = azurerm_key_vault_secret.gemini_api_key.id
+    identity            = azurerm_user_assigned_identity.container_apps.id
+  }
+
   template {
     container {
       name   = "backend"
@@ -129,6 +135,10 @@ resource "azurerm_container_app" "backend" {
       env {
         name        = "MFA_ENCRYPTION_KEY"
         secret_name = "mfa-encryption-key"
+      }
+      env {
+        name        = "GEMINI_API_KEY"
+        secret_name = "gemini-api-key"
       }
     }
 

@@ -37,6 +37,15 @@ resource "azurerm_postgresql_flexible_server" "main" {
   backup_retention_days = 7
 
   depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
+
+  # Azure auto-assigns an availability zone at creation time since none is
+  # set here, and the provider then tries to "correct" it back to null on
+  # every subsequent plan - which Azure rejects outright (zone can only
+  # change via HA standby-zone exchange). Not real drift, just an unset
+  # optional+computed field.
+  lifecycle {
+    ignore_changes = [zone]
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_database" "main" {

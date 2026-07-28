@@ -3,6 +3,14 @@ resource "azurerm_container_app_environment" "main" {
   location                 = azurerm_resource_group.main.location
   resource_group_name      = azurerm_resource_group.main.name
   infrastructure_subnet_id = azurerm_subnet.container_apps.id
+
+  # azurerm computes infrastructure_resource_group_name server-side and
+  # doesn't persist it back into a form that matches an unset config value,
+  # so every subsequent plan sees a false "-> null" diff on this ForceNew
+  # attribute and wants to destroy/recreate the environment for nothing.
+  lifecycle {
+    ignore_changes = [infrastructure_resource_group_name]
+  }
 }
 
 # Internal-only (no external ingress) - only reachable from other apps in
@@ -134,9 +142,14 @@ resource "azurerm_container_app" "backend" {
   }
 
   ingress {
-    external_enabled = false
-    target_port      = 8000
-    transport        = "http"
+    external_enabled           = false
+    target_port                = 8000
+    transport                  = "http"
+    # Internal ingress still enforces HTTPS by default (Azure terminates TLS
+    # at its own edge either way), but nginx's proxy_pass talks plain HTTP to
+    # this upstream - without this, every proxied request 301s to https://
+    # this internal-only hostname, which nginx doesn't follow.
+    allow_insecure_connections = true
 
     traffic_weight {
       latest_revision = true
@@ -181,6 +194,19 @@ resource "azurerm_container_app" "frontend" {
       env {
         name  = "BACKEND_UPSTREAM"
         value = local.backend_internal_host
+      }
+
+      # nginx.conf.template's `resolver` directive needs this for per-request
+      # DNS re-resolution of BACKEND_UPSTREAM (see that file's comment).
+      # NOT 168.63.129.16 (Azure's platform DNS): that resolves an internal
+      # Container Apps hostname to the environment's PUBLIC ingress IP
+      # instead of its private one, so a proxied request loops back through
+      # the public edge and 404s with Azure's "stopped or does not exist"
+      # page. 127.0.0.11 is the container's own embedded DNS (standard
+      # Docker/containerd resolver), which resolves it correctly.
+      env {
+        name  = "DNS_RESOLVER"
+        value = "127.0.0.11"
       }
     }
 

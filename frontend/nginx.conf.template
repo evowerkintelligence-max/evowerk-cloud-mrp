@@ -95,7 +95,19 @@ server {
     location @api {
         set $backend_upstream ${BACKEND_UPSTREAM};
         proxy_pass http://$backend_upstream;
-        proxy_set_header Host $host;
+        # nginx's proxy_pass defaults to HTTP/1.0 upstream, which Azure
+        # Container Apps' internal ingress rejects with 426 Upgrade Required
+        # while scaling a min_replicas=0 backend up from zero.
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # NOT $host: Azure Container Apps routes ingress for every app in an
+        # environment through one shared fabric keyed by Host header, so
+        # forwarding the client's original (frontend) Host here made the
+        # backend's ingress route the request straight back to the frontend
+        # app itself - an infinite self-redirect. The backend doesn't use
+        # Host for anything (no TrustedHostMiddleware, no host-based logic),
+        # so forwarding its own upstream hostname is safe and correct here.
+        proxy_set_header Host $backend_upstream;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

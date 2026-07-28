@@ -58,7 +58,7 @@ const DONE = {
 
 const LATE = { ...SCHEDULED, id: "wo-4", wo_number: 7, scheduled_start: YESTERDAY };
 
-function render(jobs: unknown[] | undefined, role = "owner") {
+function renderJobs(jobs: unknown[] | undefined, role = "owner") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["org-me"], {
     id: "org-1",
@@ -81,14 +81,14 @@ function render(jobs: unknown[] | undefined, role = "owner") {
     .join("");
 }
 
-describe("Production", () => {
+describe("Production (Jobs tab)", () => {
   it("renders with no data without crashing", () => {
-    const html = render(undefined);
+    const html = renderJobs(undefined);
     expect(html).toContain("Production");
   });
 
   it("shows a scheduled job with its number, product, quantity and a Start action", () => {
-    const html = render([SCHEDULED]);
+    const html = renderJobs([SCHEDULED]);
     expect(html).toContain("WO-4");
     expect(html).toContain("Coolant pump");
     expect(html).toContain("PUMP-1");
@@ -98,14 +98,14 @@ describe("Production", () => {
   });
 
   it("offers Finish and Cancel on a running job, not Start", () => {
-    const html = render([RUNNING]);
+    const html = renderJobs([RUNNING]);
     expect(html).toContain("Finish");
     expect(html).toContain("Cancel");
     expect(html).not.toContain(">Start<");
   });
 
   it("offers nothing on a job that is already done", () => {
-    const html = render([DONE]);
+    const html = renderJobs([DONE]);
     expect(html).toContain("WO-6");
     expect(html).not.toContain(">Start<");
     expect(html).not.toContain(">Finish<");
@@ -113,17 +113,17 @@ describe("Production", () => {
   });
 
   it("badges a scheduled job whose start date has passed as late", () => {
-    const html = render([LATE]);
+    const html = renderJobs([LATE]);
     expect(html).toContain("Late");
   });
 
   it("does not badge a job that is still due in the future", () => {
-    const html = render([SCHEDULED]);
+    const html = renderJobs([SCHEDULED]);
     expect(html).not.toContain("Late");
   });
 
   it("shows a member no action buttons at all", () => {
-    const html = render([SCHEDULED, RUNNING], "member");
+    const html = renderJobs([SCHEDULED, RUNNING], "member");
     expect(html).toContain("WO-4");
     expect(html).not.toContain(">Start<");
     expect(html).not.toContain(">Finish<");
@@ -132,19 +132,149 @@ describe("Production", () => {
   });
 
   it("invites the user to make something when there are no jobs", () => {
-    const html = render([]);
+    const html = renderJobs([]);
     expect(html).toContain("No jobs yet");
   });
 
   it("offers a way to raise a job that is scheduled rather than started", () => {
     // The grid's Make button always starts immediately, so without this the
     // whole reservation, horizon and late-to-start machinery is unreachable.
-    const html = render([SCHEDULED]);
+    const html = renderJobs([SCHEDULED]);
     expect(html).toContain("New job");
   });
 
   it("shows a member no way to raise a job either", () => {
-    const html = render([SCHEDULED], "member");
+    const html = renderJobs([SCHEDULED], "member");
     expect(html).not.toContain("New job");
+  });
+});
+
+const WC = {
+  id: "wc-1",
+  code: "CNC-01",
+  name: "CNC Cell",
+  status: "active",
+  machine_capacity: 2,
+  default_cycle_time_seconds: 45,
+  default_mtbf_hours: 100,
+  default_mttr_hours: 2,
+};
+
+function renderSetup(tab: string, seed: (qc: QueryClient) => void = () => {}) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seed(qc);
+  return renderToString(
+    createElement(
+      MemoryRouter,
+      { initialEntries: [`/production?tab=${tab}`] },
+      createElement(QueryClientProvider, { client: qc }, createElement(Production)),
+    ),
+  ).split("<!-- -->").join("");
+}
+
+describe("Production (setup tabs)", () => {
+  it("renders each tab empty without crashing", () => {
+    for (const tab of ["work-centers", "machines", "routings"]) {
+      const html = renderSetup(tab);
+      expect(html).toContain("Production");
+      expect(html).toContain("Work Centers");
+      expect(html).toContain("Machines");
+      expect(html).toContain("Routings");
+    }
+  });
+
+  it("work centers tab shows the create form and lists rows", () => {
+    const html = renderSetup("work-centers", (qc) => qc.setQueryData(["work-centers"], [WC]));
+    expect(html).toContain("Add a work center");
+    expect(html).toContain("Machines in parallel");
+    expect(html).toContain("CNC-01");
+    expect(html).toContain("CNC Cell");
+    expect(html).toContain("Active");
+  });
+
+  it("work centers tab shows the empty state when there are none", () => {
+    const html = renderSetup("work-centers", (qc) => qc.setQueryData(["work-centers"], []));
+    expect(html).toContain("No work centers yet");
+  });
+
+  it("machines tab dropdown is populated from the work-centers list", () => {
+    const html = renderSetup("machines", (qc) => {
+      qc.setQueryData(["work-centers"], [WC]);
+      qc.setQueryData(["machines"], []);
+    });
+    expect(html).toContain("Add a machine");
+    expect(html).toContain('value="wc-1"');
+    expect(html).toContain("CNC-01 - CNC Cell");
+    expect(html).toContain("No machines yet");
+  });
+
+  it("machines tab lists machines with work center, status and needs-review badge", () => {
+    const html = renderSetup("machines", (qc) => {
+      qc.setQueryData(["work-centers"], [WC]);
+      qc.setQueryData(
+        ["machines"],
+        [
+          {
+            id: "m-1",
+            work_center_id: "wc-1",
+            code: "M-100",
+            name: "Haas VF2",
+            status: "active",
+            mtbf_hours: null,
+            mttr_hours: null,
+            needs_review: true,
+          },
+        ],
+      );
+    });
+    expect(html).toContain("M-100");
+    expect(html).toContain("Haas VF2");
+    expect(html).toContain("CNC-01 - CNC Cell");
+    expect(html).toContain("Needs review");
+  });
+
+  it("machines tab tells you to add a work center first when there are none", () => {
+    const html = renderSetup("machines", (qc) => {
+      qc.setQueryData(["work-centers"], []);
+      qc.setQueryData(["machines"], []);
+    });
+    expect(html).toContain("Add a work center first");
+  });
+
+  it("routings tab lists routings with their item label and step count", () => {
+    const html = renderSetup("routings", (qc) => {
+      qc.setQueryData(["work-centers"], [WC]);
+      qc.setQueryData(["items"], [{ id: "item-1", sku: "WIDGET-1", name: "Widget" }]);
+      qc.setQueryData(
+        ["routings"],
+        [
+          {
+            id: "r-1",
+            item_id: "item-1",
+            version: 1,
+            status: "draft",
+            steps: [
+              {
+                id: "s-1",
+                sequence: 1,
+                work_center_id: "wc-1",
+                cycle_time_seconds: 30,
+                setup_time_seconds: null,
+              },
+            ],
+          },
+        ],
+      );
+    });
+    expect(html).toContain("Create a draft routing");
+    expect(html).toContain("WIDGET-1 - Widget");
+    expect(html).toContain("v1");
+    expect(html).toContain("Draft");
+    expect(html).toContain("Activate");
+  });
+
+  it("routings tab shows the empty state when there are none", () => {
+    const html = renderSetup("routings", (qc) => qc.setQueryData(["routings"], []));
+    expect(html).toContain("No routings yet");
   });
 });

@@ -56,17 +56,6 @@ export const FEATURE_REQUIREMENTS: FeatureRequirement[] = [
     roles: OEE_CORE_ROLES,
   },
   {
-    key: "spc",
-    label: "SPC",
-    to: "/analytics/spc",
-    isTab: false,
-    roles: [
-      { role: "value column", dtype: "numeric", required: true },
-      { role: "subgroup column", dtype: "any", required: false },
-      { role: "order column", dtype: "any", required: false },
-    ],
-  },
-  {
     key: "throughput",
     label: "Throughput",
     to: "/analytics/throughput",

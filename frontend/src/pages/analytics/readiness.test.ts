@@ -27,7 +27,7 @@ describe("computeReadiness", () => {
     }
 
     // Single-numeric-required features (and scrap, which needs exactly 2) are satisfied.
-    for (const key of ["quality", "spc", "throughput", "downtime", "shifts", "scrap"]) {
+    for (const key of ["quality", "throughput", "downtime", "shifts", "scrap"]) {
       expect(byKey[key].ready).toBe(true);
     }
   });
@@ -43,7 +43,7 @@ describe("computeReadiness", () => {
     expect(byKey.mfg_forecast.ready).toBe(false);
     expect(byKey.mfg_forecast.missing).toEqual(["needs a datetime column"]);
 
-    for (const key of ["oee", "rca", "plant_summary", "quality", "spc", "throughput", "downtime", "shifts", "scrap"]) {
+    for (const key of ["oee", "rca", "plant_summary", "quality", "throughput", "downtime", "shifts", "scrap"]) {
       expect(byKey[key].ready).toBe(true);
     }
   });

@@ -16,9 +16,8 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { C, ColumnChecklist, EChart, QueryBuilderFields, SendToReportButton, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
+import { C, ColumnChecklist, EChart, QueryBuilderFields, SendToReportButton, controlChart, fileSize, fmt, useQueryBuilder, type Dataset } from "./shared";
 import { computeReadiness } from "./readiness";
-import { controlChart } from "./Spc";
 import { StatCard } from "@/components/StatCard";
 
 interface DatasetDetail extends Dataset {

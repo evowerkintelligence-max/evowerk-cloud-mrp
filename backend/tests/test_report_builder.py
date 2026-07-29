@@ -705,3 +705,10 @@ async def test_inbox_cross_org_isolation(client):
     listed_b = await client.get("/reports/inbox", headers=headers_b)
     assert not any(i["id"] == item_id for i in listed_b.json())
     assert (await client.delete(f"/reports/inbox/{item_id}", headers=headers_b)).status_code == 404
+
+
+async def test_report_name_cannot_be_blank(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    res = await client.post("/reports/custom", headers=headers, json={"name": "", "sections": []})
+    assert res.status_code == 422, res.text

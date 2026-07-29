@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -72,3 +74,26 @@ async def test_duplicate_machine_code_rejected(client):
     await client.post("/machines", json={"work_center_id": wc["id"], "code": "CNC-01", "name": "A"}, headers=headers)
     dup = await client.post("/machines", json={"work_center_id": wc["id"], "code": "CNC-01", "name": "B"}, headers=headers)
     assert dup.status_code == 409
+
+
+async def test_checkin_qr_svg(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    wc = await _create_work_center(client, token)
+    machine = (
+        await client.post(
+            "/machines", json={"work_center_id": wc["id"], "code": "M1", "name": "Machine 1"}, headers=headers
+        )
+    ).json()
+
+    res = await client.get(f"/machines/{machine['id']}/checkin-qr", headers=headers)
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "image/svg+xml"
+    assert b"<svg" in res.content
+
+
+async def test_checkin_qr_unknown_machine_404(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    res = await client.get(f"/machines/{uuid.uuid4()}/checkin-qr", headers=headers)
+    assert res.status_code == 404

@@ -91,6 +91,12 @@ resource "azurerm_container_app" "backend" {
     identity            = azurerm_user_assigned_identity.container_apps.id
   }
 
+  secret {
+    name                = "gemini-api-key"
+    key_vault_secret_id = azurerm_key_vault_secret.gemini_api_key.id
+    identity            = azurerm_user_assigned_identity.container_apps.id
+  }
+
   template {
     container {
       name   = "backend"
@@ -130,6 +136,32 @@ resource "azurerm_container_app" "backend" {
         name        = "MFA_ENCRYPTION_KEY"
         secret_name = "mfa-encryption-key"
       }
+      env {
+        name        = "GEMINI_API_KEY"
+        secret_name = "gemini-api-key"
+      }
+      env {
+        name  = "GEMINI_MODEL"
+        value = var.gemini_model
+      }
+      # Explicit, so the data_dir default ("./data") never resolves against
+      # whatever the working directory happens to be - it has to land on the
+      # mount below or uploads are lost on the next revision.
+      env {
+        name  = "DATA_DIR"
+        value = "/app/data"
+      }
+
+      volume_mounts {
+        name = "backend-data"
+        path = "/app/data"
+      }
+    }
+
+    volume {
+      name         = "backend-data"
+      storage_name = azurerm_container_app_environment_storage.backend_data.name
+      storage_type = "AzureFile"
     }
 
     # ponytail: scale-to-zero, sized for a dev/test subscription funded by

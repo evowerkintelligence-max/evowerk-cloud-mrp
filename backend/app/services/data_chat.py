@@ -196,7 +196,22 @@ def _parse_ai_response(raw: str, datasets_used: list[str]) -> ChatResult:
     )
 
 
-def _heuristic_answer(question: str, data_ctx: str, datasets_used: list[str]) -> ChatResult:
+_NO_AI_NOTE = (
+    "AI is not configured for this workspace, so this is a summary of the data's structure, "
+    "not a direct answer to your question."
+)
+_AI_FAILED_NOTE = (
+    "The AI service did not respond, so this is a summary of the data's structure, "
+    "not a direct answer to your question."
+)
+
+
+def _mentions(q: str, *words: str) -> bool:
+    # Whole words only: substring matching made "worst performing machine" hit "min".
+    return bool(re.search(r"\b(" + "|".join(words) + r")\b", q))
+
+
+def _heuristic_answer(question: str, data_ctx: str, datasets_used: list[str], note: str) -> ChatResult:
     q = question.lower()
     col_stats: list[dict] = []
     for line in data_ctx.split("\n"):
@@ -209,27 +224,24 @@ def _heuristic_answer(question: str, data_ctx: str, datasets_used: list[str]) ->
     number_cols = [c for c in col_stats if c["type"] == "number"]
     date_cols = [c for c in col_stats if c["type"] == "date"]
 
-    if any(w in q for w in ("column", "what data", "what do i have", "schema", "field")):
+    if _mentions(q, "columns?", "what data", "what do i have", "schema", "fields?"):
         summary = ", ".join(f"{c['name']} ({c['type']})" for c in col_stats[:20])
-        return ChatResult(answer=f"Your datasets contain these columns: {summary}", datasets_used=datasets_used,
+        return ChatResult(answer=f"{note}\n\nYour datasets contain these columns: {summary}", datasets_used=datasets_used,
                            follow_ups=["Show me the numeric columns", "What date range does the data cover?"])
 
-    if any(w in q for w in ("average", "avg", "mean", "min", "max", "range")) and number_cols:
+    if _mentions(q, "average", "avg", "mean", "min", "max", "range") and number_cols:
         summaries = [f"{c['name']}: {c['info']}" for c in number_cols[:8] if c["info"]]
         if summaries:
-            return ChatResult(answer="Here are the numeric column statistics:\n" + "\n".join(summaries), datasets_used=datasets_used,
-                               follow_ups=["Which column has the highest values?"])
+            return ChatResult(answer=f"{note}\n\nHere are the numeric column statistics:\n" + "\n".join(summaries),
+                               datasets_used=datasets_used, follow_ups=["Which column has the highest values?"])
 
-    if any(w in q for w in ("trend", "over time", "date range", "when")) and date_cols:
+    if _mentions(q, "trend", "over time", "date range", "when") and date_cols:
         summaries = [f"{c['name']}: {c['info']}" for c in date_cols]
-        return ChatResult(answer="Date columns in your data:\n" + "\n".join(summaries), datasets_used=datasets_used)
+        return ChatResult(answer=f"{note}\n\nDate columns in your data:\n" + "\n".join(summaries), datasets_used=datasets_used)
 
     all_cols = ", ".join(c["name"] for c in col_stats[:15])
     return ChatResult(
-        answer=(
-            f"I can see columns: {all_cols}. AI is not configured for this workspace, so I can only report "
-            "column statistics, date ranges, and data structure - not free-form answers."
-        ),
+        answer=f"{note}\n\nI can see these columns: {all_cols}.",
         datasets_used=datasets_used,
         follow_ups=["What columns do I have?", "Show numeric column stats", "What date range does my data cover?"],
     )
@@ -258,12 +270,12 @@ async def answer_question(
     data_ctx = "\n\n".join(_build_dataset_context(name, rows, question) for name, rows in datasets_info)
 
     if not llm.is_configured():
-        return _heuristic_answer(question, data_ctx, datasets_used)
+        return _heuristic_answer(question, data_ctx, datasets_used, _NO_AI_NOTE)
 
     try:
         raw = await llm.generate_text(
             _build_prompt(question, history, data_ctx), system=_SYSTEM, max_output_tokens=1500
         )
     except Exception:  # transient LLM error - fall back to the deterministic path instead of a 500
-        return _heuristic_answer(question, data_ctx, datasets_used)
+        return _heuristic_answer(question, data_ctx, datasets_used, _AI_FAILED_NOTE)
     return _parse_ai_response(raw, datasets_used)

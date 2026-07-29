@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     # builder (full dataset load + arbitrary joins/aggregates per call), so
     # unlike /datasets/{id}/query it gets its own limit.
     rate_limit_sql_query_per_5min: int = 30
+    # The 3 public shop-floor-kiosk routes (no login, org scope derived from
+    # machine_id/badge_id) - generous enough for a busy reader/kiosk polling
+    # normally, tight enough to blunt badge-enumeration or roster-pollution
+    # abuse from a single IP.
+    rate_limit_operator_capture_per_5min: int = 30
+    rate_limit_checkin_read_per_5min: int = 60
+    rate_limit_checkin_write_per_5min: int = 30
     sql_query_timeout_seconds: float = 10.0
     # Caps per-connection RAM so a runaway query (e.g. a self cross-join) can't
     # balloon past this before the wall-clock timeout above gets a chance to fire.
@@ -93,7 +100,9 @@ class Settings(BaseSettings):
     # narration). Optional: unset means every caller uses its deterministic
     # fallback path instead of a live model call - see app/services/llm.py.
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-2.5-flash is retired: it still appears in models.list() but
+    # generateContent 404s for keys issued after its cutoff.
+    gemini_model: str = "gemini-3.6-flash"
 
 
 @lru_cache

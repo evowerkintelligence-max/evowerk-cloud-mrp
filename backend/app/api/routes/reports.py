@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,8 @@ _INLINE_FORMATS = ("html",)
 
 
 class SavedReportWriteRequest(BaseModel):
-    name: str
+    # A blank name saves a row you cannot tell apart or click in the list.
+    name: str = Field(..., min_length=1, max_length=200)
     sections: list[ReportSectionSpec] = []
 
 

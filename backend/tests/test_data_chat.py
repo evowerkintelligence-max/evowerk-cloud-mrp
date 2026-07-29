@@ -64,3 +64,17 @@ async def test_message_scoped_to_specific_dataset(client):
     )
     assert res.status_code == 200
     assert res.json()["datasets_used"] == ["other.csv"]
+
+
+async def test_heuristic_does_not_mistake_performing_for_min(client):
+    """"perfor-min-g" used to match the numeric-stats branch by substring."""
+    token = await _register_and_login(client)
+    await _upload(client, token)
+
+    res = await client.post(
+        "/data-chat/message", headers=_h(token), json={"question": "what was the worst performing machine last month?"}
+    )
+    assert res.status_code == 200, res.text
+    answer = res.json()["answer"]
+    assert "numeric column statistics" not in answer
+    assert "AI is not configured" in answer

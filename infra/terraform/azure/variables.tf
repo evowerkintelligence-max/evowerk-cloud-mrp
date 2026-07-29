@@ -69,6 +69,24 @@ variable "mfa_encryption_key" {
   sensitive   = true
 }
 
+variable "gemini_api_key" {
+  description = "Gemini API key for the LLM-backed features (data chat, report narration, computer vision). Get one from https://aistudio.google.com/apikey"
+  type        = string
+  sensitive   = true
+}
+
+variable "gemini_model" {
+  description = "Gemini model id. Pinned here so a retired model can be rolled forward without rebuilding the backend image - Google retires models for new API keys while still listing them in models.list()."
+  type        = string
+  default     = "gemini-3.6-flash"
+}
+
+variable "dataset_storage_quota_gb" {
+  description = "Size of the Azure Files share backing the backend's data_dir (uploaded datasets, AutoML artifacts). Standard file shares bill for what you use, not the quota, so this is a cap rather than a cost."
+  type        = number
+  default     = 100
+}
+
 variable "backend_cpu" {
   description = "vCPU for the backend Container App (Consumption plan requires specific valid cpu/memory pairs)"
   type        = number

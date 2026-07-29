@@ -48,6 +48,8 @@ interface OperatorResponse {
   badge_id: string | null;
   status: string;
   needs_review: boolean;
+  duplicate_of_id: string | null;
+  duplicate_of_name: string | null;
 }
 
 interface RoutingStepResponse {
@@ -484,7 +486,7 @@ function OperatorRow({
   onError: (message: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [mergeTarget, setMergeTarget] = useState("");
+  const [mergeTarget, setMergeTarget] = useState(operator.duplicate_of_id ?? "");
 
   const merge = useMutation({
     mutationFn: async () => {
@@ -530,7 +532,11 @@ function OperatorRow({
         <TR>
           <TD colSpan={5}>
             <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 p-3 text-sm dark:bg-amber-950">
-              <span>Possible duplicate of an existing operator.</span>
+              <span>
+                {operator.duplicate_of_name
+                  ? `Possible duplicate of ${operator.duplicate_of_name}.`
+                  : "Possible duplicate of an existing operator."}
+              </span>
               <Select value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value)}>
                 <option value="" disabled>
                   Merge into...

@@ -54,6 +54,20 @@ async def test_list_needs_review_filter(client):
     assert flagged.json()[0]["id"] == close["id"]
 
 
+async def test_list_includes_duplicate_hint_for_needs_review_rows(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    target = (await client.post("/operators", json={"name": "Johnson"}, headers=headers)).json()
+    close = (await client.post("/operators", json={"name": "Jonson"}, headers=headers)).json()
+
+    listed = (await client.get("/operators", headers=headers)).json()
+    by_id = {o["id"]: o for o in listed}
+    assert by_id[close["id"]]["duplicate_of_id"] == target["id"]
+    assert by_id[close["id"]]["duplicate_of_name"] == "Johnson"
+    assert by_id[target["id"]]["duplicate_of_id"] is None
+    assert by_id[target["id"]]["duplicate_of_name"] is None
+
+
 async def test_patch_operator_clears_needs_review(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

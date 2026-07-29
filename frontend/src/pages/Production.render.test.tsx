@@ -301,12 +301,31 @@ describe("Production (setup tabs)", () => {
       qc.setQueryData(
         ["operators"],
         [
-          { id: "op-1", name: "Kim", code: null, badge_id: null, status: "active", needs_review: false },
-          { id: "op-2", name: "Kin", code: null, badge_id: null, status: "active", needs_review: true },
+          {
+            id: "op-1",
+            name: "Johnson",
+            code: null,
+            badge_id: null,
+            status: "active",
+            needs_review: false,
+            duplicate_of_id: null,
+            duplicate_of_name: null,
+          },
+          {
+            id: "op-2",
+            name: "Jonson",
+            code: null,
+            badge_id: null,
+            status: "active",
+            needs_review: true,
+            duplicate_of_id: "op-1",
+            duplicate_of_name: "Johnson",
+          },
         ],
       ),
     );
     expect(html).toContain("Needs review");
+    expect(html).toContain("Possible duplicate of Johnson");
     expect(html).toContain("Merge into");
     expect(html).toContain("Keep both");
   });

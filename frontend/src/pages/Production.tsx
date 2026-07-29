@@ -17,6 +17,7 @@ import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/tabl
 import { ItemSelect } from "@/components/ItemSelect";
 import { humanize } from "@/lib/status";
 import { useCurrentUser } from "@/lib/currentUser";
+import { C, EChart, asUtcMs, rankedBarOption, resolveShiftForTime, useShiftSchedule, type ScheduleItem } from "./analytics/shared";
 import { JobsPanel } from "./production/JobsPanel";
 
 interface WorkCenterResponse {
@@ -555,6 +556,171 @@ function OperatorRow({
   );
 }
 
+interface CaptureEventItem {
+  operator_id: string;
+  operator_name: string;
+  machine_id: string;
+  machine_name: string;
+  started_at: string;
+  ended_at: string | null;
+}
+
+const CAPTURE_EVENT_DAY_OPTIONS = [7, 30, 90];
+const UNASSIGNED_SHIFT = "Unassigned";
+
+function useOperatorCaptureEvents(days: number) {
+  return useQuery<CaptureEventItem[]>({
+    queryKey: ["operator-capture-events", days],
+    queryFn: async () => {
+      const res = await apiFetch(`/operators/capture-events?days=${days}`);
+      if (!res.ok) throw new Error("Failed to load check-in history");
+      return res.json();
+    },
+  });
+}
+
+interface OperatorShiftStat {
+  operatorId: string;
+  operatorName: string;
+  shift: string;
+  totalMinutes: number;
+  checkins: number;
+  machines: Set<string>;
+}
+
+// Buckets each capture event by its start time (never split across a shift
+// boundary) and sums duration/check-ins/distinct machines per operator per
+// shift. An open event (ended_at null) counts as running until now.
+function aggregateByOperatorShift(events: CaptureEventItem[], schedule: ScheduleItem[]): OperatorShiftStat[] {
+  const now = Date.now();
+  const byKey = new Map<string, OperatorShiftStat>();
+  for (const e of events) {
+    const started = asUtcMs(e.started_at);
+    const ended = e.ended_at ? asUtcMs(e.ended_at) : now;
+    const minutes = Math.max(0, (ended - started) / 60000);
+    const resolved = schedule.length > 0 ? resolveShiftForTime(schedule, new Date(started)) : null;
+    const shift = resolved?.shift ?? UNASSIGNED_SHIFT;
+    const key = `${e.operator_id}::${shift}`;
+    let stat = byKey.get(key);
+    if (!stat) {
+      stat = { operatorId: e.operator_id, operatorName: e.operator_name, shift, totalMinutes: 0, checkins: 0, machines: new Set() };
+      byKey.set(key, stat);
+    }
+    stat.totalMinutes += minutes;
+    stat.checkins += 1;
+    // ponytail: dedupe by name (not id) so the Machines column can render the
+    // list of distinct machines directly instead of a bare count that hides
+    // which machines were involved.
+    stat.machines.add(e.machine_name);
+  }
+  return Array.from(byKey.values());
+}
+
+function formatMinutes(total: number): string {
+  const h = Math.floor(total / 60);
+  const m = Math.round(total % 60);
+  return `${h}h ${m}m`;
+}
+
+function OperatorPerformancePanel() {
+  const [days, setDays] = useState(7);
+  const [shift, setShift] = useState("");
+  const schedule = useShiftSchedule();
+  const events = useOperatorCaptureEvents(days);
+
+  const scheduleRows = schedule.data ?? [];
+  const eventRows = events.data ?? [];
+  const stats = aggregateByOperatorShift(eventRows, scheduleRows);
+  const shifts = Array.from(new Set(stats.map((s) => s.shift))).sort();
+  const activeShift = shift || shifts[0] || "";
+  const rowsForShift = stats.filter((s) => s.shift === activeShift).sort((a, b) => b.totalMinutes - a.totalMinutes);
+
+  const onFloor = new Map<string, string>();
+  for (const e of eventRows) if (e.ended_at === null) onFloor.set(e.operator_id, e.machine_name);
+
+  const sortedStats = [...stats].sort(
+    (a, b) => a.operatorName.localeCompare(b.operatorName) || a.shift.localeCompare(b.shift),
+  );
+
+  return (
+    <Card className="mt-8">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Operator performance by shift</CardTitle>
+        <Select value={String(days)} onChange={(e) => setDays(Number(e.target.value))} className="w-32">
+          {CAPTURE_EVENT_DAY_OPTIONS.map((d) => (
+            <option key={d} value={d}>
+              Last {d} days
+            </option>
+          ))}
+        </Select>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {scheduleRows.length === 0 && eventRows.length > 0 && (
+          <Alert variant="warning">
+            No shift schedule configured — check-ins are grouped as "{UNASSIGNED_SHIFT}". Set one up on the Shift
+            Comparison page (Analytics → Shift Comparison) to break this down by shift.
+          </Alert>
+        )}
+        {eventRows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No check-ins in the last {days} days.</p>
+        ) : (
+          <>
+            <Select value={activeShift} onChange={(e) => setShift(e.target.value)} className="w-40">
+              {shifts.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+            {rowsForShift.length > 0 && (
+              <EChart
+                height={Math.max(120, rowsForShift.length * 36 + 20)}
+                option={rankedBarOption({
+                  categories: rowsForShift.map((r) => r.operatorName),
+                  values: rowsForShift.map((r) => Math.round((r.totalMinutes / 60) * 10) / 10),
+                  colorOf: () => C.blue,
+                  formatter: (v) => `${v} h`,
+                })}
+              />
+            )}
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Operator</TH>
+                    <TH>Shift</TH>
+                    <TH>Total time</TH>
+                    <TH>Check-ins</TH>
+                    <TH>Machines</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {sortedStats.map((s) => (
+                    <TR key={`${s.operatorId}::${s.shift}`}>
+                      <TD className="font-medium">
+                        {s.operatorName}
+                        {onFloor.has(s.operatorId) && (
+                          <Badge variant="success" className="ml-2">
+                            On floor — {onFloor.get(s.operatorId)}
+                          </Badge>
+                        )}
+                      </TD>
+                      <TD>{s.shift}</TD>
+                      <TD>{formatMinutes(s.totalMinutes)}</TD>
+                      <TD>{s.checkins}</TD>
+                      <TD>{Array.from(s.machines).join(", ")}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function OperatorsPanel() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
@@ -663,6 +829,8 @@ function OperatorsPanel() {
           </Table>
         </TableWrap>
       )}
+
+      <OperatorPerformancePanel />
     </div>
   );
 }

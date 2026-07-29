@@ -567,6 +567,12 @@ interface CaptureEventItem {
 
 const CAPTURE_EVENT_DAY_OPTIONS = [7, 30, 90];
 const UNASSIGNED_SHIFT = "Unassigned";
+// ponytail: a machine's next scan is what normally closes an event
+// (open_capture_event); if that scan never comes (shift ended, operator
+// walked off), the event stays open forever. Treat one this old as
+// abandoned rather than still running - caps its time contribution and
+// drops it from "on floor" - instead of growing unbounded.
+const STALE_OPEN_EVENT_MS = 24 * 60 * 60 * 1000;
 
 function useOperatorCaptureEvents(days: number) {
   return useQuery<CaptureEventItem[]>({
@@ -590,13 +596,14 @@ interface OperatorShiftStat {
 
 // Buckets each capture event by its start time (never split across a shift
 // boundary) and sums duration/check-ins/distinct machines per operator per
-// shift. An open event (ended_at null) counts as running until now.
+// shift. An open event (ended_at null) counts as running until now, capped
+// at STALE_OPEN_EVENT_MS so a missed scan-out doesn't grow forever.
 function aggregateByOperatorShift(events: CaptureEventItem[], schedule: ScheduleItem[]): OperatorShiftStat[] {
   const now = Date.now();
   const byKey = new Map<string, OperatorShiftStat>();
   for (const e of events) {
     const started = asUtcMs(e.started_at);
-    const ended = e.ended_at ? asUtcMs(e.ended_at) : now;
+    const ended = e.ended_at ? asUtcMs(e.ended_at) : Math.min(now, started + STALE_OPEN_EVENT_MS);
     const minutes = Math.max(0, (ended - started) / 60000);
     const resolved = schedule.length > 0 ? resolveShiftForTime(schedule, new Date(started)) : null;
     const shift = resolved?.shift ?? UNASSIGNED_SHIFT;
@@ -641,7 +648,10 @@ function OperatorPerformancePanel() {
   const hasUnassigned = stats.some((s) => s.shift === UNASSIGNED_SHIFT);
 
   const onFloor = new Map<string, string>();
-  for (const e of eventRows) if (e.ended_at === null) onFloor.set(e.operator_id, e.machine_name);
+  for (const e of eventRows)
+    if (e.ended_at === null && Date.now() - asUtcMs(e.started_at) < STALE_OPEN_EVENT_MS) {
+      onFloor.set(e.operator_id, e.machine_name);
+    }
 
   const sortedStats = [...stats].sort(
     (a, b) => a.operatorName.localeCompare(b.operatorName) || a.shift.localeCompare(b.shift),

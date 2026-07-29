@@ -404,7 +404,7 @@ describe("Production (setup tabs)", () => {
     expect(html).not.toContain("Shift Comparison");
   });
 
-  it("operators tab badges an operator with an open check-in as currently on the floor", () => {
+  it("operators tab badges an operator with a recent open check-in as currently on the floor", () => {
     const html = renderSetup("operators", (qc) => {
       qc.setQueryData(
         ["operators"],
@@ -417,12 +417,36 @@ describe("Production (setup tabs)", () => {
           {
             operator_id: "op-1", operator_name: "J Kim",
             machine_id: "m-1", machine_name: "Machine 1",
-            started_at: "2026-07-27T10:00:00+00:00", ended_at: null,
+            started_at: new Date(Date.now() - 3600000).toISOString(), ended_at: null,
           },
         ],
       );
     });
     expect(html).toContain("On floor");
     expect(html).toContain("Machine 1");
+  });
+
+  it("operators tab does not badge an open check-in older than 24h, and caps its time contribution", () => {
+    const html = renderSetup("operators", (qc) => {
+      qc.setQueryData(
+        ["operators"],
+        [{ id: "op-1", name: "J Kim", code: null, badge_id: null, status: "active", needs_review: false }],
+      );
+      qc.setQueryData(["shift-schedule"], []);
+      qc.setQueryData(
+        ["operator-capture-events", 7],
+        [
+          {
+            operator_id: "op-1", operator_name: "J Kim",
+            machine_id: "m-1", machine_name: "Machine 1",
+            // Opened 3 days ago with no scan-out - stale, not still running.
+            started_at: new Date(Date.now() - 3 * 86400000).toISOString(), ended_at: null,
+          },
+        ],
+      );
+    });
+    expect(html).not.toContain("On floor");
+    // Capped at 24h, not the ~72h that "running until now" would report.
+    expect(html).toContain("24h 0m");
   });
 });

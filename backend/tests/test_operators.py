@@ -257,10 +257,14 @@ async def test_capture_events_route_scopes_by_org_and_days(client, db_session):
         source="reader", scanned_at=NOW,
     )
     recent.ended_at = NOW
+    # 20 days old rather than exactly 30: a boundary of exactly `days=30` would
+    # be flaky, since the endpoint computes its own `since` a few
+    # milliseconds after this NOW timestamp was captured, making the exact
+    # 30-day-old row fall just outside the window depending on execution speed.
     old = CaptureEvent(
         org_id=org_id, operator_id=uuid.UUID(op["id"]), machine_id=uuid.UUID(machine["id"]),
-        source="reader", started_at=NOW - timedelta(days=30),
-        ended_at=NOW - timedelta(days=30) + timedelta(hours=1),
+        source="reader", started_at=NOW - timedelta(days=20),
+        ended_at=NOW - timedelta(days=20) + timedelta(hours=1),
     )
     db_session.add(old)
     await db_session.commit()

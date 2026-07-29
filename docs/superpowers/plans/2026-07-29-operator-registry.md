@@ -748,7 +748,7 @@ app.include_router(operators.router)
 - [ ] **Step 5: Run to verify pass**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_operators.py -v`
-Expected: `9 passed`
+Expected: `8 passed`
 
 - [ ] **Step 6: Run the full backend suite to check for regressions**
 

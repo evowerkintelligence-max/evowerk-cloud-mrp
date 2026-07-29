@@ -3,6 +3,8 @@
 Status: Approved for planning
 Date: 2026-07-29
 
+Depends on `2026-07-29-operator-registry-design.md`, which must ship first.
+
 ## Problem
 
 The Shift Comparison engine (`backend/app/services/shifts.py`,
@@ -80,14 +82,23 @@ once for shift and once for operator. Same aggregates, same
 `_derive_shift_metrics`, same `_primary_key` ranking axis. This is a
 refactor plus a second call, not a second copy of the SQL-building code.
 
-Operators are grouped case-insensitively. The existing shift key is
+Operator names resolve to the Operator registry rather than being grouped as
+raw strings. See `2026-07-29-operator-registry-design.md`, which is a
+prerequisite for this spec.
+
+The existing shift key is
 `COALESCE(NULLIF(TRIM(CAST(col AS VARCHAR)), ''), 'Unknown')`, which trims but
-preserves case. That is correct for shift labels like `A`/`B`/`Night`, which
-come from a fixed vocabulary. Human names are entered by different people at
-different times, so `J. Kim` and `j. kim` are one person and must not rank as
-two. The operator key applies the same COALESCE/NULLIF/TRIM and additionally
-folds case for grouping, while displaying the most frequent original spelling
-so the UI shows `J. Kim` rather than `j. kim`.
+preserves case. That is correct for shift labels like `A`/`B`/`Night`, drawn
+from a fixed vocabulary. Human names are not: they are entered by different
+people at different times, so `J. Kim` and `j. kim` are one person and must
+not rank as two.
+
+The SQL groups on the trimmed, case-folded name, and each resulting group is
+resolved through `resolve_or_create_operator` to a registry row, which supplies
+the display name and lets the same person reconcile between this leaderboard
+and the live operator board. Case folding in SQL alone would fix the spelling
+variants visible within one dataset but would leave this page and the live
+board with independent, unreconcilable notions of who exists.
 
 `ShiftAnalyzeRequest` gains `operator_col: Optional[str]`.
 `ShiftAnalyzeResponse` gains:
@@ -179,8 +190,8 @@ Backend:
 - An operator with 2 rows against a set whose median is well above the floor
   appears in `operators` but is excluded from `best_operator`/`worst_operator`,
   and `operators_below_threshold` counts it.
-- `J. Kim` and `j. kim` in the same dataset produce one operator row, labelled
-  with the more frequent spelling.
+- `J. Kim` and `j. kim` in the same dataset produce one operator row, resolving
+  to a single registry entry and labelled with that entry's display name.
 - A shift and an operator sharing a name produce two distinct
   `ShiftForecastDataset` rows and two distinct materialized datasets.
 - An analysis with no operator column mapped returns the same response shape

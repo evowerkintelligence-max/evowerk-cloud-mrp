@@ -13,6 +13,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     alert,
     audit,
     bom,
+    capture_event,
     dataset,
     device_token,
     forecast,

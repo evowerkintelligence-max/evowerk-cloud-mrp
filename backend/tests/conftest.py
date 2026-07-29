@@ -34,6 +34,7 @@ from app.models import (  # noqa: F401 - register models
     automl_live_binding,
     automl_run,
     bom,
+    capture_event,
     dashboard,
     dataset,
     device_token,

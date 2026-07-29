@@ -18,6 +18,7 @@ from app.models.bom import Item
 from app.models.inventory import InventoryBalance
 from app.models.location import Location
 from app.models.lot import Lot, LotTransaction
+from app.models.operator import Operator
 from app.models.work_order import WorkOrder, WorkOrderComponent, WorkOrderComponentLot
 from app.services.inventory import apply_inventory_delta
 from app.services.locations import location_code, resolve_location_id
@@ -71,6 +72,7 @@ class WorkOrderUpdateRequest(BaseModel):
     scheduled_start: date | None = None
     location_id: str | None = None
     notes: str | None = None
+    assigned_operator_id: str | None = None
 
 
 def _validate_quantity(quantity: Decimal) -> None:
@@ -114,6 +116,7 @@ class WorkOrderResponse(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     notes: str | None
+    assigned_operator_id: str | None
     components: list[WorkOrderComponentResponse]
 
 
@@ -139,6 +142,7 @@ def _wo_to_response(
         started_at=wo.started_at.isoformat() if wo.started_at else None,
         finished_at=wo.finished_at.isoformat() if wo.finished_at else None,
         notes=wo.notes,
+        assigned_operator_id=str(wo.assigned_operator_id) if wo.assigned_operator_id else None,
         components=components,
     )
 
@@ -790,11 +794,35 @@ async def update_work_order(
     wo = await get_or_404(
         db, WorkOrder, current.org_id, wo_id, "Work order not found", for_update=True
     )
+    supplied = body.model_fields_set
+
+    # Who's actually running the job is a plan-level fact, not a
+    # component/quantity edit - it can change on a job that's already
+    # started (that's exactly when you'd correct or set it), so it's applied
+    # independently of the scheduled-only guard below.
+    if "assigned_operator_id" in supplied:
+        if body.assigned_operator_id is not None:
+            try:
+                operator_id = uuid.UUID(body.assigned_operator_id)
+            except ValueError:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid assigned_operator_id") from None
+            await get_or_404(db, Operator, current.org_id, operator_id, "Operator not found")
+            wo.assigned_operator_id = operator_id
+        else:
+            wo.assigned_operator_id = None
+
     if wo.status != "scheduled":
         # A started job's components are already being consumed on the floor;
         # editing the recipe or quantity under it would rewrite what already
-        # happened.
-        raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
+        # happened. assigned_operator_id doesn't touch components, so it's
+        # exempt from this guard (handled above).
+        if supplied - {"assigned_operator_id"}:
+            raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
+        await db.commit()
+        await db.refresh(wo)
+        item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
+        location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
+        return await _detail_response(db, wo, item, location)
 
     quantity_planned = wo.quantity_planned
     if body.quantity_planned is not None:
@@ -815,7 +843,6 @@ async def update_work_order(
     # UI clears a date or a note, and reading it as "field omitted" meant
     # clearing a start date silently did nothing, on the very field that drives
     # reservation priority, the horizon bound and the Late badge.
-    supplied = body.model_fields_set
     if body.location_id is not None:
         wo.location_id = await resolve_location_id(db, current.org_id, body.location_id)
     if "scheduled_start" in supplied:

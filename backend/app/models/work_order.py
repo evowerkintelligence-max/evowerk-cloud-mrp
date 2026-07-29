@@ -44,6 +44,14 @@ class WorkOrder(Base):
     routing_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("routings.id"), nullable=True
     )
+    # Who's actually running this job - a plan-level fact, not an
+    # observation. Nullable: most jobs never set it. Participates only in
+    # resolve_attribution's fallback query (app.services.operator_capture);
+    # no capture-event history of its own, because a work order's assignment
+    # can change after the fact and this column has to reflect that.
+    assigned_operator_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("operators.id"), nullable=True
+    )
     # Server-computed (max wo_number for this org + 1) at creation, never
     # user-supplied. Plain int; format it as "WO-4" at the response or
     # frontend layer, never store the formatted string.

@@ -50,7 +50,7 @@ export default defineConfig({
       // instead of index.html. bypass() tells the difference: a page
       // navigation's Accept header leads with text/html; apiFetch's fetch()
       // calls never send that, so only real API calls get proxied.
-      "^/(auth|orgs|items|boms|suppliers|purchase-orders|customers|sales-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm|admin|staff|planning|work-orders)(/|$|\\?)":
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|customers|sales-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm|admin|staff|planning|work-orders|operators|checkin)(/|$|\\?)":
         {
           target: `http://localhost:${backendPort}`,
           bypass(req) {

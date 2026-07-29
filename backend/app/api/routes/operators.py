@@ -77,7 +77,11 @@ async def list_capture_events(
     since = datetime.now(timezone.utc) - timedelta(days=days)
     rows = (
         await db.execute(
-            select(CaptureEvent, Operator.name, Machine.name)
+            select(
+                CaptureEvent.operator_id, CaptureEvent.machine_id,
+                CaptureEvent.started_at, CaptureEvent.ended_at,
+                Operator.name, Machine.name,
+            )
             .join(Operator, Operator.id == CaptureEvent.operator_id)
             .join(Machine, Machine.id == CaptureEvent.machine_id)
             .where(CaptureEvent.org_id == current.org_id, CaptureEvent.started_at >= since)
@@ -86,14 +90,14 @@ async def list_capture_events(
     ).all()
     return [
         CaptureEventItem(
-            operator_id=str(event.operator_id),
+            operator_id=str(operator_id),
             operator_name=operator_name,
-            machine_id=str(event.machine_id),
+            machine_id=str(machine_id),
             machine_name=machine_name,
-            started_at=event.started_at,
-            ended_at=event.ended_at,
+            started_at=started_at,
+            ended_at=ended_at,
         )
-        for event, operator_name, machine_name in rows
+        for operator_id, machine_id, started_at, ended_at, operator_name, machine_name in rows
     ]
 
 

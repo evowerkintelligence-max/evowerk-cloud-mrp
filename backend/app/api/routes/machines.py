@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import io
 import uuid
 from typing import Any
 
+import qrcode
+import qrcode.image.svg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.machine import Machine
@@ -118,3 +123,20 @@ async def update_machine(
     await db.commit()
     await db.refresh(m)
     return _to_response(m)
+
+
+@router.get("/{machine_id}/checkin-qr")
+async def machine_checkin_qr(
+    machine_id: uuid.UUID,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """SVG QR code encoding this machine's public check-in URL - see
+    app.api.routes.operator_capture for what scanning it does. Generated
+    server-side so printing it needs no frontend QR dependency."""
+    await get_or_404(db, Machine, current.org_id, machine_id, "Machine not found")
+    url = f"{get_settings().frontend_base_url}/checkin/{machine_id}"
+    image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
+    buffer = io.BytesIO()
+    image.save(buffer)
+    return Response(content=buffer.getvalue(), media_type="image/svg+xml")

@@ -174,7 +174,7 @@ function renderSetup(tab: string, seed: (qc: QueryClient) => void = () => {}) {
 
 describe("Production (setup tabs)", () => {
   it("renders each tab empty without crashing", () => {
-    for (const tab of ["work-centers", "machines", "routings"]) {
+    for (const tab of ["work-centers", "machines", "routings", "operators"]) {
       const html = renderSetup(tab);
       expect(html).toContain("Production");
       expect(html).toContain("Work Centers");
@@ -276,5 +276,38 @@ describe("Production (setup tabs)", () => {
   it("routings tab shows the empty state when there are none", () => {
     const html = renderSetup("routings", (qc) => qc.setQueryData(["routings"], []));
     expect(html).toContain("No routings yet");
+  });
+
+  it("operators tab shows the create form and lists rows", () => {
+    const html = renderSetup("operators", (qc) =>
+      qc.setQueryData(
+        ["operators"],
+        [{ id: "op-1", name: "J Kim", code: "E-100", badge_id: null, status: "active", needs_review: false }],
+      ),
+    );
+    expect(html).toContain("Add an operator");
+    expect(html).toContain("J Kim");
+    expect(html).toContain("E-100");
+    expect(html).toContain("Active");
+  });
+
+  it("operators tab shows the empty state when there are none", () => {
+    const html = renderSetup("operators", (qc) => qc.setQueryData(["operators"], []));
+    expect(html).toContain("No operators yet");
+  });
+
+  it("operators tab surfaces a needs-review row with a merge picker", () => {
+    const html = renderSetup("operators", (qc) =>
+      qc.setQueryData(
+        ["operators"],
+        [
+          { id: "op-1", name: "Kim", code: null, badge_id: null, status: "active", needs_review: false },
+          { id: "op-2", name: "Kin", code: null, badge_id: null, status: "active", needs_review: true },
+        ],
+      ),
+    );
+    expect(html).toContain("Needs review");
+    expect(html).toContain("Merge into");
+    expect(html).toContain("Keep both");
   });
 });

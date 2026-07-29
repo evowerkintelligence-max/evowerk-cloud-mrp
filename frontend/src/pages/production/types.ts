@@ -28,5 +28,6 @@ export interface WorkOrder {
   started_at: string | null;
   finished_at: string | null;
   notes: string | null;
+  assigned_operator_id: string | null;
   components: WorkOrderComponent[];
 }

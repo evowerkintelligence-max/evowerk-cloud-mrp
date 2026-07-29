@@ -44,6 +44,10 @@ shap>=0.45.0
 # Report exports. PDF only - the HTML and CSV renderers are stdlib.
 reportlab>=4.0.0
 
+# QR code image for the operator identity-capture check-in page - pure
+# Python, the bundled SVG factory needs no Pillow.
+qrcode>=7.4.0
+
 # Gemini client for LLM-backed features (data chat, computer vision, report
 # narration) ported from the desktop app. Each caller degrades to a
 # deterministic fallback when GEMINI_API_KEY is unset, so this is a soft

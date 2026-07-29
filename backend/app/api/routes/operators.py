@@ -1,3 +1,4 @@
+# backend/app/api/routes/operators.py
 from __future__ import annotations
 
 import uuid
@@ -5,14 +6,16 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
+from app.models.capture_event import CaptureEvent
 from app.models.operator import Operator
+from app.models.work_order import WorkOrder
 from app.services.registry_matching import FUZZY_MATCH_THRESHOLD, normalized_similarity
 
 router = APIRouter(prefix="/operators", tags=["operators"])
@@ -167,9 +170,16 @@ async def merge_operator(
     source = await get_or_404(db, Operator, current.org_id, operator_id, "Operator not found")
     target = await get_or_404(db, Operator, current.org_id, body.target_operator_id, "Target operator not found")
 
-    # ponytail: no CaptureEvent/WorkOrder.assigned_operator_id exist yet to
-    # repoint - identity-capture spec adds that repointing here once those
-    # tables land.
+    await db.execute(
+        update(CaptureEvent)
+        .where(CaptureEvent.org_id == current.org_id, CaptureEvent.operator_id == source.id)
+        .values(operator_id=target.id)
+    )
+    await db.execute(
+        update(WorkOrder)
+        .where(WorkOrder.org_id == current.org_id, WorkOrder.assigned_operator_id == source.id)
+        .values(assigned_operator_id=target.id)
+    )
     await db.delete(source)
     await log_event(
         db, action="operator.merged", org_id=current.org_id, actor_user_id=current.id,
@@ -187,9 +197,27 @@ async def delete_operator(
     db: AsyncSession = Depends(get_db),
 ):
     o = await get_or_404(db, Operator, current.org_id, operator_id, "Operator not found")
-    # ponytail: no CaptureEvent/WorkOrder.assigned_operator_id exist yet to
-    # block on - identity-capture spec adds the 409 guard here once those
-    # tables land.
+
+    has_capture_events = (
+        await db.execute(
+            select(
+                exists().where(CaptureEvent.org_id == current.org_id, CaptureEvent.operator_id == o.id)
+            )
+        )
+    ).scalar()
+    has_work_orders = (
+        await db.execute(
+            select(
+                exists().where(WorkOrder.org_id == current.org_id, WorkOrder.assigned_operator_id == o.id)
+            )
+        )
+    ).scalar()
+    if has_capture_events or has_work_orders:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "operator has capture events / is assigned to a work order and cannot be deleted",
+        )
+
     await db.delete(o)
     await log_event(
         db, action="operator.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(o.id),

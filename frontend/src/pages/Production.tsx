@@ -257,6 +257,51 @@ function WorkCentersPanel() {
   );
 }
 
+// Same pattern ReportBuilder.tsx uses for an authenticated file download: open
+// the tab synchronously (so the popup blocker doesn't see an async click),
+// then point it at the blob once apiFetch's Authorization header has done its
+// job - an <img src> can't carry that header on its own.
+//
+// The backend endpoint returns the bare QR image with no label, so a printed
+// sticker with nothing on it but a QR code is a mismatch waiting to happen
+// once a shop has more than a couple of machines - this wraps it in a small
+// page naming the machine. Built via DOM APIs (not innerHTML/document.write)
+// so the machine's own name/code - free text an owner typed - can't inject
+// markup into the print tab.
+async function printQr(machineId: string, code: string, name: string) {
+  const tab = window.open("", "_blank");
+  const res = await apiFetch(`/machines/${machineId}/checkin-qr`);
+  if (!res.ok) {
+    tab?.close();
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  if (tab) {
+    const doc = tab.document;
+    doc.title = `Check-in QR - ${code}`;
+    const style = doc.createElement("style");
+    style.textContent = `
+      body { font-family: system-ui, sans-serif; text-align: center; padding: 2rem; }
+      h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
+      p { color: #555; margin: 0 0 1.5rem; }
+      img { width: 320px; height: 320px; }
+    `;
+    doc.head.appendChild(style);
+    const heading = doc.createElement("h1");
+    heading.textContent = `${code} - ${name}`;
+    const subheading = doc.createElement("p");
+    subheading.textContent = "Scan to check in";
+    const img = doc.createElement("img");
+    img.src = url;
+    img.alt = "Check-in QR code";
+    doc.body.append(heading, subheading, img);
+  } else {
+    window.open(url, "_blank");
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function MachinesPanel() {
   const queryClient = useQueryClient();
   const [workCenterId, setWorkCenterId] = useState("");
@@ -401,6 +446,7 @@ function MachinesPanel() {
                 <TH>MTBF (h)</TH>
                 <TH>MTTR (h)</TH>
                 <TH>Review</TH>
+                <TH>QR</TH>
               </TR>
             </THead>
             <TBody>
@@ -415,6 +461,11 @@ function MachinesPanel() {
                   <TD className="text-muted-foreground">{m.mtbf_hours ?? "-"}</TD>
                   <TD className="text-muted-foreground">{m.mttr_hours ?? "-"}</TD>
                   <TD>{m.needs_review ? <Badge variant="warning">Needs review</Badge> : ""}</TD>
+                  <TD>
+                    <Button size="sm" variant="outline" onClick={() => printQr(m.id, m.code, m.name)}>
+                      Print QR
+                    </Button>
+                  </TD>
                 </TR>
               ))}
             </TBody>

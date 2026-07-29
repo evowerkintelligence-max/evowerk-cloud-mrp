@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,6 +15,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.capture_event import CaptureEvent
+from app.models.machine import Machine
 from app.models.operator import Operator
 from app.models.work_order import WorkOrder
 from app.services.registry_matching import FUZZY_MATCH_THRESHOLD, normalized_similarity
@@ -60,6 +62,48 @@ def _to_response(
         status=o.status, needs_review=o.needs_review,
         duplicate_of_id=duplicate_of_id, duplicate_of_name=duplicate_of_name,
     )
+
+
+class CaptureEventItem(BaseModel):
+    operator_id: str
+    operator_name: str
+    machine_id: str
+    machine_name: str
+    started_at: datetime
+    ended_at: datetime | None
+
+
+@router.get("/capture-events", response_model=list[CaptureEventItem])
+async def list_capture_events(
+    days: int = Query(7, ge=1, le=90),
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        await db.execute(
+            select(
+                CaptureEvent.operator_id, CaptureEvent.machine_id,
+                CaptureEvent.started_at, CaptureEvent.ended_at,
+                Operator.name, Machine.name,
+            )
+            .join(Operator, Operator.id == CaptureEvent.operator_id)
+            .join(Machine, Machine.id == CaptureEvent.machine_id)
+            .where(CaptureEvent.org_id == current.org_id, CaptureEvent.started_at >= since)
+            .order_by(CaptureEvent.started_at)
+        )
+    ).all()
+    return [
+        CaptureEventItem(
+            operator_id=str(operator_id),
+            operator_name=operator_name,
+            machine_id=str(machine_id),
+            machine_name=machine_name,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+        for operator_id, machine_id, started_at, ended_at, operator_name, machine_name in rows
+    ]
 
 
 @router.get("", response_model=list[OperatorResponse])

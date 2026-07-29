@@ -44,6 +44,7 @@ from app.models import (  # noqa: F401 - register models on the metadata
     location,
     lot,
     maintenance_schedule,
+    operator,
     pace_tracking,
     procurement,
     rca_case,

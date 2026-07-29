@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from app.core.config import get_settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -114,3 +117,121 @@ async def test_checkin_requires_operator_id_or_name(client):
 
     res = await client.post(f"/checkin/{machine['id']}", json={})
     assert res.status_code == 400
+
+
+async def test_capture_rate_limit_trips_per_ip_after_threshold(client):
+    token = await _register_and_login(client)
+    machine, _ = await _seed_machine_and_operator(client, token, badge_id="B1")
+    settings = get_settings()
+    limit = settings.rate_limit_operator_capture_per_5min
+
+    last_status = None
+    for _ in range(limit + 5):
+        res = await client.post("/operators/capture", json={"badge_id": "NOPE", "machine_id": machine["id"]})
+        last_status = res.status_code
+        if last_status == 429:
+            break
+
+    assert last_status == 429, "expected the per-IP rate limit to trip before exhausting the loop"
+
+
+async def test_checkin_read_rate_limit_trips_per_ip_after_threshold(client):
+    token = await _register_and_login(client)
+    machine, _ = await _seed_machine_and_operator(client, token)
+    settings = get_settings()
+    limit = settings.rate_limit_checkin_read_per_5min
+
+    last_status = None
+    for _ in range(limit + 5):
+        res = await client.get(f"/checkin/{machine['id']}")
+        last_status = res.status_code
+        if last_status == 429:
+            break
+
+    assert last_status == 429, "expected the per-IP rate limit to trip before exhausting the loop"
+
+
+async def test_checkin_write_rate_limit_trips_per_ip_after_threshold(client):
+    token = await _register_and_login(client)
+    machine, operator = await _seed_machine_and_operator(client, token)
+    settings = get_settings()
+    limit = settings.rate_limit_checkin_write_per_5min
+
+    last_status = None
+    for _ in range(limit + 5):
+        res = await client.post(f"/checkin/{machine['id']}", json={"operator_id": operator["id"]})
+        last_status = res.status_code
+        if last_status == 429:
+            break
+
+    assert last_status == 429, "expected the per-IP rate limit to trip before exhausting the loop"
+
+
+async def test_checkin_name_over_max_length_rejected(client):
+    token = await _register_and_login(client)
+    machine, _ = await _seed_machine_and_operator(client, token)
+
+    res = await client.post(f"/checkin/{machine['id']}", json={"name": "x" * 256})
+    assert res.status_code == 422
+
+
+async def test_checkin_whitespace_only_name_falls_through_to_400(client):
+    token = await _register_and_login(client)
+    machine, operator = await _seed_machine_and_operator(client, token)
+
+    res = await client.post(f"/checkin/{machine['id']}", json={"name": "   "})
+    assert res.status_code == 400
+
+    roster = await client.get(f"/checkin/{machine['id']}")
+    # No garbage operator created from the whitespace-only name - roster is
+    # unchanged from the one seeded operator.
+    assert [o["id"] for o in roster.json()["operators"]] == [operator["id"]]
+
+
+async def test_capture_scanned_at_far_in_future_rejected(client):
+    token = await _register_and_login(client)
+    machine, _ = await _seed_machine_and_operator(client, token, badge_id="B1")
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    res = await client.post(
+        "/operators/capture", json={"badge_id": "B1", "machine_id": machine["id"], "scanned_at": future}
+    )
+    assert res.status_code == 400
+
+
+async def test_capture_scanned_at_far_in_past_rejected(client):
+    token = await _register_and_login(client)
+    machine, _ = await _seed_machine_and_operator(client, token, badge_id="B1")
+
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    res = await client.post(
+        "/operators/capture", json={"badge_id": "B1", "machine_id": machine["id"], "scanned_at": past}
+    )
+    assert res.status_code == 400
+
+
+async def test_capture_scanned_at_within_window_accepted_and_normalized(client):
+    token = await _register_and_login(client)
+    machine, operator = await _seed_machine_and_operator(client, token, badge_id="B1")
+
+    recent = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(microsecond=0)
+    res = await client.post(
+        "/operators/capture",
+        json={"badge_id": "B1", "machine_id": machine["id"], "scanned_at": recent.isoformat()},
+    )
+    assert res.status_code == 201
+    started_at = datetime.fromisoformat(res.json()["started_at"])
+    assert started_at == recent
+
+
+async def test_capture_scanned_at_omitted_defaults_to_now(client):
+    token = await _register_and_login(client)
+    machine, operator = await _seed_machine_and_operator(client, token, badge_id="B1")
+
+    before = datetime.now(timezone.utc)
+    res = await client.post("/operators/capture", json={"badge_id": "B1", "machine_id": machine["id"]})
+    after = datetime.now(timezone.utc)
+    assert res.status_code == 201
+
+    started_at = datetime.fromisoformat(res.json()["started_at"])
+    assert before <= started_at <= after

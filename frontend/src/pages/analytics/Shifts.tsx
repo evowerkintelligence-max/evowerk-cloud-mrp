@@ -22,7 +22,9 @@ import {
   oeeColor,
   paceStatus,
   rankedBarOption,
+  resolveShiftForTime,
   token,
+  useShiftSchedule,
 } from "./shared";
 import {
   useAutoMLRun,
@@ -91,12 +93,6 @@ interface ShiftsResult {
   target_rate: number | null;
 }
 
-interface ScheduleItem {
-  shift_label: string;
-  start_time: string;
-  end_time: string;
-}
-
 const FIELDS = [
   { key: "shift_col", label: "Shift", required: true, hints: [/shift/i, /crew/i, /team/i] },
   { key: "units_col", label: "Units (optional)", hints: [/units_produced/i, /total_unit/i, /output/i, /units/i] },
@@ -125,39 +121,6 @@ const COLS: { key: keyof ShiftRow; label: string; render?: (v: number) => JSX.El
 ];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function minutesOfDay(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number);
-  return h * 60 + m;
-}
-
-// Matches `now` against each configured shift window, handling the case
-// where a shift crosses midnight (end_time < start_time).
-function resolveCurrentShift(schedule: ScheduleItem[], now: Date): { shift: string; minutesLeft: number } | null {
-  const nowMin = now.getHours() * 60 + now.getMinutes();
-  for (const s of schedule) {
-    const start = minutesOfDay(s.start_time);
-    const end = minutesOfDay(s.end_time);
-    const wraps = end <= start;
-    const within = wraps ? nowMin >= start || nowMin < end : nowMin >= start && nowMin < end;
-    if (within) {
-      const minutesLeft = wraps ? (nowMin >= start ? end + 24 * 60 - nowMin : end - nowMin) : end - nowMin;
-      return { shift: s.shift_label, minutesLeft };
-    }
-  }
-  return null;
-}
-
-function useShiftSchedule() {
-  return useQuery<ScheduleItem[]>({
-    queryKey: ["shift-schedule"],
-    queryFn: async () => {
-      const res = await apiFetch("/analytics/shifts/schedule");
-      if (!res.ok) throw new Error("Failed to load shift schedule");
-      return res.json();
-    },
-  });
-}
 
 // Weekly-recurring start/end time per shift label — powers the "current
 // shift" resolution for the handover and hourly-pace cards below.
@@ -439,7 +402,7 @@ export function Shifts() {
         const activeMachineShift = machineShift || machineShifts[0] || "";
         const machineRows = r.by_machine.filter((m) => m.shift === activeMachineShift);
 
-        const resolved = resolveCurrentShift(schedule.data ?? [], new Date());
+        const resolved = resolveShiftForTime(schedule.data ?? [], new Date());
         const handoverCandidate =
           handoverShift ||
           (resolved && r.shifts.some((s) => s.shift === resolved.shift) ? resolved.shift : r.shifts[0]?.shift ?? "");

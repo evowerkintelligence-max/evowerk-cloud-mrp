@@ -344,4 +344,128 @@ describe("Production (setup tabs)", () => {
     expect(html).toContain("Merge into");
     expect(html).toContain("Keep both");
   });
+
+  it("operators tab shows performance stats bucketed by shift", () => {
+    const html = renderSetup("operators", (qc) => {
+      qc.setQueryData(["org-me"], {
+        id: "org-1", name: "Acme", role: "owner", user_id: "user-1", enabled_features: ["shifts"],
+      });
+      qc.setQueryData(
+        ["operators"],
+        [{ id: "op-1", name: "J Kim", code: null, badge_id: null, status: "active", needs_review: false }],
+      );
+      qc.setQueryData(["shift-schedule"], [{ shift_label: "Day", start_time: "08:00", end_time: "20:00" }]);
+      qc.setQueryData(
+        ["operator-capture-events", 7],
+        [
+          {
+            operator_id: "op-1", operator_name: "J Kim",
+            machine_id: "m-1", machine_name: "Machine 1",
+            // Built via the local-time Date constructor (not a fixed-offset ISO
+            // string) so the local hour resolveShiftForTime reads back matches
+            // regardless of which timezone the test process runs in.
+            started_at: new Date(2026, 6, 27, 14, 0).toISOString(),
+            ended_at: new Date(2026, 6, 27, 15, 30).toISOString(),
+          },
+        ],
+      );
+    });
+    expect(html).toContain("Operator performance by shift");
+    expect(html).toContain("J Kim");
+    expect(html).toContain("Day");
+    expect(html).toContain("Machine 1");
+  });
+
+  it("operators tab points at the shift schedule when none is configured", () => {
+    const html = renderSetup("operators", (qc) => {
+      qc.setQueryData(["org-me"], {
+        id: "org-1", name: "Acme", role: "owner", user_id: "user-1", enabled_features: ["shifts"],
+      });
+      qc.setQueryData(["operators"], []);
+      qc.setQueryData(["shift-schedule"], []);
+      qc.setQueryData(
+        ["operator-capture-events", 7],
+        [
+          {
+            operator_id: "op-1", operator_name: "J Kim",
+            machine_id: "m-1", machine_name: "Machine 1",
+            started_at: "2026-07-27T10:00:00+00:00", ended_at: "2026-07-27T11:30:00+00:00",
+          },
+        ],
+      );
+    });
+    expect(html).toContain("Unassigned");
+    expect(html).toContain("Set one up");
+  });
+
+  it("operators tab doesn't point at the Shift Comparison page when the org lacks the shifts feature", () => {
+    const html = renderSetup("operators", (qc) => {
+      qc.setQueryData(["org-me"], {
+        id: "org-1", name: "Acme", role: "owner", user_id: "user-1", enabled_features: ["production"],
+      });
+      qc.setQueryData(["operators"], []);
+      // A 403 for a feature the org isn't entitled to would surface as this
+      // query erroring - not seeding ["shift-schedule"] at all models that
+      // (the panel must skip fetching it, per hasShifts).
+      qc.setQueryData(
+        ["operator-capture-events", 7],
+        [
+          {
+            operator_id: "op-1", operator_name: "J Kim",
+            machine_id: "m-1", machine_name: "Machine 1",
+            started_at: "2026-07-27T10:00:00+00:00", ended_at: "2026-07-27T11:30:00+00:00",
+          },
+        ],
+      );
+    });
+    expect(html).toContain("Unassigned");
+    expect(html).toContain("available on your plan");
+    expect(html).not.toContain("Shift Comparison");
+  });
+
+  it("operators tab badges an operator with a recent open check-in as currently on the floor", () => {
+    const html = renderSetup("operators", (qc) => {
+      qc.setQueryData(
+        ["operators"],
+        [{ id: "op-1", name: "J Kim", code: null, badge_id: null, status: "active", needs_review: false }],
+      );
+      qc.setQueryData(["shift-schedule"], [{ shift_label: "Day", start_time: "08:00", end_time: "20:00" }]);
+      qc.setQueryData(
+        ["operator-capture-events", 7],
+        [
+          {
+            operator_id: "op-1", operator_name: "J Kim",
+            machine_id: "m-1", machine_name: "Machine 1",
+            started_at: new Date(Date.now() - 3600000).toISOString(), ended_at: null,
+          },
+        ],
+      );
+    });
+    expect(html).toContain("On floor");
+    expect(html).toContain("Machine 1");
+  });
+
+  it("operators tab does not badge an open check-in older than 24h, and caps its time contribution", () => {
+    const html = renderSetup("operators", (qc) => {
+      qc.setQueryData(
+        ["operators"],
+        [{ id: "op-1", name: "J Kim", code: null, badge_id: null, status: "active", needs_review: false }],
+      );
+      qc.setQueryData(["shift-schedule"], []);
+      qc.setQueryData(
+        ["operator-capture-events", 7],
+        [
+          {
+            operator_id: "op-1", operator_name: "J Kim",
+            machine_id: "m-1", machine_name: "Machine 1",
+            // Opened 3 days ago with no scan-out - stale, not still running.
+            started_at: new Date(Date.now() - 3 * 86400000).toISOString(), ended_at: null,
+          },
+        ],
+      );
+    });
+    expect(html).not.toContain("On floor");
+    // Capped at 24h, not the ~72h that "running until now" would report.
+    expect(html).toContain("24h 0m");
+  });
 });

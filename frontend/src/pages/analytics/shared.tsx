@@ -44,6 +44,48 @@ export function useElapsed(startedAt: string | undefined): string {
 
 const TV_REFRESH_MS = 30_000;
 
+export interface ScheduleItem {
+  shift_label: string;
+  start_time: string;
+  end_time: string;
+}
+
+export function useShiftSchedule(enabled = true) {
+  return useQuery<ScheduleItem[]>({
+    queryKey: ["shift-schedule"],
+    queryFn: async () => {
+      const res = await apiFetch("/analytics/shifts/schedule");
+      if (!res.ok) throw new Error("Failed to load shift schedule");
+      return res.json();
+    },
+    enabled,
+  });
+}
+
+function minutesOfDay(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+// Matches `at` against each configured shift window, handling the case where
+// a shift crosses midnight (end_time < start_time). Used both for "now" (the
+// Shift Comparison page's current-shift resolution) and for bucketing any
+// historical timestamp — e.g. an operator capture event — into a shift.
+export function resolveShiftForTime(schedule: ScheduleItem[], at: Date): { shift: string; minutesLeft: number } | null {
+  const atMin = at.getHours() * 60 + at.getMinutes();
+  for (const s of schedule) {
+    const start = minutesOfDay(s.start_time);
+    const end = minutesOfDay(s.end_time);
+    const wraps = end <= start;
+    const within = wraps ? atMin >= start || atMin < end : atMin >= start && atMin < end;
+    if (within) {
+      const minutesLeft = wraps ? (atMin >= start ? end + 24 * 60 - atMin : end - atMin) : end - atMin;
+      return { shift: s.shift_label, minutesLeft };
+    }
+  }
+  return null;
+}
+
 // ─── Chart palette / defaults (copied from the desktop app) ──────────────────
 
 export const C = {
@@ -64,6 +106,15 @@ export const C = {
 // (index.html hardcodes <html class="dark">, no light/dark toggle), so
 // resolving once at module load stays correct.
 export function token(name: string, alpha?: number): string {
+  // vitest runs with environment: "node" (see vite.config.ts) - shared.tsx's
+  // module-scope TOOLTIP/AXIS_LABEL/etc. constants call token() at import
+  // time, which would otherwise throw "document is not defined" the moment
+  // any test imports this file (directly or transitively). Note this
+  // fallback drops the `alpha` argument, so a caller like token("--border",
+  // 0.4) gets opaque black instead of a translucent color on this path -
+  // fine since it only matters in the already-nonexistent "no DOM"
+  // production scenario, not worth plumbing through for that.
+  if (typeof document === "undefined") return `hsl(0deg 0% 0%)`;
   const ch = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return alpha === undefined ? `hsl(${ch})` : `hsl(${ch} / ${alpha})`;
 }

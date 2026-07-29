@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.machine import Machine
+from app.models.operator import Operator
 
 FUZZY_MATCH_THRESHOLD = 0.8
 
@@ -71,3 +72,28 @@ async def resolve_or_create_machine(
     db.add(machine)
     await db.flush()
     return machine
+
+
+async def resolve_or_create_operator(db: AsyncSession, org_id: uuid.UUID, raw_name: str) -> Operator:
+    """Exact match on (org_id, normalized_name) - one indexed lookup, the
+    overwhelmingly common path. On a miss, create a new row, flagged
+    needs_review=True only when it's a fuzzy-close near-duplicate of an
+    existing operator's name (a likely typo, worth a human glance)."""
+    target = raw_name.strip()
+    normalized = target.casefold()
+
+    existing_match = (
+        await db.execute(
+            select(Operator).where(Operator.org_id == org_id, Operator.normalized_name == normalized)
+        )
+    ).scalar_one_or_none()
+    if existing_match is not None:
+        return existing_match
+
+    others = (await db.execute(select(Operator).where(Operator.org_id == org_id))).scalars().all()
+    needs_review = any(normalized_similarity(target, o.name) >= FUZZY_MATCH_THRESHOLD for o in others)
+
+    operator = Operator(org_id=org_id, name=target, normalized_name=normalized, needs_review=needs_review)
+    db.add(operator)
+    await db.flush()
+    return operator

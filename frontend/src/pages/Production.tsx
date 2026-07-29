@@ -617,23 +617,28 @@ function aggregateByOperatorShift(events: CaptureEventItem[], schedule: Schedule
 }
 
 function formatMinutes(total: number): string {
-  const h = Math.floor(total / 60);
-  const m = Math.round(total % 60);
-  return `${h}h ${m}m`;
+  const t = Math.round(total);
+  return `${Math.floor(t / 60)}h ${t % 60}m`;
 }
 
 function OperatorPerformancePanel() {
   const [days, setDays] = useState(7);
   const [shift, setShift] = useState("");
-  const schedule = useShiftSchedule();
+  const org = useCurrentUser();
+  const hasShifts = (org.data?.enabled_features ?? []).includes("shifts");
+  const schedule = useShiftSchedule(hasShifts);
   const events = useOperatorCaptureEvents(days);
 
-  const scheduleRows = schedule.data ?? [];
+  // The org may be entitled to "production" (this card) without "shifts" -
+  // /analytics/shifts/schedule 403s for those orgs, so don't even ask for it,
+  // and treat the schedule as empty rather than surfacing that 403.
+  const scheduleRows = hasShifts ? schedule.data ?? [] : [];
   const eventRows = events.data ?? [];
   const stats = aggregateByOperatorShift(eventRows, scheduleRows);
   const shifts = Array.from(new Set(stats.map((s) => s.shift))).sort();
-  const activeShift = shift || shifts[0] || "";
+  const activeShift = shifts.includes(shift) ? shift : shifts[0] ?? "";
   const rowsForShift = stats.filter((s) => s.shift === activeShift).sort((a, b) => b.totalMinutes - a.totalMinutes);
+  const hasUnassigned = stats.some((s) => s.shift === UNASSIGNED_SHIFT);
 
   const onFloor = new Map<string, string>();
   for (const e of eventRows) if (e.ended_at === null) onFloor.set(e.operator_id, e.machine_name);
@@ -655,13 +660,28 @@ function OperatorPerformancePanel() {
         </Select>
       </CardHeader>
       <CardContent className="space-y-4">
-        {scheduleRows.length === 0 && eventRows.length > 0 && (
-          <Alert variant="warning">
-            No shift schedule configured — check-ins are grouped as "{UNASSIGNED_SHIFT}". Set one up on the Shift
-            Comparison page (Analytics → Shift Comparison) to break this down by shift.
-          </Alert>
-        )}
-        {eventRows.length === 0 ? (
+        {eventRows.length > 0 &&
+          (!hasShifts ? (
+            <Alert variant="warning">
+              Check-ins are grouped as "{UNASSIGNED_SHIFT}" — shift breakdowns aren't available on your plan.
+            </Alert>
+          ) : scheduleRows.length === 0 ? (
+            <Alert variant="warning">
+              No shift schedule configured — check-ins are grouped as "{UNASSIGNED_SHIFT}". Set one up on the Shift
+              Comparison page (Analytics → Shift Comparison) to break this down by shift.
+            </Alert>
+          ) : (
+            hasUnassigned && (
+              <Alert variant="warning">
+                Some check-ins fell outside every configured shift window and are grouped as "{UNASSIGNED_SHIFT}".
+              </Alert>
+            )
+          ))}
+        {!events.isSuccess ? (
+          <p className="text-sm text-muted-foreground">
+            {events.isError ? "Failed to load check-in history." : "Loading…"}
+          </p>
+        ) : eventRows.length === 0 ? (
           <p className="text-sm text-muted-foreground">No check-ins in the last {days} days.</p>
         ) : (
           <>
@@ -683,6 +703,9 @@ function OperatorPerformancePanel() {
                 })}
               />
             )}
+            <p className="text-xs text-muted-foreground">
+              The chart above shows the selected shift; this table lists every shift.
+            </p>
             <TableWrap>
               <Table>
                 <THead>

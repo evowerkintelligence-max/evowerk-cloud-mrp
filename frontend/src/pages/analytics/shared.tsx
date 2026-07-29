@@ -50,7 +50,7 @@ export interface ScheduleItem {
   end_time: string;
 }
 
-export function useShiftSchedule() {
+export function useShiftSchedule(enabled = true) {
   return useQuery<ScheduleItem[]>({
     queryKey: ["shift-schedule"],
     queryFn: async () => {
@@ -58,6 +58,7 @@ export function useShiftSchedule() {
       if (!res.ok) throw new Error("Failed to load shift schedule");
       return res.json();
     },
+    enabled,
   });
 }
 
@@ -105,6 +106,14 @@ export const C = {
 // (index.html hardcodes <html class="dark">, no light/dark toggle), so
 // resolving once at module load stays correct.
 export function token(name: string, alpha?: number): string {
+  // vitest runs with environment: "node" (see vite.config.ts) - shared.tsx's
+  // module-scope TOOLTIP/AXIS_LABEL/etc. constants call token() at import
+  // time, which would otherwise throw "document is not defined" the moment
+  // any test imports this file (directly or transitively). Note this
+  // fallback drops the `alpha` argument, so a caller like token("--border",
+  // 0.4) gets opaque black instead of a translucent color on this path -
+  // fine since it only matters in the already-nonexistent "no DOM"
+  // production scenario, not worth plumbing through for that.
   if (typeof document === "undefined") return `hsl(0deg 0% 0%)`;
   const ch = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return alpha === undefined ? `hsl(${ch})` : `hsl(${ch} / ${alpha})`;

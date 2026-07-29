@@ -65,6 +65,7 @@ const MfgForecast = lazyPage(() => import("./pages/MfgForecast"), "MfgForecast")
 const ComputerVision = lazyPage(() => import("./pages/ComputerVision"), "ComputerVision");
 const Alerts = lazyPage(() => import("./pages/Alerts"), "Alerts");
 const StaffPortal = lazyPage(() => import("./pages/staff/StaffPortal"), "StaffPortal");
+const CheckIn = lazyPage(() => import("./pages/CheckIn"), "CheckIn");
 
 function PageFallback() {
   return (
@@ -139,6 +140,7 @@ export function App() {
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route path="/oauth/mfa-verify" element={<OAuthMfaVerify />} />
+          <Route path="/checkin/:machineId" element={<CheckIn />} />
           <Route
             path="/mfa"
             element={

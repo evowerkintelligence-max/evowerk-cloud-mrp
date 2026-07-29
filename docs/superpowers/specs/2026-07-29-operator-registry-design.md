@@ -3,19 +3,23 @@
 Status: Approved for planning
 Date: 2026-07-29
 
-Prerequisite for `2026-07-29-operator-performance-shifts-design.md` and for the
-live operator board spec that follows it.
+Prerequisite for `2026-07-29-operator-performance-shifts-design.md`, for
+`2026-07-29-operator-identity-capture-design.md` (which depends on this one
+in turn), and for the live operator board spec that follows both. Build
+order: this spec first, then either of the other two.
 
 ## Problem
 
 The system has no concept of an operator as an entity.
 
-`PaceSession.operator` (`backend/app/models/pace_tracking.py`) is a free-text
-string typed at session start, validated only as non-empty
-(`backend/app/api/routes/pace_tracking.py`). `PaceSession.created_by` is a
-real authenticated `users.id`, but on a shared shop-floor tablet that is one
-login for the whole station, not the person doing the work. Dataset operator
-columns are likewise whatever an MES export happened to write.
+Historically this gap was papered over by Pace Tracking, whose
+`PaceSession.operator` was a free-text string typed at session start. Pace
+Tracking has been removed: the product direction is sensor-first, with
+dataset upload as the fully supported path for customers without sensors, and
+a manual per-unit tap-counting flow fits neither. Its removal does not
+introduce this gap, it only removes the thing that was incidentally covering
+it. Dataset operator columns remain, and are likewise whatever an MES export
+happened to write, with no registry behind them.
 
 The models directory has `Machine`, `WorkCenter`, `User` (tenant logins), and
 `StaffAccount` (EvoWerk's own employees). Nothing represents a customer's
@@ -23,10 +27,10 @@ operators.
 
 The consequence, once operator-level features exist: two people typing
 `J Kim` and `Kim` become two operators, someone who forgets becomes
-`operator 1`, and the historical leaderboard computed from a dataset column
-cannot be reconciled with a live board computed from typed session names. The
-same person appears twice with different numbers, on a screen that ranks
-people.
+`operator 1`, and a historical leaderboard computed from a dataset column
+cannot be reconciled with a live board computed from a different capture
+path. The same person appears twice with different numbers, on a screen that
+ranks people.
 
 The codebase already faced this for machines. `Machine`
 (`backend/app/models/machine.py`) is an org-scoped registry with a
@@ -42,16 +46,21 @@ function and a clear pattern, not a working pipeline.
 
 In scope: an `Operator` entity; free-text resolution with a fuzzy-duplicate
 cleanup queue; a merge operation so the cleanup queue can actually be cleaned;
-roster selection when starting a pace session; a management UI; and a
-migration that backfills the roster from operator names already recorded.
+a management UI; and a migration that backfills the roster from operator
+names already recorded in datasets. A `badge_id` field is included here
+because it belongs to the entity, though nothing in this spec issues or reads
+it — that is `2026-07-29-operator-identity-capture-design.md`.
 
 Out of scope (explicit decisions, not oversights):
 
-- **Operator authentication.** No PIN, no badge scan, no per-operator login.
-  Starting a session means picking a name from a list, which records who was
-  *selected*, not who was verifiably present. This is a deliberate v1
-  limitation and should not be described to customers as verified identity.
-  Adding a PIN later is additive and does not invalidate this model.
+- **How identity gets captured live.** Reader scans, QR check-ins, and
+  schedule-based inference are `2026-07-29-operator-identity-capture-design.md`
+  in full. This spec is the roster those tiers resolve against, not the
+  capture mechanism itself.
+- **Operator authentication beyond a badge ID.** No PIN, no biometric. A
+  reader scan or a QR tap records who was *selected/scanned*, not who was
+  verifiably present — a limitation the capture spec states plainly and this
+  registry inherits. Adding stronger auth later is additive.
 - **Linking operators to `User` accounts.** Shop-floor operators typically
   have no login, and coupling the roster to tenant users would drag in
   licensing and onboarding.
@@ -71,11 +80,16 @@ Out of scope (explicit decisions, not oversights):
 - `normalized_name` (String 255), trim plus casefold of `name`
 - `code` (String 50, nullable), an employee ID when the customer has one.
   Nullable because auto-discovery from a dataset yields only a name.
+- `badge_id` (String 64, nullable), what a reader scan carries. Nullable for
+  the same reason as `code`, and because most rows are created by dataset
+  auto-discovery or a QR tap, neither of which has a badge to record.
 - `status` (String 16, default `active`)
 - `needs_review` (Boolean, default False)
 - `created_at`
 
-`UniqueConstraint(org_id, normalized_name)`.
+`UniqueConstraint(org_id, normalized_name)`. `UniqueConstraint(org_id,
+badge_id)` where `badge_id` is not null, so two people cannot resolve to the
+same badge within an org while still allowing every badge-less row through.
 
 The unique constraint is on the normalized name rather than the display name
 because normalization is the identity rule: `J. Kim` and `j. kim` must not
@@ -108,36 +122,26 @@ historical data gets a roster with no setup step. Historical analysis is never
 blocked by an unknown name, because the data already exists and refusing to
 show it helps nobody.
 
-**Live pace sessions must pick from the roster.**
-`PaceSessionCreateRequest.operator: str` becomes
-`operator_id: uuid.UUID`. Free text at the point of entry is where phantom
-operators are born, and unlike historical data this is a moment where the
-system can ask for the right answer at no cost. Creating a genuinely new
-operator from the session screen stays possible, it is just an explicit act
-rather than a typo.
-
-This is a breaking API change, made safe by the fact that no frontend code
-calls `/pace/sessions` today.
-
-`PaceSession` gains `operator_id` (FK `operators.id`) and **keeps** its
-`operator` string column, populated from the roster row's name at session
-creation. The string is a deliberate snapshot: `stop_session` materializes a
-session into an immutable Dataset whose `operator` column records who ran the
-work at that time, and renaming someone in the roster later must not rewrite
-history. It also leaves the materialization path in
-`backend/app/services/pace_tracking.py` unchanged.
+**Live capture must resolve to the roster, not free text.** This is where
+phantom operators are born, and unlike historical data it is a moment where
+the system can ask for the right answer at no cost. The identity-capture
+spec's three tiers all resolve through `resolve_or_create_operator` rather
+than storing a typed string: a reader scan resolves by `badge_id`, a QR tap
+either picks an existing roster row or creates one explicitly (an intentional
+act, not a typo), and a work-order assignment already stores an
+`operator_id` because it is a foreign key from the start, never free text.
+This registry has no live-entry surface of its own; every capture path is
+owned by the identity-capture spec and simply calls into this one.
 
 ### Merge
 
 `POST /operators/{id}/merge` with a target operator id. Repoints every
-`PaceSession.operator_id` from the source to the target, then deletes the
-source.
+capture event and every `WorkOrder.assigned_operator_id` from the source to
+the target, then deletes the source.
 
 Merge exists because without it the cleanup queue cannot be cleaned.
 Renaming `J Kim` to `J. Kim` when `J. Kim` already exists violates the unique
-constraint, so rename alone leaves the duplicate permanently. Merge does not
-touch the denormalized `operator` string on existing sessions or any already
-materialized Dataset, for the same immutability reason given above.
+constraint, so rename alone leaves the duplicate permanently.
 
 ### API
 
@@ -145,19 +149,20 @@ materialized Dataset, for the same immutability reason given above.
 - `POST /operators`
 - `PATCH /operators/{id}` for name, code, status, and clearing `needs_review`
 - `POST /operators/{id}/merge`
-- `DELETE /operators/{id}`, rejected with 409 when sessions reference it,
-  directing the caller to merge or deactivate instead
+- `DELETE /operators/{id}`, rejected with 409 when a capture event or a
+  `WorkOrder.assigned_operator_id` references it, directing the caller to
+  merge or deactivate instead
 
 ### Migration
 
-Create `operators`. Add nullable `operator_id` to `pace_sessions`. Backfill
-one roster row per distinct existing `PaceSession.operator` value per org,
-resolving through the same normalization so pre-existing case variants
-collapse, then point each session at its row.
-
-`operator_id` stays nullable rather than being made non-null after backfill,
-because a session whose operator row is later deleted should degrade to its
-name snapshot rather than fail to load.
+Create `operators`, with `badge_id` from day one so the identity-capture spec
+does not need a second migration to add it. No backfill source exists yet in
+this migration: unlike the machine registry (which had existing free-text
+`machine` columns across several live tables to seed from), there is no
+existing operator data in this codebase to migrate, since Pace Tracking is
+gone and dataset operator columns are backfilled lazily, the first time each
+dataset is analyzed, not by this migration. The roster starts empty and fills
+as datasets are analyzed and capture events start arriving.
 
 ### Frontend
 
@@ -165,7 +170,8 @@ An **Operators** tab on the Production page, alongside Work centers, Machines,
 and Routings, mirroring `MachinesPanel` in
 `frontend/src/pages/Production.tsx`.
 
-The list shows name, code, status, and session count. Rows with
+The list shows name, code, badge status, and last-seen time (most recent
+capture event or dataset resolution, whichever is newer). Rows with
 `needs_review` sort first under a banner naming the likely duplicate and
 offering Merge or Keep both, so the cleanup queue is the first thing a
 customer sees rather than something buried behind a filter.
@@ -178,12 +184,12 @@ customer sees rather than something buried behind a filter.
   `needs_review = True`; resolving a clearly unrelated name creates one with
   `needs_review = False`.
 - Two orgs each resolving the same name get separate rows.
-- Merging repoints the source's sessions to the target and deletes the source;
-  the sessions' `operator` string snapshots are unchanged.
-- `DELETE` on an operator with sessions returns 409.
-- Creating a pace session with an `operator_id` from another org is rejected.
-- The migration collapses `J Kim` and `j kim` in existing sessions into one
-  roster row and points both sessions at it.
+- Merging repoints the source's capture events and work-order assignments to
+  the target and deletes the source.
+- `DELETE` on an operator referenced by a capture event or a work-order
+  assignment returns 409.
+- A `badge_id` already used by another operator in the same org is rejected;
+  the same `badge_id` in a different org is accepted.
 
 ## Open questions
 

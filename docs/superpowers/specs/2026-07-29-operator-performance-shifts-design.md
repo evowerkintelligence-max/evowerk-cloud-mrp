@@ -4,6 +4,8 @@ Status: Approved for planning
 Date: 2026-07-29
 
 Depends on `2026-07-29-operator-registry-design.md`, which must ship first.
+Sensor-fed live datasets, referenced below, additionally depend on
+`2026-07-29-operator-identity-capture-design.md`.
 
 ## Problem
 
@@ -22,11 +24,14 @@ dimension alongside Machine, Shift, and Material Batch
 (`backend/app/api/routes/oee.py`, `dim_col_map`), so the concept exists in the
 product but not in the engine where head-to-head comparison lives.
 
-The data is already there. The `plant` demo dataset's sniffed schema includes
-an `operator` column alongside `date`, `machine`, `line`, `shift`,
-`product_type`, and `batch_id`. Pace Tracking
-(`backend/app/services/pace_tracking.py`) also materializes every stopped
-session into a Dataset carrying an `operator` column.
+The data is already there for customers analyzing historical exports. The
+`plant` demo dataset's sniffed schema includes an `operator` column alongside
+`date`, `machine`, `line`, `shift`, `product_type`, and `batch_id`. For
+sensor-first customers, the equivalent source is a machine's sensor timeline
+joined against `resolve_attribution` from
+`2026-07-29-operator-identity-capture-design.md`, materialized into a
+dataset the same shape as any other, so this engine needs no separate code
+path for where the operator column came from.
 
 ## Scope
 
@@ -39,19 +44,20 @@ and TV mode.
 
 Out of scope for this spec (explicit product decisions, not oversights):
 
-- **The live operator board.** Who is on the floor right now, pacing ahead or
-  behind target, paused for a breakdown. That reads `GET /pace/sessions`
+- **The live operator board.** Who is on the floor right now, which machine
+  they're attributed to, paused or running. That reads
+  `resolve_attribution` (`2026-07-29-operator-identity-capture-design.md`)
   rather than the mapped dataset, needs no dataset and no column mapping, and
   therefore does not belong inside `EngineScreen`, which only renders results
-  after a dataset is chosen and Compare is clicked. The backend for it is
-  already complete and has no UI consuming it. It gets its own spec next.
+  after a dataset is chosen and Compare is clicked. It gets its own spec
+  after identity capture ships.
 - **Operator-keyed hourly pace, live handover, weekday average, and the
   schedule editor.** All four key off wall-clock shift windows
   (`resolveCurrentShift`, `ShiftSchedule`) that operators do not have. They
   stay shift-only and are unaffected by the dimension toggle.
-- **Per-operator identity or access control.** Operator is a free-text label
-  in a dataset column, not a user account. No linking to `users`, no
-  per-operator login, no restricting an operator to their own numbers.
+- **Per-operator access control.** An operator resolves to a registry row
+  (`2026-07-29-operator-registry-design.md`), not a `users` login. No
+  restricting an operator to viewing only their own numbers.
 
 ## Design
 
@@ -69,8 +75,9 @@ a mis-detected column is visible before anything is computed.
 When the operator column is mapped, a `Compare by: Shift | Operator` toggle
 renders at the top of the results, defaulting to Shift so the page is
 unchanged for existing users. When it is not mapped, the toggle renders
-disabled with a single line naming the column to add and noting that Pace
-Tracking produces operator-labelled datasets.
+disabled with a single line naming the column to add, and — for sensor
+customers specifically — pointing at setting up an identity-capture tier
+rather than at any manual entry flow.
 
 ### Backend: one grouping, called twice
 
@@ -156,10 +163,10 @@ attribution before acting on the number.
 pulse dot and a fullscreen TV mode. The dimension toggle's selection survives
 a refresh, so an operator leaderboard left on screen keeps updating in place.
 
-This is only genuinely live when something is feeding the underlying dataset,
-for example Downtime Tracking or a materialized Pace session. A static
-uploaded CSV never changes. The page already carries this caveat for the
-handover card and it applies unchanged here.
+This is only genuinely live when something is feeding the underlying dataset
+— Downtime Tracking, or a sensor-fed dataset materialized through
+`resolve_attribution`. A static uploaded CSV never changes. The page already
+carries this caveat for the handover card and it applies unchanged here.
 
 ### Forecast
 

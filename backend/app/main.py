@@ -35,6 +35,7 @@ from app.api.routes import (
     mfg_forecast,
     oauth,
     oee,
+    operators,
     orgs,
     pace_tracking,
     planning_grid,
@@ -119,6 +120,7 @@ app.include_router(sales_orders.router, dependencies=[Depends(require_feature("s
 app.include_router(lots.router, dependencies=[Depends(require_feature("lots"))])
 app.include_router(locations.router)
 app.include_router(machines.router)
+app.include_router(operators.router)
 # Must be registered before inventory.router: /inventory/analytics is a
 # static path that would otherwise be shadowed by inventory.router's
 # /inventory/{item_id} (Starlette matches path shape before UUID validation).

@@ -84,6 +84,29 @@ async def test_open_capture_event_closes_prior_open_event_on_same_machine(db_ses
     assert second.ended_at is None
 
 
+async def test_open_capture_event_clamps_ended_at_to_never_precede_started_at(db_session):
+    org_id = uuid.uuid4()
+    machine, _ = await _seed_machine(db_session, org_id)
+    a = await _seed_operator(db_session, org_id, "A")
+    b = await _seed_operator(db_session, org_id, "B")
+
+    first = await open_capture_event(
+        db_session, org_id=org_id, operator_id=a.id, machine_id=machine.id,
+        source="reader", scanned_at=NOW,
+    )
+    # A backdated scan (still inside the route's accepted window) that predates
+    # the currently-open event's own started_at must not produce a
+    # negative-duration event.
+    backdated = NOW - timedelta(minutes=5)
+    await open_capture_event(
+        db_session, org_id=org_id, operator_id=b.id, machine_id=machine.id,
+        source="reader", scanned_at=backdated,
+    )
+
+    await db_session.refresh(first)
+    assert ensure_utc(first.ended_at) == NOW
+
+
 async def test_resolve_attribution_prefers_capture_event_over_work_order(db_session):
     org_id = uuid.uuid4()
     machine, wc = await _seed_machine(db_session, org_id)

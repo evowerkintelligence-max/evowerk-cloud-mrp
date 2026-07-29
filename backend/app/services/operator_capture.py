@@ -13,6 +13,7 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import ensure_utc
 from app.models.capture_event import CaptureEvent
 from app.models.machine import Machine
 from app.models.operator import Operator
@@ -40,7 +41,11 @@ async def open_capture_event(
         )
     ).scalar_one_or_none()
     if open_event is not None:
-        open_event.ended_at = scanned_at
+        # A scanned_at inside the caller's accepted window can still predate
+        # this specific event's own started_at (e.g. a backdated reader scan
+        # closing an event that opened minutes ago) - clamp so ended_at never
+        # goes negative-duration, which would otherwise poison resolve_attribution.
+        open_event.ended_at = max(ensure_utc(scanned_at), ensure_utc(open_event.started_at))
 
     event = CaptureEvent(
         org_id=org_id, operator_id=operator_id, machine_id=machine_id,

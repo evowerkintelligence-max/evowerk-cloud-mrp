@@ -24,6 +24,7 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     lot,
     machine,
     maintenance_schedule,
+    operator,
     procurement,
     rca_case,
     realtime,

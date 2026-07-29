@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -238,3 +238,53 @@ async def test_delete_operator_assigned_to_work_order_is_blocked(client, db_sess
     assert str(row.assigned_operator_id) == op["id"]
     listed = await client.get("/operators", headers=headers)
     assert op["id"] in {o["id"] for o in listed.json()}
+
+
+async def test_capture_events_route_scopes_by_org_and_days(client, db_session):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    org_id = await _org_id(client, headers)
+    op = (await client.post("/operators", json={"name": "J Kim"}, headers=headers)).json()
+    wc = (await client.post("/work-centers", json={"code": "WC1", "name": "Line 1"}, headers=headers)).json()
+    machine = (
+        await client.post(
+            "/machines", json={"work_center_id": wc["id"], "code": "M1", "name": "Machine 1"}, headers=headers
+        )
+    ).json()
+
+    recent = await open_capture_event(
+        db_session, org_id=org_id, operator_id=uuid.UUID(op["id"]), machine_id=uuid.UUID(machine["id"]),
+        source="reader", scanned_at=NOW,
+    )
+    recent.ended_at = NOW
+    old = CaptureEvent(
+        org_id=org_id, operator_id=uuid.UUID(op["id"]), machine_id=uuid.UUID(machine["id"]),
+        source="reader", started_at=NOW - timedelta(days=30),
+        ended_at=NOW - timedelta(days=30) + timedelta(hours=1),
+    )
+    db_session.add(old)
+    await db_session.commit()
+
+    other_token = await _register_and_login(client, email="owner2@example.com", org_name="Other")
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    res = await client.get("/operators/capture-events?days=7", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["operator_name"] == "J Kim"
+    assert body[0]["machine_name"] == "Machine 1"
+    assert body[0]["ended_at"] is not None
+
+    res30 = await client.get("/operators/capture-events?days=30", headers=headers)
+    assert len(res30.json()) == 2
+
+    other_res = await client.get("/operators/capture-events", headers=other_headers)
+    assert other_res.json() == []
+
+
+async def test_capture_events_days_out_of_range_rejected(client):
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert (await client.get("/operators/capture-events?days=0", headers=headers)).status_code == 422
+    assert (await client.get("/operators/capture-events?days=91", headers=headers)).status_code == 422

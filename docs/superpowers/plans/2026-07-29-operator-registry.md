@@ -332,10 +332,10 @@ async def test_resolve_or_create_operator_exact_match_reuses_row(db_session):
 
 async def test_resolve_or_create_operator_near_duplicate_flags_needs_review(db_session):
     org_id = uuid.uuid4()
-    await resolve_or_create_operator(db_session, org_id, "Kim")
+    await resolve_or_create_operator(db_session, org_id, "Johnson")
     await db_session.flush()
 
-    close = await resolve_or_create_operator(db_session, org_id, "Kin")
+    close = await resolve_or_create_operator(db_session, org_id, "Jonson")
     await db_session.flush()
 
     assert close.needs_review is True
@@ -431,7 +431,7 @@ git commit -m "feat: add resolve_or_create_operator alongside the machine resolv
 - Test: `backend/tests/test_operators.py`
 
 **Interfaces:**
-- Consumes: `Operator` (Task 1), `CurrentUser`/`get_current_user`/`require_role`/`get_or_404` (`app.api.deps`), `log_event` (`app.middleware.audit`).
+- Consumes: `Operator` (Task 1), `CurrentUser`/`get_current_user`/`require_role`/`get_or_404` (`app.api.deps`), `log_event` (`app.middleware.audit`), `normalized_similarity`/`FUZZY_MATCH_THRESHOLD` (Task 2's `app.services.registry_matching` - reused here so manual creation also flags a fuzzy-close name for review, the same as dataset auto-discovery does).
 - Produces: `GET/POST /operators`, `PATCH/DELETE /operators/{id}`, `POST /operators/{id}/merge`. Response shape `OperatorResponse`: `id, name, code, badge_id, status, needs_review` (all strings except `needs_review: bool`; `code`/`badge_id` nullable). This is what Task 4's frontend consumes.
 
 - [ ] **Step 1: Write the failing API tests**
@@ -486,8 +486,8 @@ async def test_create_duplicate_badge_id_rejected(client):
 async def test_list_needs_review_filter(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
-    await client.post("/operators", json={"name": "Kim"}, headers=headers)
-    close = (await client.post("/operators", json={"name": "Kin"}, headers=headers)).json()
+    await client.post("/operators", json={"name": "Johnson"}, headers=headers)
+    close = (await client.post("/operators", json={"name": "Jonson"}, headers=headers)).json()
 
     flagged = await client.get("/operators?needs_review=true", headers=headers)
     assert len(flagged.json()) == 1
@@ -497,12 +497,12 @@ async def test_list_needs_review_filter(client):
 async def test_patch_operator_clears_needs_review(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
-    await client.post("/operators", json={"name": "Kim"}, headers=headers)
-    close = (await client.post("/operators", json={"name": "Kin"}, headers=headers)).json()
+    await client.post("/operators", json={"name": "Johnson"}, headers=headers)
+    close = (await client.post("/operators", json={"name": "Jonson"}, headers=headers)).json()
     assert close["needs_review"] is True
 
     patched = await client.patch(
-        f"/operators/{close['id']}", json={"needs_review": False, "name": "Kin"}, headers=headers
+        f"/operators/{close['id']}", json={"needs_review": False, "name": "Jonson"}, headers=headers
     )
     assert patched.status_code == 200
     assert patched.json()["needs_review"] is False
@@ -568,6 +568,7 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404, require_role
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.operator import Operator
+from app.services.registry_matching import FUZZY_MATCH_THRESHOLD, normalized_similarity
 
 router = APIRouter(prefix="/operators", tags=["operators"])
 
@@ -628,9 +629,16 @@ async def create_operator(
     db: AsyncSession = Depends(get_db),
 ):
     target = body.name.strip()
+    # Manual entry is still free text a human typed - a near-duplicate is as
+    # likely a typo here as it is via dataset auto-discovery, so it gets the
+    # same needs_review flag (not the exact-match reuse resolve_or_create_operator
+    # does, since POST must 409 on an exact duplicate rather than silently
+    # return the existing row).
+    others = (await db.execute(select(Operator).where(Operator.org_id == current.org_id))).scalars().all()
+    needs_review = any(normalized_similarity(target, o.name) >= FUZZY_MATCH_THRESHOLD for o in others)
     o = Operator(
         org_id=current.org_id, name=target, normalized_name=target.casefold(),
-        code=body.code, badge_id=body.badge_id,
+        code=body.code, badge_id=body.badge_id, needs_review=needs_review,
     )
     db.add(o)
     try:

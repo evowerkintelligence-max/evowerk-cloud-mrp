@@ -339,7 +339,11 @@ describe("Production (setup tabs)", () => {
           {
             operator_id: "op-1", operator_name: "J Kim",
             machine_id: "m-1", machine_name: "Machine 1",
-            started_at: "2026-07-27T10:00:00+00:00", ended_at: "2026-07-27T11:30:00+00:00",
+            // Built via the local-time Date constructor (not a fixed-offset ISO
+            // string) so the local hour resolveShiftForTime reads back matches
+            // regardless of which timezone the test process runs in.
+            started_at: new Date(2026, 6, 27, 14, 0).toISOString(),
+            ended_at: new Date(2026, 6, 27, 15, 30).toISOString(),
           },
         ],
       );

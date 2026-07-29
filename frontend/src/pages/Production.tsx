@@ -255,6 +255,24 @@ function WorkCentersPanel() {
   );
 }
 
+// Same pattern ReportBuilder.tsx uses for an authenticated file download: open
+// the tab synchronously (so the popup blocker doesn't see an async click),
+// then point it at the blob once apiFetch's Authorization header has done its
+// job - an <img src> can't carry that header on its own.
+async function printQr(machineId: string) {
+  const tab = window.open("", "_blank");
+  const res = await apiFetch(`/machines/${machineId}/checkin-qr`);
+  if (!res.ok) {
+    tab?.close();
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  if (tab) tab.location.href = url;
+  else window.open(url, "_blank");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function MachinesPanel() {
   const queryClient = useQueryClient();
   const [workCenterId, setWorkCenterId] = useState("");
@@ -399,6 +417,7 @@ function MachinesPanel() {
                 <TH>MTBF (h)</TH>
                 <TH>MTTR (h)</TH>
                 <TH>Review</TH>
+                <TH>QR</TH>
               </TR>
             </THead>
             <TBody>
@@ -413,6 +432,11 @@ function MachinesPanel() {
                   <TD className="text-muted-foreground">{m.mtbf_hours ?? "-"}</TD>
                   <TD className="text-muted-foreground">{m.mttr_hours ?? "-"}</TD>
                   <TD>{m.needs_review ? <Badge variant="warning">Needs review</Badge> : ""}</TD>
+                  <TD>
+                    <Button size="sm" variant="outline" onClick={() => printQr(m.id)}>
+                      Print QR
+                    </Button>
+                  </TD>
                 </TR>
               ))}
             </TBody>

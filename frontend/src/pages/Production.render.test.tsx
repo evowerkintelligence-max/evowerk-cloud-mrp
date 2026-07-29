@@ -296,6 +296,21 @@ describe("Production (setup tabs)", () => {
     expect(html).toContain("No operators yet");
   });
 
+  it("machines tab shows a Print QR action per row", () => {
+    const html = renderSetup("machines", (qc) =>
+      qc.setQueryData(
+        ["machines"],
+        [
+          {
+            id: "m-1", work_center_id: "wc-1", code: "CNC-01", name: "CNC 01",
+            status: "active", mtbf_hours: null, mttr_hours: null, needs_review: false,
+          },
+        ],
+      ),
+    );
+    expect(html).toContain("Print QR");
+  });
+
   it("operators tab surfaces a needs-review row with a merge picker", () => {
     const html = renderSetup("operators", (qc) =>
       qc.setQueryData(

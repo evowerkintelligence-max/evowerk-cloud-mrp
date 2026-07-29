@@ -48,12 +48,17 @@ class OperatorResponse(BaseModel):
     badge_id: str | None
     status: str
     needs_review: bool
+    duplicate_of_id: str | None = None
+    duplicate_of_name: str | None = None
 
 
-def _to_response(o: Operator) -> OperatorResponse:
+def _to_response(
+    o: Operator, duplicate_of_id: str | None = None, duplicate_of_name: str | None = None
+) -> OperatorResponse:
     return OperatorResponse(
         id=str(o.id), name=o.name, code=o.code, badge_id=o.badge_id,
         status=o.status, needs_review=o.needs_review,
+        duplicate_of_id=duplicate_of_id, duplicate_of_name=duplicate_of_name,
     )
 
 
@@ -67,7 +72,23 @@ async def list_operators(
     if needs_review is not None:
         query = query.where(Operator.needs_review == needs_review)
     result = await db.execute(query.order_by(Operator.name))
-    return [_to_response(o) for o in result.scalars().all()]
+    operators = result.scalars().all()
+
+    responses = []
+    for o in operators:
+        duplicate_of_id = duplicate_of_name = None
+        if o.needs_review:
+            candidates = [
+                (other, normalized_similarity(o.name, other.name))
+                for other in operators
+                if other.id != o.id
+            ]
+            qualifying = [c for c in candidates if c[1] >= FUZZY_MATCH_THRESHOLD]
+            if qualifying:
+                best, _ = max(qualifying, key=lambda c: c[1])
+                duplicate_of_id, duplicate_of_name = str(best.id), best.name
+        responses.append(_to_response(o, duplicate_of_id, duplicate_of_name))
+    return responses
 
 
 @router.post("", response_model=OperatorResponse, status_code=status.HTTP_201_CREATED)

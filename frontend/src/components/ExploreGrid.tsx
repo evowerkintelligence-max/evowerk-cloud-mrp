@@ -32,7 +32,8 @@ const EXPLORE_TONES = [
 
 export function ExploreGrid({ items }: { items: ExploreCardItem[] }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    // ponytail: 4 items read best as 2x2; more than that wants 3 columns.
+    <div className={cn("grid gap-5 sm:grid-cols-2", items.length > 4 && "lg:grid-cols-3")}>
       {items.map((item, i) => {
         const t = EXPLORE_TONES[i % EXPLORE_TONES.length];
         return (
@@ -44,17 +45,17 @@ export function ExploreGrid({ items }: { items: ExploreCardItem[] }) {
               )}
             >
               <ArrowUpRight className="absolute right-4 top-4 size-4 text-muted-foreground opacity-0 transition-all duration-300 group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:opacity-100" />
-              <CardContent className="flex items-start gap-4 p-5">
+              <CardContent className="flex items-start gap-5 p-6">
                 <div
                   className={cn(
-                    "flex size-11 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset transition-transform duration-300 group-hover:scale-110 [&_svg]:size-5",
+                    "flex size-12 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset transition-transform duration-300 group-hover:scale-110 [&_svg]:size-6",
                     t.icon,
                   )}
                 >
                   <item.icon />
                 </div>
-                <div className="space-y-1">
-                  <CardTitle className={cn("text-base transition-colors", t.title)}>
+                <div className="space-y-1.5">
+                  <CardTitle className={cn("text-lg transition-colors", t.title)}>
                     {item.label}
                   </CardTitle>
                   {item.description && <CardDescription>{item.description}</CardDescription>}

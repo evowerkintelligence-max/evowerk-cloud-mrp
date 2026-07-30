@@ -381,7 +381,7 @@ export function Realtime() {
       </Dialog>
 
       <Dialog open={liveFor !== null} onClose={() => setLiveFor(null)} title={`Live — ${liveFor?.name ?? ""}`} className="max-w-2xl">
-        {liveFor && <LiveMetrics streamId={liveFor.stream_id} initial={liveFor} />}
+        {liveFor && <LiveMetrics key={liveFor.stream_id} streamId={liveFor.stream_id} initial={liveFor} />}
       </Dialog>
     </div>
   );

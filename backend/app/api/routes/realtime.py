@@ -129,9 +129,17 @@ async def stream_samples(
     highest id returned). Without `since`, returns only the latest sample.
     External metrics (AutoML live scores) are merged into the newest
     returned sample, mirroring the old snapshot-cache merge."""
-    await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
+    stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     rows, cursor = await realtime_service.samples_since(db, stream_id, since, limit)
     samples = [realtime_service.sample_dict(s) for s in rows]
+    # Same status override _assemble_snapshot applies (status only, counters
+    # and metrics untouched): the collector only ever persists "running" or
+    # "error", so without this /samples would report "running" for a stream
+    # the user stopped and disagree with /snapshot. Clients merge polled
+    # samples onto snapshot state, so the two must not disagree.
+    if stream.desired_status == "stopped":
+        for sample in samples:
+            sample["status"] = "stopped"
     if samples:
         external = await realtime_service.external_metrics(db, stream_id)
         if external:

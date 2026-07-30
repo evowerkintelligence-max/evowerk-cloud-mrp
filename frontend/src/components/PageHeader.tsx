@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Typewriter } from "@/components/Typewriter";
 
 export function PageHeader({
   title,
@@ -23,7 +24,9 @@ export function PageHeader({
           {title}
         </h1>
         {description && (
-          <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>
+          <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            {typeof description === "string" ? <Typewriter text={description} /> : description}
+          </p>
         )}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

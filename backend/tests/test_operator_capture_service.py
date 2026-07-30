@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.time import ensure_utc
+from app.models.capture_event import CaptureEvent
 from app.models.machine import Machine
 from app.models.operator import Operator
 from app.models.routing import Routing, RoutingStep
@@ -105,6 +106,37 @@ async def test_open_capture_event_clamps_ended_at_to_never_precede_started_at(db
 
     await db_session.refresh(first)
     assert ensure_utc(first.ended_at) == NOW
+
+
+async def test_open_capture_event_closes_every_stray_open_event(db_session):
+    """Two open events on one machine shouldn't exist, but if they already do
+    (rows written before the machine-row lock went in), the next scan has to
+    heal that state rather than raising MultipleResultsFound and 500ing."""
+    org_id = uuid.uuid4()
+    machine, _ = await _seed_machine(db_session, org_id)
+    a = await _seed_operator(db_session, org_id, "A")
+    b = await _seed_operator(db_session, org_id, "B")
+    c = await _seed_operator(db_session, org_id, "C")
+
+    stray_a = CaptureEvent(
+        org_id=org_id, operator_id=a.id, machine_id=machine.id, source="reader", started_at=NOW,
+    )
+    stray_b = CaptureEvent(
+        org_id=org_id, operator_id=b.id, machine_id=machine.id, source="qr", started_at=NOW,
+    )
+    db_session.add_all([stray_a, stray_b])
+    await db_session.flush()
+
+    closing = NOW + timedelta(minutes=5)
+    latest = await open_capture_event(
+        db_session, org_id=org_id, operator_id=c.id, machine_id=machine.id,
+        source="reader", scanned_at=closing,
+    )
+
+    for stray in (stray_a, stray_b):
+        await db_session.refresh(stray)
+        assert ensure_utc(stray.ended_at) == closing
+    assert latest.ended_at is None
 
 
 async def test_resolve_attribution_prefers_capture_event_over_work_order(db_session):

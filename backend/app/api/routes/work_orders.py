@@ -795,12 +795,23 @@ async def update_work_order(
         db, WorkOrder, current.org_id, wo_id, "Work order not found", for_update=True
     )
     supplied = body.model_fields_set
+    # True only when assigned_operator_id is the ONE field the caller sent -
+    # not just present, since a mixed body (operator + quantity, say) still
+    # has to go through the scheduled-only guard for the other fields.
+    operator_only_update = "assigned_operator_id" in supplied and not (supplied - {"assigned_operator_id"})
+    # Built up as fields are applied and logged exactly once, on whichever path
+    # returns: logging inside the operator block AND again at the end wrote two
+    # work_order.updated rows for a single mixed PATCH.
+    audit_metadata: dict[str, object] = {"wo_number": wo.wo_number}
 
     # Who's actually running the job is a plan-level fact, not a
     # component/quantity edit - it can change on a job that's already
-    # started (that's exactly when you'd correct or set it), so it's applied
-    # independently of the scheduled-only guard below.
+    # started (that's exactly when you'd correct or set it). But it still
+    # doesn't apply once the job is done or cancelled - there's no one
+    # "running" it anymore to reassign.
     if "assigned_operator_id" in supplied:
+        if wo.status not in ("scheduled", "in_progress"):
+            raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
         if body.assigned_operator_id is not None:
             try:
                 operator_id = uuid.UUID(body.assigned_operator_id)
@@ -810,19 +821,32 @@ async def update_work_order(
             wo.assigned_operator_id = operator_id
         else:
             wo.assigned_operator_id = None
+        audit_metadata["assigned_operator_id"] = body.assigned_operator_id
 
-    if wo.status != "scheduled":
-        # A started job's components are already being consumed on the floor;
-        # editing the recipe or quantity under it would rewrite what already
-        # happened. assigned_operator_id doesn't touch components, so it's
-        # exempt from this guard (handled above).
-        if supplied - {"assigned_operator_id"}:
-            raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
+    # An operator-only change never touches components/quantity, so it skips
+    # the BOM/recipe recompute below entirely - that pipeline has its own
+    # failure modes (e.g. no active recipe) that have nothing to do with
+    # who's assigned.
+    if operator_only_update:
+        await log_event(
+            db,
+            action="work_order.updated",
+            org_id=current.org_id,
+            actor_user_id=current.id,
+            target=str(wo.id),
+            metadata=audit_metadata,
+        )
         await db.commit()
         await db.refresh(wo)
         item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
         location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")
         return await _detail_response(db, wo, item, location)
+
+    if wo.status != "scheduled":
+        # A started job's components are already being consumed on the floor;
+        # editing the recipe or quantity under it would rewrite what already
+        # happened.
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {wo.wo_number} is {wo.status}")
 
     quantity_planned = wo.quantity_planned
     if body.quantity_planned is not None:
@@ -881,7 +905,7 @@ async def update_work_order(
         org_id=current.org_id,
         actor_user_id=current.id,
         target=str(wo.id),
-        metadata={"wo_number": wo.wo_number},
+        metadata=audit_metadata,
     )
     await db.commit()
     location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")

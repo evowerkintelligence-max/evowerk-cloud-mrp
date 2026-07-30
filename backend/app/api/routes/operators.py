@@ -240,7 +240,11 @@ async def delete_operator(
     current: CurrentUser = Depends(require_role("owner")),
     db: AsyncSession = Depends(get_db),
 ):
-    o = await get_or_404(db, Operator, current.org_id, operator_id, "Operator not found")
+    # Locked so a concurrent scan/assignment can't land between the exists()
+    # checks below and the delete - Postgres takes a FOR KEY SHARE lock on
+    # this row for any FK insert/update that references it, which blocks
+    # behind our FOR UPDATE until we commit or roll back.
+    o = await get_or_404(db, Operator, current.org_id, operator_id, "Operator not found", for_update=True)
 
     has_capture_events = (
         await db.execute(
@@ -266,4 +270,11 @@ async def delete_operator(
     await log_event(
         db, action="operator.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(o.id),
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "operator has capture events / is assigned to a work order and cannot be deleted",
+        ) from None

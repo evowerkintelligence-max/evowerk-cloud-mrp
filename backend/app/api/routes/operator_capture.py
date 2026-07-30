@@ -70,6 +70,9 @@ class CheckinRequest(BaseModel):
 
 
 async def _machine_or_404(db: AsyncSession, machine_id: uuid.UUID) -> Machine:
+    # No lock here on purpose: open_capture_event takes the machine-row lock
+    # itself, so every caller of it is covered rather than just the two routes
+    # below. Locking in both places would be the same lock twice.
     machine = await db.get(Machine, machine_id)
     if machine is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Machine not found")

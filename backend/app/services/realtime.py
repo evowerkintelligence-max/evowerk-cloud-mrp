@@ -30,6 +30,7 @@ from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.core.config import get_settings
 from app.db import session as db_session
@@ -48,6 +49,16 @@ logger = logging.getLogger(__name__)
 _MAX_ROWS_PER_WINDOW = 1_000
 _PRUNE_EVERY_S = 3600.0
 _last_prune = 0.0
+
+# recent_rows() pages the sample scan: samples per page, and the hard ceiling on
+# samples scanned for one call (see the ponytail note there).
+_SAMPLE_SCAN_PAGE = 200
+_MAX_SCANNED_SAMPLES = 10_000
+
+# A running stream whose newest sample is older than this many of its own poll
+# intervals (never less than the floor) reports "stale" instead of "running".
+_STALE_INTERVALS = 5
+_STALE_FLOOR_S = 30.0
 
 
 # ── Ingest dedup ─────────────────────────────────────────────────────────────
@@ -247,19 +258,19 @@ class StreamCollector:
         nor re-ingests the source table. Every already-ingested row is in some
         sample's raw_rows, so the samples ARE the dedup state.
 
-        ponytail: recent_rows caps its scan at the newest 200 samples, so
-        rehydration covers exactly the rows those samples hold, not all
-        history. For an append-only source that is exact (the rows the source
-        still returns are the recent ones). For a connector that re-returns a
-        large stable table, rows that have aged past the newest 200 samples
-        look new again after a restart and get re-ingested once. Upgrade path:
-        persist a per-stream row-hash digest alongside the stream row, or
-        paginate the rehydration scan past the 200-sample cap.
+        ponytail: rehydration reaches back at most 200_000 rows (the `n` asked
+        for below) or _MAX_SCANNED_SAMPLES samples, whichever runs out first,
+        so it covers exactly the rows those samples hold, not all history. For
+        an append-only source that is exact (the rows the source still returns
+        are the recent ones). For a connector that re-returns a large stable
+        table, rows that have aged past that reach look new again after a
+        restart and get re-ingested once. Upgrade path: persist a per-stream
+        row-hash digest alongside the stream row.
         """
         async with db_session.async_session_factory() as db:
             latest = await _latest_sample(db, self.stream_id)
-            # n counts ROWS; ask for more than 200 capped samples can hold so
-            # the scan, not n, is what bounds the result.
+            # n counts ROWS; ask for the most any window-capped sample scan can
+            # return so the scan ceiling, not n, is what bounds the result.
             rows = await recent_rows(db, self.stream_id, 200 * _MAX_ROWS_PER_WINDOW)
         if latest is not None:
             self._rows_collected = latest.rows_collected
@@ -302,7 +313,13 @@ class StreamCollector:
         # raises (deadlock, statement timeout, an ingest_rows integrity error),
         # _run logs and polls again, and these rows are still unseen, so the
         # next window re-offers them instead of dropping them forever.
-        await self._write_sample(new_rows)
+        try:
+            await self._write_sample(new_rows)
+        except Exception as exc:
+            # Re-raised, so _prev is left alone exactly as before: the rows are
+            # only recorded as an error, never marked seen.
+            await self._record_write_failure(exc)
+            raise
         if next_prev is not None:
             self._prev = next_prev
         await _maybe_prune()
@@ -336,6 +353,44 @@ class StreamCollector:
         self._rows_collected = rows_collected
         self._last_rows_at = last_rows_at
 
+    async def _record_write_failure(self, exc: Exception) -> None:
+        """Best effort, in a fresh session (the failed one is poisoned): make a
+        failed sample write visible instead of leaving the UI on a frozen
+        stream. Mirrors the fetch-error path, which writes an error sample so
+        the cursor advances and clients see the problem.
+
+        The error sample carries NO raw_rows and rows_in_window=0, so it can
+        neither re-lose the rows (they stay unseen: the caller re-raises) nor
+        pollute the rehydration scan. Never raises: if the database is down
+        hard this second write fails too, and the caller's original error is
+        the one that matters.
+        """
+        self.status, self.error = "error", f"Sample write failed: {exc}"[:2000]
+        now_mono = time.monotonic()
+        try:
+            async with db_session.async_session_factory() as db:
+                db.add(RealtimeSample(
+                    org_id=self.org_id,
+                    stream_id=self.stream_id,
+                    status="error",
+                    error=self.error,
+                    rows_in_window=0,
+                    rows_collected=self._rows_collected,
+                    duration_s=self._duration_base + int(now_mono - self._started),
+                    last_tick_s=(
+                        round(now_mono - self._last_rows_at, 1)
+                        if self._last_rows_at is not None else None
+                    ),
+                    metrics={},
+                    raw_rows=[],
+                ))
+                stream = await db.get(RealtimeStream, self.stream_id)
+                if stream is not None:
+                    stream.last_error = self.error
+                await db.commit()
+        except Exception:
+            logger.exception("collector %s: could not record the failed write", self.stream_id)
+
 
 async def _maybe_prune() -> None:
     """Global retention sweep, at most hourly per process, fired by whichever
@@ -352,6 +407,20 @@ async def _maybe_prune() -> None:
 
 
 # ── Reads (routes, alerts, AutoML) ───────────────────────────────────────────
+
+# Every read below emits the sample_dict envelope, which does NOT carry
+# raw_rows, so the up-to-1000-row JSON blob is deferred out of the query: a
+# /history page is 20_000 samples and /streams runs the bulk snapshot on every
+# poll of every open tab. recent_rows is the only reader that wants raw_rows
+# and it selects that column on its own. Nothing downstream of these reads may
+# touch sample.raw_rows: a deferred attribute lazy-loads, which raises on an
+# async session.
+_NO_RAW_ROWS = defer(RealtimeSample.raw_rows)
+
+
+def _samples_select():
+    """select(RealtimeSample) minus the raw_rows blob."""
+    return select(RealtimeSample).options(_NO_RAW_ROWS)
 
 def _fmt_duration(seconds: int | None) -> str | None:
     if seconds is None:
@@ -381,7 +450,7 @@ def sample_dict(sample: RealtimeSample) -> dict[str, Any]:
 async def _latest_sample(db: AsyncSession, stream_id: uuid.UUID) -> RealtimeSample | None:
     return (
         await db.execute(
-            select(RealtimeSample)
+            _samples_select()
             .where(RealtimeSample.stream_id == stream_id)
             .order_by(RealtimeSample.id.desc())
             .limit(1)
@@ -404,7 +473,7 @@ async def samples_since(
         rows = list(
             (
                 await db.execute(
-                    select(RealtimeSample)
+                    _samples_select()
                     .where(RealtimeSample.stream_id == stream_id, RealtimeSample.id > int(since))
                     .order_by(RealtimeSample.id)
                     .limit(limit)
@@ -420,6 +489,25 @@ async def external_metrics(db: AsyncSession, stream_id: uuid.UUID) -> dict[str, 
         await db.execute(select(RealtimeStreamMetric).where(RealtimeStreamMetric.stream_id == stream_id))
     ).scalars().all()
     return {m.name: m.value for m in rows}
+
+
+def _is_stale(stream: RealtimeStream, sample: RealtimeSample) -> bool:
+    """A collector that died (a bad integration swallowed by resume_all_streams,
+    a killed process, a lost advisory lock) stops writing samples but leaves the
+    last one saying "running" forever. Nothing writes a death certificate, so
+    liveness is derived here from how old the newest sample is.
+
+    The window scales with the stream's own interval (1s to 300s) rather than
+    being a fixed constant, with a floor so a 1-second stream doesn't flap
+    "stale" on one slow poll.
+    """
+    ts = sample.ts
+    if ts is None:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)  # SQLite hands back naive UTC
+    age_s = (datetime.now(timezone.utc) - ts).total_seconds()
+    return age_s > max(_STALE_FLOOR_S, _STALE_INTERVALS * max(1, stream.interval_seconds))
 
 
 def _assemble_snapshot(
@@ -440,6 +528,8 @@ def _assemble_snapshot(
         # reported status must reflect the user's stop, not the last write.
         if stream.desired_status == "stopped":
             snap["status"] = "stopped"
+        elif snap["status"] == "running" and _is_stale(stream, sample):
+            snap["status"] = "stale"
     if external:
         snap["metrics"] = {**snap["metrics"], **external}
     snap["interval_seconds"] = stream.interval_seconds
@@ -467,7 +557,7 @@ async def latest_snapshots_bulk(
         .group_by(RealtimeSample.stream_id)
     )
     samples = (
-        await db.execute(select(RealtimeSample).where(RealtimeSample.id.in_(max_ids)))
+        await db.execute(_samples_select().where(RealtimeSample.id.in_(max_ids)))
     ).scalars().all()
     by_stream = {str(s.stream_id): s for s in samples}
     ext_rows = (
@@ -487,29 +577,37 @@ async def recent_rows(db: AsyncSession, stream_id: uuid.UUID, n: int = 500) -> l
     from the newest non-empty samples. The actual feature columns AutoML
     scores on, not the windowed aggregates."""
     n = max(1, int(n))
-    # `n` counts ROWS, but the LIMIT counts SAMPLES, and each sample carries up
-    # to _MAX_ROWS_PER_WINDOW (1000) rows that .all() materializes before the
-    # loop below can break. So the sample scan is capped independently of `n`.
+    # `n` counts ROWS, but a LIMIT counts SAMPLES, and each sample carries up to
+    # _MAX_ROWS_PER_WINDOW (1000) rows that .all() materializes at once. So the
+    # scan walks newest-first one bounded page of samples at a time and stops as
+    # soon as `n` rows are in hand: peak memory is `n` rows plus one page, while
+    # a stream of tiny windows can still reach back far enough to actually
+    # deliver `n` (the retrain path asks for 10_000).
     #
-    # ponytail: 200-sample ceiling, so a caller asking for more rows than the
-    # newest 200 samples happen to hold gets fewer rows than it requested
-    # (every non-empty sample has >= 1 row, so 200 samples always cover the
-    # scoring path's 50 and the retrain path's 20-row guard). Upgrade path:
-    # paginate the sample scan, or store raw rows in their own table if
-    # per-row querying is ever needed.
-    samples = (
-        await db.execute(
-            select(RealtimeSample.raw_rows)
-            .where(RealtimeSample.stream_id == stream_id, RealtimeSample.rows_in_window > 0)
-            .order_by(RealtimeSample.id.desc())
-            .limit(min(n, 200))
-        )
-    ).scalars().all()
-    out: list[dict[str, Any]] = []
-    for raw in samples:  # newest sample first
-        out = list(raw) + out
-        if len(out) >= n:
+    # ponytail: _MAX_SCANNED_SAMPLES (10_000) sample ceiling, so a caller wanting
+    # more rows than the newest 10_000 non-empty samples hold gets fewer rows
+    # than it asked for. Every non-empty sample has >= 1 row, so the ceiling
+    # covers the retrain path's full 10_000-row request in the worst case
+    # (one row per window). Upgrade path: store raw rows in their own table, so
+    # `n` rows is one indexed LIMIT instead of a scan over window blobs.
+    newest_first: list[list[Any]] = []
+    collected = 0
+    for offset in range(0, _MAX_SCANNED_SAMPLES, _SAMPLE_SCAN_PAGE):
+        page = (
+            await db.execute(
+                select(RealtimeSample.raw_rows)
+                .where(RealtimeSample.stream_id == stream_id, RealtimeSample.rows_in_window > 0)
+                .order_by(RealtimeSample.id.desc())
+                .limit(_SAMPLE_SCAN_PAGE)
+                .offset(offset)
+            )
+        ).scalars().all()
+        for raw in page:
+            newest_first.append(list(raw))
+            collected += len(raw)
+        if collected >= n or len(page) < _SAMPLE_SCAN_PAGE:
             break
+    out = [row for raw in reversed(newest_first) for row in raw]  # oldest first
     return out[-n:]
 
 

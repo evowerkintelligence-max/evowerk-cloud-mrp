@@ -72,7 +72,11 @@ class RealtimeSample(Base):
     so nothing is ever re-sent."""
 
     __tablename__ = "realtime_samples"
-    __table_args__ = (Index("ix_realtime_samples_stream_id_id", "stream_id", "id"),)
+    __table_args__ = (
+        Index("ix_realtime_samples_stream_id_id", "stream_id", "id"),
+        # The retention sweep deletes by ts alone (app.services.realtime._maybe_prune).
+        Index("ix_realtime_samples_ts", "ts"),
+    )
 
     # BigInteger in prod; plain INTEGER on SQLite so autoincrement works in tests.
     id: Mapped[int] = mapped_column(

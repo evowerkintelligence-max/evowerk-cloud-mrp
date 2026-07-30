@@ -22,7 +22,10 @@ interface StreamSnapshot {
   ts: string | null;
   stream_id: string;
   name: string;
-  status: "running" | "error" | "stopped" | "starting";
+  // "stale": still desired-running, but the newest sample is far older than the
+  // stream's poll interval, i.e. the collector stopped writing (see
+  // app/services/realtime.py _is_stale).
+  status: "running" | "error" | "stopped" | "starting" | "stale";
   error: string | null;
   rows_in_window: number;
   rows_collected: number;
@@ -44,6 +47,7 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "danger" | "neutral
   error: "danger",
   stopped: "neutral",
   starting: "warning",
+  stale: "warning",
 };
 
 // column_map keys StreamRunner.snapshot() reads - see app/services/realtime.py.

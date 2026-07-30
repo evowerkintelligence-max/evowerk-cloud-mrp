@@ -317,12 +317,104 @@ async def test_failed_write_does_not_mark_rows_as_seen(client, monkeypatch):
             )
         ).scalars().all()
         readings = (await db.execute(select(SensorReading).where(SensorReading.machine == "M1"))).scalars().all()
-    # The failed window left no sample behind (rolled back), and its row is
-    # recovered by the next one rather than silently lost.
-    assert [s.rows_in_window for s in samples] == [1, 1]
-    assert [s.rows_collected for s in samples] == [1, 2]
-    assert samples[1].raw_rows == [{"vibration_x_mm_s": 2.0}]
+    # The failed window's own write rolled back (no rows, no counter movement);
+    # what stands in its place is a rows-free error marker, and the lost row is
+    # recovered by the next window rather than silently dropped.
+    assert [s.status for s in samples] == ["running", "error", "running"]
+    assert [s.rows_in_window for s in samples] == [1, 0, 1]
+    assert [s.rows_collected for s in samples] == [1, 1, 2]
+    assert samples[2].raw_rows == [{"vibration_x_mm_s": 2.0}]
     assert sorted(r.value for r in readings) == [1.0, 2.0]
+
+
+async def test_failed_write_surfaces_as_an_error_instead_of_a_frozen_stream(client, monkeypatch):
+    """A write that blows up must not just vanish: with no sample written the
+    UI would sit on the last good window forever. The failure is recorded on
+    the stream row AND as a rows-free error sample, so /snapshot, /samples and
+    the cursor all move."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db, machine="M1", sensor_map={"vib_x": "vibration_x_mm_s"})
+        stream.desired_status = "running"  # else the snapshot overlays "stopped"
+        await db.commit()
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("statement timeout")
+
+    monkeypatch.setattr(realtime_service, "ingest_rows", _boom)
+    c = _collector_for(stream, [[{"vibration_x_mm_s": 1.0}]])
+    await c._seed_counters()
+    with pytest.raises(RuntimeError):
+        await c._poll_once()
+
+    async with db_session.async_session_factory() as db:
+        refreshed = (
+            await db.execute(select(RealtimeStream).where(RealtimeStream.id == stream.id))
+        ).scalar_one()
+        snap = await realtime_service.latest_snapshot(db, refreshed)
+    assert "statement timeout" in refreshed.last_error
+    assert snap["status"] == "error"
+    assert "statement timeout" in snap["error"]
+    assert snap["rows_in_window"] == 0  # the error marker carries no rows
+
+
+async def test_recent_rows_pages_past_the_first_page(client, monkeypatch):
+    """recent_rows must actually reach `n` rows, not stop at one page: the
+    retrain path asks for 10_000 rows and a stream of small windows only gets
+    there by paginating the sample scan."""
+    await _register_and_login(client)
+    monkeypatch.setattr(realtime_service, "_SAMPLE_SCAN_PAGE", 5)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db)
+        for i in range(12):  # more than two pages of 5
+            db.add(RealtimeSample(
+                org_id=stream.org_id, stream_id=stream.id, status="running",
+                rows_in_window=1, rows_collected=i + 1, duration_s=i,
+                metrics={}, raw_rows=[{"units": i}],
+            ))
+        await db.commit()
+
+        rows = await realtime_service.recent_rows(db, stream.id, 12)
+
+    # Every sample, oldest first: the newest page alone would be [7..11].
+    assert rows == [{"units": i} for i in range(12)]
+
+    async with db_session.async_session_factory() as db:
+        capped = await realtime_service.recent_rows(db, stream.id, 3)
+    assert capped == [{"units": 9}, {"units": 10}, {"units": 11}]  # at most n, newest n
+
+
+async def test_running_stream_with_an_old_sample_reports_stale(client):
+    """A dead collector leaves its last sample saying "running" forever, so
+    liveness is derived from the newest sample's age at read time."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db, interval_seconds=5)
+        stream.desired_status = "running"
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            ts=datetime.now(timezone.utc) - timedelta(minutes=10),
+            rows_in_window=1, rows_collected=9, duration_s=1, metrics={"throughput": 1.0},
+            raw_rows=[],
+        ))
+        await db.commit()
+        stale = await realtime_service.latest_snapshot(db, stream)
+
+    assert stale["status"] == "stale"
+    assert stale["rows_collected"] == 9  # counters and metrics untouched
+    assert stale["metrics"]["throughput"] == 1.0
+
+    async with db_session.async_session_factory() as db:
+        stream = (
+            await db.execute(select(RealtimeStream).where(RealtimeStream.id == stream.id))
+        ).scalar_one()
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            rows_in_window=1, rows_collected=10, duration_s=2, metrics={}, raw_rows=[],
+        ))
+        await db.commit()
+        fresh = await realtime_service.latest_snapshot(db, stream)
+    assert fresh["status"] == "running"
 
 
 async def test_dedup_state_rehydrates_from_samples_on_restart(client):

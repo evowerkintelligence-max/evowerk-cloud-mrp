@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
@@ -160,7 +161,11 @@ async def stream_history(
     limit = max(1, min(20_000, int(limit)))
     rows = (
         await db.execute(
+            # Only ts and metrics are read below, and `limit` reaches 20_000:
+            # loading each sample's raw_rows blob (up to 1000 source rows) would
+            # make one history page hundreds of MB of JSON.
             select(RealtimeSample)
+            .options(defer(RealtimeSample.raw_rows))
             .where(RealtimeSample.stream_id == stream_id)
             .order_by(RealtimeSample.id.desc())
             .limit(limit)

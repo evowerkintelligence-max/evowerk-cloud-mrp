@@ -154,6 +154,8 @@ async def test_stop_then_start_resumes_collection(client, fake_rest_server):
 
     start = await client.post(f"/realtime/streams/{stream_id}/start", headers=headers)
     assert start.status_code == 200, start.text
+    # "starting" (no sample yet), not "stopped": desired_status flipped back.
+    assert start.json()["status"] == "starting"
     assert realtime_service.get_runner(stream_id) is not None
 
 
@@ -442,8 +444,11 @@ async def test_cannot_access_another_orgs_stream(client, fake_rest_server):
 
     token_b = await _register_and_login(client, email="b@example.com", org_name="OrgB")
     headers_b = {"Authorization": f"Bearer {token_b}"}
-    res = await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers_b)
-    assert res.status_code == 404
+    # Every route that hands out another org's stream data, not just /snapshot:
+    # /samples and /history are the ones that egress rows.
+    for path in ("snapshot", "samples", "samples?since=0", "history"):
+        res = await client.get(f"/realtime/streams/{stream_id}/{path}", headers=headers_b)
+        assert res.status_code == 404, f"{path} -> {res.status_code}"
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_realtime_samples_org_id", "realtime_samples", ["org_id"])
     op.create_index("ix_realtime_samples_stream_id_id", "realtime_samples", ["stream_id", "id"])
+    # The hourly retention sweep deletes by ts alone; without this it is a full
+    # scan plus a TOAST read of every raw_rows blob.
+    op.create_index("ix_realtime_samples_ts", "realtime_samples", ["ts"])
 
     op.create_table(
         "realtime_stream_metrics",
@@ -51,6 +54,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("realtime_stream_metrics")
+    op.drop_index("ix_realtime_samples_ts", table_name="realtime_samples")
     op.drop_index("ix_realtime_samples_stream_id_id", table_name="realtime_samples")
     op.drop_index("ix_realtime_samples_org_id", table_name="realtime_samples")
     op.drop_table("realtime_samples")

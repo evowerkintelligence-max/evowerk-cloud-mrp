@@ -799,6 +799,10 @@ async def update_work_order(
     # not just present, since a mixed body (operator + quantity, say) still
     # has to go through the scheduled-only guard for the other fields.
     operator_only_update = "assigned_operator_id" in supplied and not (supplied - {"assigned_operator_id"})
+    # Built up as fields are applied and logged exactly once, on whichever path
+    # returns: logging inside the operator block AND again at the end wrote two
+    # work_order.updated rows for a single mixed PATCH.
+    audit_metadata: dict[str, object] = {"wo_number": wo.wo_number}
 
     # Who's actually running the job is a plan-level fact, not a
     # component/quantity edit - it can change on a job that's already
@@ -817,20 +821,21 @@ async def update_work_order(
             wo.assigned_operator_id = operator_id
         else:
             wo.assigned_operator_id = None
-        await log_event(
-            db,
-            action="work_order.updated",
-            org_id=current.org_id,
-            actor_user_id=current.id,
-            target=str(wo.id),
-            metadata={"wo_number": wo.wo_number, "assigned_operator_id": body.assigned_operator_id},
-        )
+        audit_metadata["assigned_operator_id"] = body.assigned_operator_id
 
     # An operator-only change never touches components/quantity, so it skips
     # the BOM/recipe recompute below entirely - that pipeline has its own
     # failure modes (e.g. no active recipe) that have nothing to do with
     # who's assigned.
     if operator_only_update:
+        await log_event(
+            db,
+            action="work_order.updated",
+            org_id=current.org_id,
+            actor_user_id=current.id,
+            target=str(wo.id),
+            metadata=audit_metadata,
+        )
         await db.commit()
         await db.refresh(wo)
         item = await get_or_404(db, Item, current.org_id, wo.item_id, "Item not found")
@@ -900,7 +905,7 @@ async def update_work_order(
         org_id=current.org_id,
         actor_user_id=current.id,
         target=str(wo.id),
-        metadata={"wo_number": wo.wo_number},
+        metadata=audit_metadata,
     )
     await db.commit()
     location = await get_or_404(db, Location, current.org_id, wo.location_id, "Location not found")

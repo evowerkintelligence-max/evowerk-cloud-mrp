@@ -69,15 +69,11 @@ class CheckinRequest(BaseModel):
     name: str | None = Field(default=None, max_length=255)
 
 
-async def _machine_or_404(db: AsyncSession, machine_id: uuid.UUID, for_update: bool = False) -> Machine:
-    query = select(Machine).where(Machine.id == machine_id)
-    if for_update:
-        # Locks the machine row for the rest of this transaction, so a second
-        # concurrent scan on the same machine blocks on open_capture_event's
-        # check-then-act instead of racing it into two simultaneously "open"
-        # events.
-        query = query.with_for_update()
-    machine = (await db.execute(query)).scalar_one_or_none()
+async def _machine_or_404(db: AsyncSession, machine_id: uuid.UUID) -> Machine:
+    # No lock here on purpose: open_capture_event takes the machine-row lock
+    # itself, so every caller of it is covered rather than just the two routes
+    # below. Locking in both places would be the same lock twice.
+    machine = await db.get(Machine, machine_id)
     if machine is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Machine not found")
     return machine
@@ -90,7 +86,7 @@ async def _machine_or_404(db: AsyncSession, machine_id: uuid.UUID, for_update: b
     dependencies=[Depends(_capture_rate_limit)],
 )
 async def capture_badge_scan(body: CaptureRequest, db: AsyncSession = Depends(get_db)):
-    machine = await _machine_or_404(db, body.machine_id, for_update=True)
+    machine = await _machine_or_404(db, body.machine_id)
     operator = (
         await db.execute(
             select(Operator).where(Operator.org_id == machine.org_id, Operator.badge_id == body.badge_id)
@@ -146,7 +142,7 @@ async def checkin_roster(machine_id: uuid.UUID, db: AsyncSession = Depends(get_d
     dependencies=[Depends(_checkin_write_rate_limit)],
 )
 async def checkin_scan(machine_id: uuid.UUID, body: CheckinRequest, db: AsyncSession = Depends(get_db)):
-    machine = await _machine_or_404(db, machine_id, for_update=True)
+    machine = await _machine_or_404(db, machine_id)
     if body.operator_id is not None:
         operator = (
             await db.execute(

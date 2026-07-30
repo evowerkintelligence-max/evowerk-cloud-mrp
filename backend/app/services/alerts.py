@@ -296,26 +296,17 @@ def _eval_production_target(rule: AlertRule, dataset: Dataset, con, rel: str) ->
     )
 
 
-def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
-    """Targets a live realtime stream instead of a dataset - same
-    threshold/offender shape as the dataset evaluators above, reading the
-    realtime_cache snapshot (populated by the Flink windowed-aggregation
-    job) instead of querying a Dataset file.
-
-    Metric values here reflect only the last 5-second Flink window, not a
-    cumulative session total the way they did pre-Redpanda (see
-    streaming/metrics.py's module docstring) - thresholds on absolute-sum
-    metrics like throughput set before this pipeline shipped will need
-    re-tuning."""
-    from app.services import realtime_cache
-
+def _eval_stream_metric_snap(rule: AlertRule, snap: dict | None) -> AlertTrigger:
+    """Pure half of eval_stream_metric: evaluates one rule against an
+    already-fetched snapshot dict (or None when the stream is missing or has
+    never produced a sample). Split out so stream_alerts_bulk can prefetch
+    snapshots once per stream instead of once per rule."""
     cfg = rule.config
     stream_id = cfg.get("stream_id", "")
     metric_name = cfg.get("metric_name", "")
     comparison = cfg.get("comparison", "gt")  # "gt" | "lt"
     threshold = float(cfg.get("threshold", 0))
 
-    snap = realtime_cache.get_snapshot(uuid.UUID(stream_id)) if stream_id else None
     if snap is None:
         return AlertTrigger(
             str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
@@ -340,6 +331,33 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
         str(rule.id), rule.name, rule.type, rule.severity, triggered, round(value, 4), threshold,
         message, [snap.get("name", stream_id)] if triggered else [],
     )
+
+
+async def eval_stream_metric(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
+    """Targets a live realtime stream instead of a dataset - same
+    threshold/offender shape as the dataset evaluators, reading the stream's
+    latest persisted RealtimeSample (metrics are per poll window over new
+    rows only; thresholds tuned against the old cumulative scale need
+    re-tuning)."""
+    from app.models.realtime import RealtimeStream
+    from app.services import realtime as realtime_service
+
+    stream_id = rule.config.get("stream_id", "")
+    stream = None
+    if stream_id:
+        stream = (
+            await db.execute(
+                select(RealtimeStream).where(
+                    RealtimeStream.id == uuid.UUID(stream_id), RealtimeStream.org_id == org_id
+                )
+            )
+        ).scalar_one_or_none()
+    if stream is None:
+        return _eval_stream_metric_snap(rule, None)
+    snap = await realtime_service.latest_snapshot(db, stream)
+    if snap.get("ts") is None and not snap.get("metrics"):
+        return _eval_stream_metric_snap(rule, None)  # no sample and no external metric yet
+    return _eval_stream_metric_snap(rule, snap)
 
 
 async def _eval_automl_risk(
@@ -576,7 +594,7 @@ async def evaluate_rule(
     *, dataset: Dataset | None = None, con=None, rel: str | None = None,
 ) -> AlertTrigger:
     if rule.type == "stream_metric":
-        return eval_stream_metric(rule)
+        return await eval_stream_metric(db, org_id, rule)
     if rule.type == "automl_risk":
         if rule.dataset_id is None:
             return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, "No dataset configured.")
@@ -680,7 +698,21 @@ async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUI
             AlertRule.config["stream_id"].as_string() == str(stream_id),
         )
     )
-    return [eval_stream_metric(r) for r in result.scalars().all()]
+    rules = result.scalars().all()
+    if not rules:
+        return []
+    from app.models.realtime import RealtimeStream
+    from app.services import realtime as realtime_service
+
+    stream = (
+        await db.execute(
+            select(RealtimeStream).where(RealtimeStream.id == stream_id, RealtimeStream.org_id == org_id)
+        )
+    ).scalar_one_or_none()
+    snap = await realtime_service.latest_snapshot(db, stream) if stream is not None else None
+    if snap is not None and snap.get("ts") is None and not snap.get("metrics"):
+        snap = None
+    return [_eval_stream_metric_snap(r, snap) for r in rules]
 
 
 async def stream_alerts_bulk(
@@ -699,7 +731,27 @@ async def stream_alerts_bulk(
             AlertRule.config["stream_id"].as_string().in_(sids),
         )
     )
+    rules = result.scalars().all()
+    if not rules:
+        return {}
+    from app.models.realtime import RealtimeStream
+    from app.services import realtime as realtime_service
+
+    rule_sids = {rule.config.get("stream_id") for rule in rules if rule.config.get("stream_id")}
+    streams = (
+        await db.execute(
+            select(RealtimeStream).where(
+                RealtimeStream.org_id == org_id,
+                RealtimeStream.id.in_([uuid.UUID(s) for s in rule_sids]),
+            )
+        )
+    ).scalars().all()
+    snaps = await realtime_service.latest_snapshots_bulk(db, streams)
     by_stream: dict[str, list[AlertTrigger]] = {}
-    for rule in result.scalars().all():
-        by_stream.setdefault(rule.config.get("stream_id"), []).append(eval_stream_metric(rule))
+    for rule in rules:
+        sid = rule.config.get("stream_id")
+        snap = snaps.get(sid)
+        if snap is not None and snap.get("ts") is None and not snap.get("metrics"):
+            snap = None
+        by_stream.setdefault(sid, []).append(_eval_stream_metric_snap(rule, snap))
     return by_stream

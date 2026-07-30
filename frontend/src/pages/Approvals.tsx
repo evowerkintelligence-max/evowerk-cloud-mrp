@@ -153,7 +153,7 @@ export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
                 <Input
                   id="threshold"
                   type="number"
-                  step="0.0001"
+                  step="any"
                   min="0"
                   value={threshold}
                   onChange={(e) => setThreshold(e.target.value)}

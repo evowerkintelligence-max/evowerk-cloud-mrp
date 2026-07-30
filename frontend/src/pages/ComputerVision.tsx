@@ -82,7 +82,6 @@ export function ComputerVision() {
                 type="file"
                 accept="image/jpeg,image/png,image/webp,image/gif"
                 onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-                className="file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-foreground"
               />
             </Field>
           </div>

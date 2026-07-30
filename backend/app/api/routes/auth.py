@@ -22,6 +22,7 @@ from app.core.security import (
     hash_refresh_token,
     refresh_token_expiry,
     totp_provisioning_uri,
+    totp_qr_svg,
     verify_password,
     verify_password_timing_safe,
     verify_totp,
@@ -122,6 +123,7 @@ class MfaEnrollRequest(BaseModel):
 class MfaEnrollResponse(BaseModel):
     secret: str
     provisioning_uri: str
+    qr_svg: str
 
 
 class MfaVerifyRequest(BaseModel):
@@ -271,9 +273,11 @@ async def mfa_enroll(
     user.pending_mfa_secret = encrypt_secret(secret)
     await db.commit()
 
+    provisioning_uri = totp_provisioning_uri(secret, user.email)
     return MfaEnrollResponse(
         secret=secret,
-        provisioning_uri=totp_provisioning_uri(secret, user.email),
+        provisioning_uri=provisioning_uri,
+        qr_svg=totp_qr_svg(provisioning_uri),
     )
 
 

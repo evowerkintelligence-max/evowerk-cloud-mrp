@@ -166,7 +166,7 @@ export function BuildCalculatorPanel() {
               <Input
                 id="bc-qty"
                 type="number"
-                step="0.0001"
+                step="any"
                 min="0.0001"
                 value={buildQuantity}
                 onChange={(e) => {

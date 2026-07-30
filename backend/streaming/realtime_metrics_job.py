@@ -35,7 +35,7 @@ from pyflink.datastream.connectors.kafka import (
 from pyflink.datastream.state import ValueStateDescriptor
 from pyflink.datastream.window import TumblingProcessingTimeWindows
 
-from streaming.metrics import compute_window_metrics
+from app.services.stream_metrics import compute_window_metrics
 from streaming.schemas import METRICS_TOPIC, TICKS_TOPIC, MetricSnapshot, Tick
 
 WINDOW_SECONDS = 5

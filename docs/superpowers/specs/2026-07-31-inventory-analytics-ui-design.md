@@ -17,10 +17,13 @@ anything. All three are exposed via `backend/app/api/routes/inventory_analytics.
 and covered by tests.
 
 None of this is visible in the product. `frontend/src/pages/Inventory.tsx`
-only renders on-hand quantities, a status badge, and a bare reorder-point
-number on the detail view. `abc_class`, `xyz_class`, the RCA endpoint, and
-the scenario endpoint have zero frontend callers today (only
-`/inventory/morning-brief` is wired into `Dashboard.tsx`).
+exports `InventoryPanel`, rendered as the "Inventory" tab of the Warehouse
+page (`frontend/src/pages/Warehouse.tsx`, route `/warehouse` — there is no
+standalone `/inventory` route). It only renders on-hand quantities, a
+status badge, and a bare reorder-point number on the detail view.
+`abc_class`, `xyz_class`, the RCA endpoint, and the scenario endpoint have
+zero frontend callers today (only `/inventory/morning-brief` is wired into
+`Dashboard.tsx`).
 
 This phase wires the existing engine into the existing Inventory page,
 following the same philosophy the Planning Grid established on
@@ -134,16 +137,17 @@ Everything else reuses existing, unchanged endpoints: `/inventory/analytics`,
 ## 6. Cross-links with the Planning Grid
 
 The Planning Grid (`/planning`, already shipped) and this Inventory
-Analytics UI (`/inventory`) stay two separate screens with two separate
-jobs — forward-looking "what to make/buy" vs. diagnostic "what's wrong
-with current stock" — but they're one connected system, not two
-unrelated features, and should read that way:
+Analytics UI (the "Inventory" tab of `/warehouse` — see the correction
+above) stay two separate screens with two separate jobs — forward-looking
+"what to make/buy" vs. diagnostic "what's wrong with current stock" — but
+they're one connected system, not two unrelated features, and should
+read that way:
 
 - **Planning Grid → Inventory Analytics**: each product row gets a small
-  link (e.g. an info icon next to the SKU) to that item's row on
-  `/inventory`, auto-expanded to its analytics detail (§4). Lets a user
-  planning a build check *why* a material looks risky without leaving
-  the planning flow to go hunting.
+  link ("View in Inventory") to that item's row on `/warehouse?item=<id>`
+  (the Warehouse page defaults to its Inventory tab), auto-expanded to
+  its analytics detail (§4). Lets a user planning a build check *why* a
+  material looks risky without leaving the planning flow to go hunting.
 - **Inventory Analytics → Planning Grid**: the RCA insight banner (§2)
   gets a "View affected items in Planning" link that navigates to
   `/planning` filtered/highlighted to the SKUs behind the finding — e.g.

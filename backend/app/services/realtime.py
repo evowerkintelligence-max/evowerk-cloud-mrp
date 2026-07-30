@@ -43,7 +43,9 @@ from app.services.stream_metrics import compute_window_metrics
 
 logger = logging.getLogger(__name__)
 
-# Cap carried over from TickProducer's rows[-1000:] send cap.
+# Per-window write budget: at most this many new rows are written into one
+# sample. Rows beyond it are NOT marked seen, so they stay new and drain into
+# the following windows (see _poll_once), oldest first.
 _MAX_ROWS_PER_WINDOW = 1_000
 _PRUNE_EVERY_S = 3600.0
 _last_prune = 0.0
@@ -65,8 +67,9 @@ def new_rows_since_last_poll(
 
     ponytail: two identical rows in ADJACENT polls with no distinguishing
     column are treated as re-fetched, and a process restart resets prev so
-    the whole table re-ingests once. Upgrade path: persist a per-stream
-    high-water column or row-hash set if either bites.
+    the whole table re-ingests, in _MAX_ROWS_PER_WINDOW-sized windows.
+    Upgrade path: persist a per-stream high-water column or row-hash set if
+    either bites.
     """
     keys = [_row_key(r) for r in rows]
     cur = Counter(keys)
@@ -119,6 +122,14 @@ class StreamCollector:
         self._duration_base = 0
         self._started = time.monotonic()
         self._last_rows_at: float | None = None
+        # ponytail: ThreadPoolExecutor workers are non-daemon and joined at
+        # interpreter exit, and shutdown(wait=False) does not cancel a future
+        # already running, so a collector cancelled mid-fetch delays process
+        # exit until that blocking call returns (an MQTT collect_seconds
+        # window, or a TCP read with no timeout against a dead SQL Server).
+        # Upgrade path: bound the blocking call itself with per-connector
+        # fetch timeouts, not daemon threads (a killed thread mid-fetch would
+        # leak the connector's socket).
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix=f"collector-{str(stream_id)[:8]}"
         )
@@ -146,7 +157,7 @@ class StreamCollector:
             try:
                 self._conn = get_connector(self.integration_type, self.integration_config)
             except Exception as exc:
-                self.status, self.error = "error", f"Connector init failed: {exc}"
+                self.status, self.error = "error", f"Connector init failed: {exc}"[:2000]
                 await self._write_sample([])  # surface the failure in snapshots
                 return
             while True:
@@ -175,20 +186,37 @@ class StreamCollector:
             self._rows_collected = latest.rows_collected
             self._duration_base = latest.duration_s
 
+    def _fetch_and_dedup(self) -> tuple[list[dict[str, Any]], Counter]:
+        """Runs on the collector's executor. The dedup rides along with the
+        fetch because it json.dumps-hashes every row of the source table, and
+        most connectors return the whole table each poll (SQL Server's own
+        default ceiling is max_rows=500_000): on the event loop that stalls
+        every other request in the worker."""
+        return new_rows_since_last_poll(self._conn.fetch_all(), self._prev)
+
     async def _poll_once(self) -> None:
         loop = asyncio.get_running_loop()
         try:
-            rows = await loop.run_in_executor(self._executor, self._conn.fetch_all)
-            self.status, self.error = "running", None
+            new_rows, seen = await loop.run_in_executor(self._executor, self._fetch_and_dedup)
         except Exception as exc:
-            self.status, self.error = "error", str(exc)
-            rows = []
-
-        if self.status == "running":
-            new_rows, self._prev = new_rows_since_last_poll(rows, self._prev)
-            new_rows = new_rows[-_MAX_ROWS_PER_WINDOW:]
-        else:
+            # Truncated to the RealtimeSample.error / RealtimeStream.last_error
+            # column width (String(2000)): on Postgres an over-length value
+            # fails the INSERT, so no sample lands at all and the stream just
+            # freezes with no error shown.
+            self.status, self.error = "error", str(exc)[:2000]
             new_rows = []  # keep _prev: a transient fetch error must not re-ingest the table
+        else:
+            self.status, self.error = "running", None
+            if len(new_rows) > _MAX_ROWS_PER_WINDOW:
+                deferred = new_rows[_MAX_ROWS_PER_WINDOW:]
+                new_rows = new_rows[:_MAX_ROWS_PER_WINDOW]  # oldest first: drain in arrival order
+                # Adopt `seen` MINUS the deferred rows: they stay new, so the
+                # next poll picks them up instead of them being marked seen and
+                # lost forever. Adopting nothing at all would instead re-emit
+                # this same window's rows on the next poll, as duplicates.
+                self._prev = seen - Counter(_row_key(r) for r in deferred)
+            else:
+                self._prev = seen
         await self._write_sample(new_rows)
         await _maybe_prune()
 
@@ -456,11 +484,15 @@ def start_runner(
 ) -> StreamCollector:
     """(Re)start the collector for an existing stream_id. Idempotent: any
     prior collector for the same id is cancelled without being awaited
-    (fire-and-forget; its finally block shuts its executor down)."""
+    (fire-and-forget; its finally block shuts its executor down). One never
+    started has no task to cancel, so its executor is shut down here."""
     sid = str(stream_id)
     existing = _runners.pop(sid, None)
-    if existing is not None and existing._task is not None:
-        existing._task.cancel()
+    if existing is not None:
+        if existing._task is not None:
+            existing._task.cancel()
+        else:
+            existing._executor.shutdown(wait=False)
 
     collector = StreamCollector(
         stream_id=stream_id,

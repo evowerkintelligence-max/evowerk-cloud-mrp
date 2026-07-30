@@ -158,6 +158,34 @@ async def test_poll_once_writes_sample_and_dedups_across_polls(client):
     assert samples[0].status == "running"
 
 
+async def test_window_cap_carries_surplus_rows_into_next_window(client, monkeypatch):
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db)
+
+    # Module-level constant, read at call time inside _poll_once, so patching
+    # it here beats generating 1000+ rows.
+    monkeypatch.setattr(realtime_service, "_MAX_ROWS_PER_WINDOW", 3)
+    batch = [{"units": i, "scrap": 0} for i in range(5)]
+    c = _collector_for(stream, [batch])  # same over-cap batch on every poll
+    await c._seed_counters()
+    await c._poll_once()
+    await c._poll_once()
+
+    async with db_session.async_session_factory() as db:
+        samples = (
+            await db.execute(
+                select(RealtimeSample).where(RealtimeSample.stream_id == stream.id).order_by(RealtimeSample.id)
+            )
+        ).scalars().all()
+    # Window 2 is the REMAINDER, not zero: the two rows past the cap are held
+    # back as still-new and drain here instead of being marked seen and lost.
+    assert [s.rows_in_window for s in samples] == [3, 2]
+    assert [s.rows_collected for s in samples] == [3, 5]
+    # The two windows partition the batch in order: no duplicates, no omissions.
+    assert samples[0].raw_rows + samples[1].raw_rows == batch
+
+
 async def test_counters_seed_from_latest_sample_on_restart(client):
     await _register_and_login(client)
     async with db_session.async_session_factory() as db:

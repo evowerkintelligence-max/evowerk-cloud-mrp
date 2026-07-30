@@ -172,6 +172,61 @@ async def test_mfa_enroll_alone_does_not_disable_existing_mfa(client):
     assert login3.json()["mfa_required"] is True, "MFA must still be enforced after a rejected re-enroll"
 
 
+async def test_delete_account_requires_correct_password(client):
+    await _register(client, email="erin@example.com")
+    login = await client.post("/auth/login", json={"email": "erin@example.com", "password": PASSWORD})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    wrong = await client.post("/auth/delete-account", json={"password": "wrong-password"}, headers=headers)
+    assert wrong.status_code == 403
+
+    # Account must still work after a rejected deletion attempt
+    still_works = await client.post("/auth/login", json={"email": "erin@example.com", "password": PASSWORD})
+    assert still_works.status_code == 200
+
+
+async def test_delete_account_erases_user_and_revokes_sessions(client):
+    await _register(client, email="frankie@example.com")
+    login = await client.post("/auth/login", json={"email": "frankie@example.com", "password": PASSWORD})
+    tokens = login.json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    deleted = await client.post("/auth/delete-account", json={"password": PASSWORD}, headers=headers)
+    assert deleted.status_code == 204
+
+    # The account is gone: login fails, refresh token is dead, old access token is dead
+    login_again = await client.post(
+        "/auth/login", json={"email": "frankie@example.com", "password": PASSWORD}
+    )
+    assert login_again.status_code == 401
+
+    refresh_again = await client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+    assert refresh_again.status_code == 401
+
+    whoami = await client.get("/orgs/me", headers=headers)
+    assert whoami.status_code == 401
+
+
+async def test_delete_account_with_mfa_requires_totp_code(client):
+    await _register(client, email="grant@example.com")
+    login = await client.post("/auth/login", json={"email": "grant@example.com", "password": PASSWORD})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    enroll = await client.post("/auth/mfa/enroll", json={}, headers=headers)
+    secret = enroll.json()["secret"]
+    await client.post("/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()}, headers=headers)
+
+    no_code = await client.post("/auth/delete-account", json={"password": PASSWORD}, headers=headers)
+    assert no_code.status_code == 400
+
+    with_code = await client.post(
+        "/auth/delete-account",
+        json={"password": PASSWORD, "totp_code": pyotp.TOTP(secret).now()},
+        headers=headers,
+    )
+    assert with_code.status_code == 204
+
+
 async def test_cross_tenant_isolation(client):
     await _register(client, email="frank@example.com", org_name="OrgA")
     await _register(client, email="grace@example.com", org_name="OrgB")

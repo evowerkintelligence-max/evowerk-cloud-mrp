@@ -128,6 +128,11 @@ class MfaVerifyRequest(BaseModel):
     code: str
 
 
+class DeleteAccountRequest(BaseModel):
+    password: str
+    totp_code: str | None = None
+
+
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
@@ -338,3 +343,37 @@ async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
         stored.revoked = True
         await log_event(db, action="user.logout", org_id=stored.org_id, actor_user_id=stored.user_id)
         await db.commit()
+
+
+@router.post("/delete-account", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    body: DeleteAccountRequest,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """GDPR Art. 17 erasure: the user deletes their own row (cascades to their
+    RefreshTokens and OAuthAccounts via ondelete=CASCADE). AuditLog rows are kept
+    for security/legal-obligation purposes - actor_user_id is a bare UUID with no
+    FK, so it's left dangling rather than deleted, same as any other closed
+    account. Password (and TOTP, if enabled) confirmation guards against a leaked
+    access token alone being enough to erase the account."""
+    result = await db.execute(select(User).where(User.id == current.id))
+    user = result.scalar_one()
+
+    if not await run_in_threadpool(verify_password, body.password, user.hashed_password):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Password confirmation required")
+
+    if user.mfa_enabled:
+        if not body.totp_code or not verify_totp(decrypt_secret(user.mfa_secret or ""), body.totp_code):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid MFA code")
+
+    await log_event(
+        db,
+        action="user.account_deleted",
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        ip_address=_client_ip(request),
+    )
+    await db.delete(user)
+    await db.commit()

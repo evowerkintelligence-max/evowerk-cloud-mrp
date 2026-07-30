@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, ChevronDown, ChevronRight, LogOut, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { Bell, ChevronDown, ChevronRight, LogOut, PanelLeftClose, PanelLeftOpen, Search, Settings } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
 import { useCurrentUser } from "@/lib/currentUser";
@@ -312,6 +312,16 @@ export function AppShell() {
                 Workspace
               </div>
             </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={() => navigate("/settings")}
+              aria-label="Settings"
+              title="Settings"
+            >
+              <Settings />
+            </Button>
             <Button
               variant="ghost"
               size="icon"

@@ -400,12 +400,22 @@ async def recent_rows(db: AsyncSession, stream_id: uuid.UUID, n: int = 500) -> l
     from the newest non-empty samples. The actual feature columns AutoML
     scores on, not the windowed aggregates."""
     n = max(1, int(n))
+    # `n` counts ROWS, but the LIMIT counts SAMPLES, and each sample carries up
+    # to _MAX_ROWS_PER_WINDOW (1000) rows that .all() materializes before the
+    # loop below can break. So the sample scan is capped independently of `n`.
+    #
+    # ponytail: 200-sample ceiling, so a caller asking for more rows than the
+    # newest 200 samples happen to hold gets fewer rows than it requested
+    # (every non-empty sample has >= 1 row, so 200 samples always cover the
+    # scoring path's 50 and the retrain path's 20-row guard). Upgrade path:
+    # paginate the sample scan, or store raw rows in their own table if
+    # per-row querying is ever needed.
     samples = (
         await db.execute(
             select(RealtimeSample.raw_rows)
             .where(RealtimeSample.stream_id == stream_id, RealtimeSample.rows_in_window > 0)
             .order_by(RealtimeSample.id.desc())
-            .limit(n)  # every non-empty sample has >= 1 row, so n samples cover n rows
+            .limit(min(n, 200))
         )
     ).scalars().all()
     out: list[dict[str, Any]] = []

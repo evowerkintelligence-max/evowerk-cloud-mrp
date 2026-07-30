@@ -321,6 +321,27 @@ async def test_samples_since_returns_only_new_rows_and_advancing_cursor(client):
         assert cursor3 == cursor2
 
 
+async def test_snapshot_with_no_sample_still_carries_external_metrics(client):
+    """A stream with no sample row but a published external metric (an AutoML
+    risk score written before the collector's first window, or after
+    _maybe_prune deleted the samples and left the metric rows) must still be
+    evaluated by alerts.py, whose guard is `ts is None AND no metrics`. Both
+    halves matter: this snapshot satisfies only the first."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db)
+        await realtime_service.set_external_metric(db, stream.id, "automl_risk_score", 0.9)
+        await db.commit()
+
+        snap = await realtime_service.latest_snapshot(db, stream)
+
+    assert snap["ts"] is None  # no sample row at all
+    assert snap["metrics"]["automl_risk_score"] == 0.9  # external metric merged in
+    # The alert guard's own condition: "not running, nothing to evaluate" must
+    # be False here, so evaluation proceeds.
+    assert not (snap.get("ts") is None and not snap.get("metrics"))
+
+
 async def test_prune_deletes_only_expired_samples(client, monkeypatch):
     await _register_and_login(client)
     async with db_session.async_session_factory() as db:

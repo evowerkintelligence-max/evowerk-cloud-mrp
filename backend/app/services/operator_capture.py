@@ -31,7 +31,21 @@ async def open_capture_event(
 ) -> CaptureEvent:
     """Closes whatever capture event is still open on this machine, then
     opens a new one - a machine has at most one open event at a time."""
-    open_event = (
+    # The open-event lookup below is a check-then-act, and both callers are
+    # public unauthenticated routes: two readers posting for one machine at the
+    # same moment would each see no open event and each insert one, leaving the
+    # machine with two. Lock the machine row first so concurrent scans on the
+    # same machine serialize. It has to be the machine row - there is no
+    # open-event row to lock in exactly the case that breaks.
+    # ponytail: per-machine row lock. Upgrade to a partial unique index on
+    # (machine_id) WHERE ended_at IS NULL if this lock ever contends.
+    await db.execute(select(Machine.id).where(Machine.id == machine_id).with_for_update())
+
+    # Plural, closing every one: a machine should only ever have one open event,
+    # but rows predating the lock above (or written by anything bypassing it)
+    # would make scalar_one_or_none raise MultipleResultsFound and 500 a scan.
+    # Closing all of them heals that state instead of failing on it.
+    open_events = (
         await db.execute(
             select(CaptureEvent).where(
                 CaptureEvent.org_id == org_id,
@@ -39,8 +53,8 @@ async def open_capture_event(
                 CaptureEvent.ended_at.is_(None),
             )
         )
-    ).scalar_one_or_none()
-    if open_event is not None:
+    ).scalars().all()
+    for open_event in open_events:
         # A scanned_at inside the caller's accepted window can still predate
         # this specific event's own started_at (e.g. a backdated reader scan
         # closing an event that opened minutes ago) - clamp so ended_at never
@@ -78,7 +92,12 @@ async def resolve_attribution(
                 CaptureEvent.started_at < window_end,
                 or_(CaptureEvent.ended_at.is_(None), CaptureEvent.ended_at > window_start),
             )
-            .order_by(CaptureEvent.started_at.desc())
+            # Latest scan first: it is the most recent statement about who is
+            # there. Tiebreaker for two events stamped at the same instant (a
+            # reader posting a buffered batch at second precision) - the one
+            # still open is the one nobody has scanned out of, so it wins.
+            # Without it the pick is whatever the DB happens to return first.
+            .order_by(CaptureEvent.started_at.desc(), CaptureEvent.ended_at.is_(None).desc())
         )
     ).scalars().first()
     if event is not None:

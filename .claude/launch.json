@@ -9,7 +9,7 @@
     },
     {
       "name": "backend-dev",
-      "runtimeExecutable": "python",
+      "runtimeExecutable": "backend/.venv/Scripts/python.exe",
       "runtimeArgs": ["backend/dev_server.py"],
       "port": 8010,
       "env": { "PORT": "8010" }

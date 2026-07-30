@@ -269,16 +269,33 @@ function WorkCentersPanel() {
 // page naming the machine. Built via DOM APIs (not innerHTML/document.write)
 // so the machine's own name/code - free text an owner typed - can't inject
 // markup into the print tab.
-async function printQr(machineId: string, code: string, name: string) {
+//
+// Every failure path reports through onError (the panel's existing Alert)
+// rather than returning quietly: there is deliberately no fallback that opens
+// the bare unlabelled QR, so a silent return would leave the button looking
+// broken with nothing to act on.
+async function printQr(
+  machineId: string,
+  code: string,
+  name: string,
+  onError: (message: string) => void,
+) {
   const tab = window.open("", "_blank");
-  const res = await apiFetch(`/machines/${machineId}/checkin-qr`);
-  if (!res.ok) {
-    tab?.close();
+  if (!tab) {
+    // Blocked, so there is nowhere to render the label - don't spend the
+    // request. Narrowing here also drops the optional chaining below.
+    onError("Your browser blocked the print tab. Allow pop-ups for this site, then try again.");
     return;
   }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  if (tab) {
+  try {
+    const res = await apiFetch(`/machines/${machineId}/checkin-qr`);
+    if (!res.ok) {
+      tab.close();
+      onError(`Failed to load the check-in QR for ${code}`);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
     const doc = tab.document;
     doc.title = `Check-in QR - ${code}`;
     const style = doc.createElement("style");
@@ -297,10 +314,11 @@ async function printQr(machineId: string, code: string, name: string) {
     img.src = url;
     img.alt = "Check-in QR code";
     doc.body.append(heading, subheading, img);
-  } else {
-    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    tab.close();
+    onError(`Failed to load the check-in QR for ${code}`);
   }
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function MachinesPanel() {
@@ -463,7 +481,14 @@ function MachinesPanel() {
                   <TD className="text-muted-foreground">{m.mttr_hours ?? "-"}</TD>
                   <TD>{m.needs_review ? <Badge variant="warning">Needs review</Badge> : ""}</TD>
                   <TD>
-                    <Button size="sm" variant="outline" onClick={() => printQr(m.id, m.code, m.name)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setError(null);
+                        printQr(m.id, m.code, m.name, setError);
+                      }}
+                    >
                       Print QR
                     </Button>
                   </TD>

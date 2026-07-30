@@ -60,6 +60,52 @@ async def test_resolve_or_create_operator_unrelated_name_not_flagged(db_session)
     assert unrelated.needs_review is False
 
 
+class _MissFirstLookup:
+    """Session proxy whose first execute() reports no rows, so the insert below
+    it collides with uq_operators_org_normalized_name - which is exactly what a
+    second concurrent scan for one new name does, without needing two real
+    connections to interleave."""
+
+    class _Empty:
+        def scalar_one_or_none(self):
+            return None
+
+    def __init__(self, db):
+        self._db = db
+        self._missed = False
+
+    def __getattr__(self, attr):
+        return getattr(self._db, attr)
+
+    async def execute(self, *args, **kwargs):
+        result = await self._db.execute(*args, **kwargs)
+        if not self._missed:
+            self._missed = True
+            return self._Empty()
+        return result
+
+
+async def test_resolve_or_create_operator_losing_the_create_race_returns_the_winner(db_session):
+    """A public, unauthenticated scan must not 500 because another scan created
+    the same name first, and the savepoint must leave the caller's own pending
+    work intact (a session-wide rollback would discard it)."""
+    org_id = uuid.uuid4()
+    winner = await resolve_or_create_operator(db_session, org_id, "J Kim")
+    await db_session.flush()
+
+    pending = Operator(org_id=org_id, name="Unrelated", normalized_name="unrelated")
+    db_session.add(pending)
+
+    resolved = await resolve_or_create_operator(_MissFirstLookup(db_session), org_id, "J Kim")
+
+    assert resolved.id == winner.id
+    # The failed insert rolled back to its savepoint only: the row this caller
+    # had queued before the race is still there to commit.
+    assert pending in db_session
+    rows = (await db_session.execute(select(Operator).where(Operator.org_id == org_id))).scalars().all()
+    assert sorted(o.normalized_name for o in rows) == ["j kim", "unrelated"]
+
+
 async def test_resolve_or_create_operator_scoped_per_org(db_session):
     name = "J Kim"
     a = await resolve_or_create_operator(db_session, uuid.uuid4(), name)

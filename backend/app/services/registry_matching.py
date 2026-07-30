@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.machine import Machine
@@ -94,6 +95,28 @@ async def resolve_or_create_operator(db: AsyncSession, org_id: uuid.UUID, raw_na
     needs_review = any(normalized_similarity(target, o.name) >= FUZZY_MATCH_THRESHOLD for o in others)
 
     operator = Operator(org_id=org_id, name=target, normalized_name=normalized, needs_review=needs_review)
-    db.add(operator)
-    await db.flush()
+    try:
+        # Savepoint, not a bare db.flush()/db.rollback(): a session-wide
+        # rollback would throw away the caller's pending work and expire the
+        # objects it already loaded, so the next attribute touch would try
+        # implicit IO mid-response (MissingGreenlet) - the same trap
+        # purchase_orders.py's submit path documents. This rolls back only the
+        # failed insert, matching lots.find_or_create_lot.
+        async with db.begin_nested():
+            db.add(operator)
+            await db.flush()
+    except IntegrityError:
+        # Lost the create race to a concurrent scan for the same name (this is
+        # a public, unauthenticated endpoint, so two badge readers can hit it
+        # at once) - the other insert won, so resolve to its row instead of
+        # 500ing. uq_operators_org_normalized_name is what fires here, so the
+        # winning row is guaranteed to be findable by the same key.
+        existing_match = (
+            await db.execute(
+                select(Operator).where(Operator.org_id == org_id, Operator.normalized_name == normalized)
+            )
+        ).scalar_one_or_none()
+        if existing_match is None:
+            raise
+        return existing_match
     return operator

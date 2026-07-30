@@ -343,7 +343,7 @@ export function Lots() {
               <Input
                 id="fefo-qty"
                 type="number"
-                step="0.0001"
+                step="any"
                 min="0.0001"
                 value={fefoQuantity}
                 onChange={(e) => setFefoQuantity(e.target.value)}
@@ -526,7 +526,7 @@ export function Lots() {
                     <Input
                       id="consume-qty"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0.0001"
                       value={consumeQuantity}
                       onChange={(e) => setConsumeQuantity(e.target.value)}
@@ -551,7 +551,7 @@ export function Lots() {
                     <Input
                       id="transfer-qty"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0.0001"
                       value={transferQuantity}
                       onChange={(e) => setTransferQuantity(e.target.value)}

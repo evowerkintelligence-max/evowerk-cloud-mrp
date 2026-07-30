@@ -10,6 +10,7 @@ import { Alert } from "@/components/ui/alert";
 interface EnrollResponse {
   secret: string;
   provisioning_uri: string;
+  qr_svg: string;
 }
 
 export function MfaChallenge() {
@@ -86,21 +87,19 @@ export function MfaChallenge() {
   return (
     <AuthLayout
       title="Enable two-factor authentication"
-      subtitle="Scan the secret in your authenticator app, then confirm with a code."
+      subtitle="Scan the QR code with your authenticator app, then confirm with a code."
     >
       <div className="space-y-4">
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">Secret key</p>
-          <code className="block break-all rounded-md border border-border bg-background/60 px-3 py-2 font-mono text-sm text-primary">
+        <div
+          className="mx-auto w-40 rounded-md border border-border bg-white p-2"
+          dangerouslySetInnerHTML={{ __html: enroll.data.qr_svg }}
+        />
+        <details className="text-sm text-muted-foreground">
+          <summary className="cursor-pointer select-none hover:text-primary">Can't scan? Enter the key manually</summary>
+          <code className="mt-2 block break-all rounded-md border border-border bg-background/60 px-3 py-2 font-mono text-xs text-primary">
             {enroll.data.secret}
           </code>
-          <a
-            href={enroll.data.provisioning_uri}
-            className="block break-all text-xs text-muted-foreground hover:text-primary"
-          >
-            {enroll.data.provisioning_uri}
-          </a>
-        </div>
+        </details>
         <Field label="6-digit code" htmlFor="mfa-code">
           <Input
             id="mfa-code"

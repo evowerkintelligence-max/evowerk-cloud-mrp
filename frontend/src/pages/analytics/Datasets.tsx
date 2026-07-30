@@ -107,7 +107,6 @@ export function Datasets() {
                 type="file"
                 accept=".csv,.tsv,.xlsx,.xls,.json,.parquet"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                className="file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-foreground"
               />
             </div>
             {file && <p className="mt-1 text-xs text-muted-foreground">{file.name}</p>}

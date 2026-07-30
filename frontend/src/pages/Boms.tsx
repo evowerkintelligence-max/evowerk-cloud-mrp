@@ -799,7 +799,7 @@ export function Boms() {
                     <Input
                       id="qty"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0.0001"
                       max={lineUnitId ? undefined : MAX_LINE_QUANTITY}
                       value={lineUnitId ? lineUnitQuantity : lineQuantity}

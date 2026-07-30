@@ -384,7 +384,7 @@ export function InventoryPanel() {
                   <Input
                     id="c-qty"
                     type="number"
-                    step="0.0001"
+                    step="any"
                     min="0.0001"
                     value={consumeQty}
                     onChange={(e) => setConsumeQty(e.target.value)}
@@ -415,7 +415,7 @@ export function InventoryPanel() {
                   <Input
                     id="cnt-qty"
                     type="number"
-                    step="0.0001"
+                    step="any"
                     min="0"
                     value={countQty}
                     onChange={(e) => setCountQty(e.target.value)}
@@ -469,7 +469,7 @@ export function InventoryPanel() {
                   <Input
                     id="a-qty"
                     type="number"
-                    step="0.0001"
+                    step="any"
                     value={adjustDelta}
                     onChange={(e) => setAdjustDelta(e.target.value)}
                     required
@@ -514,7 +514,7 @@ export function InventoryPanel() {
                   <Input
                     id="t-qty"
                     type="number"
-                    step="0.0001"
+                    step="any"
                     min="0.0001"
                     value={transferQty}
                     onChange={(e) => setTransferQty(e.target.value)}

@@ -374,7 +374,7 @@ function RaiseDialog({
             id="raise-qty"
             type="number"
             min="0"
-            step="0.0001"
+            step="any"
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             required
@@ -479,7 +479,7 @@ function EditDialog({
                 id="edit-qty"
                 type="number"
                 min="0"
-                step="0.0001"
+                step="any"
                 value={quantity}
                 onChange={(e) => setQuantity(e.target.value)}
                 required
@@ -594,7 +594,7 @@ function FinishDialog({
             id="finish-good"
             type="number"
             min="0"
-            step="0.0001"
+            step="any"
             value={good}
             onChange={(e) => setGood(e.target.value)}
             required
@@ -605,7 +605,7 @@ function FinishDialog({
             id="finish-scrapped"
             type="number"
             min="0"
-            step="0.0001"
+            step="any"
             value={scrapped}
             onChange={(e) => setScrapped(e.target.value)}
           />

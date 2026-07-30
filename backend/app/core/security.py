@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
 import pyotp
+import qrcode
+import qrcode.image.svg
 from cryptography.fernet import Fernet
 from passlib.context import CryptContext
 
@@ -98,6 +101,15 @@ def totp_provisioning_uri(secret: str, account_name: str) -> str:
     return pyotp.totp.TOTP(secret).provisioning_uri(
         name=account_name, issuer_name=settings.totp_issuer
     )
+
+
+def totp_qr_svg(provisioning_uri: str) -> str:
+    """SVG markup for scanning into an authenticator app - lets enrollment lead with
+    a QR code instead of the raw secret being the only thing on screen."""
+    image = qrcode.make(provisioning_uri, image_factory=qrcode.image.svg.SvgPathImage)
+    buffer = io.BytesIO()
+    image.save(buffer)
+    return buffer.getvalue().decode()
 
 
 def verify_totp(secret: str, code: str) -> bool:

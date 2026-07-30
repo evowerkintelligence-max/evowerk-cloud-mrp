@@ -426,7 +426,7 @@ export function PurchaseOrdersPanel() {
                   <Input
                     id="po-qty"
                     type="number"
-                    step="0.0001"
+                    step="any"
                     min="0.0001"
                     value={lineQuantity}
                     onChange={(e) => setLineQuantity(e.target.value)}
@@ -478,7 +478,7 @@ export function PurchaseOrdersPanel() {
                     <Input
                       id="rcv-qty"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0.0001"
                       value={receiveQuantity}
                       onChange={(e) => setReceiveQuantity(e.target.value)}
@@ -489,7 +489,7 @@ export function PurchaseOrdersPanel() {
                     <Input
                       id="rcv-qty-rejected"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0"
                       max={receiveQuantity || undefined}
                       value={receiveQuantityRejected}

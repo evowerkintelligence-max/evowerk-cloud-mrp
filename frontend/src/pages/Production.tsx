@@ -192,7 +192,7 @@ function WorkCentersPanel() {
                 id="wc-mtbf"
                 type="number"
                 min="0"
-                step="0.01"
+                step="any"
                 value={mtbf}
                 onChange={(e) => setMtbf(e.target.value)}
               />
@@ -202,7 +202,7 @@ function WorkCentersPanel() {
                 id="wc-mttr"
                 type="number"
                 min="0"
-                step="0.01"
+                step="any"
                 value={mttr}
                 onChange={(e) => setMttr(e.target.value)}
               />
@@ -426,7 +426,7 @@ function MachinesPanel() {
                   id="machine-mtbf"
                   type="number"
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={mtbf}
                   onChange={(e) => setMtbf(e.target.value)}
                 />
@@ -436,7 +436,7 @@ function MachinesPanel() {
                   id="machine-mttr"
                   type="number"
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={mttr}
                   onChange={(e) => setMttr(e.target.value)}
                 />

@@ -149,15 +149,20 @@ read that way:
   its analytics detail (§4). Lets a user planning a build check *why* a
   material looks risky without leaving the planning flow to go hunting.
 - **Inventory Analytics → Planning Grid**: the RCA insight banner (§2)
-  gets a "View affected items in Planning" link that navigates to
-  `/planning` filtered/highlighted to the SKUs behind the finding — e.g.
-  clicking through on "Acme Supplier" highlights every product row whose
-  materials depend on that supplier.
+  gets a "View the Planning Grid" link to `/planning`. Correction made
+  while planning implementation: `RcaDimensionValue` (the RCA response
+  shape) only carries aggregate counts per value ("Acme Supplier": 10
+  at-risk items), never the underlying item IDs — so there is no data to
+  highlight specific Planning Grid rows from without new backend logic
+  that traces an RCA finding through the BOM graph to product rows. That
+  is real backend work, not a "light" cross-link, so it is out of scope
+  here. A plain link keeps the two screens one click apart without
+  inventing data the endpoint doesn't return.
 
-No new backend endpoints for this — both are client-side navigation with
-an `item_id`/`skus` query param the existing pages read; the Planning
-Grid and Inventory pages already fetch by item id so this is routing,
-not new data.
+No new backend endpoints for either direction — both are client-side
+navigation; the Planning Grid → Inventory link carries an `item_id`
+query param the Warehouse page already fetches by (§1), which is
+routing, not new data.
 
 ## 7. Testing
 

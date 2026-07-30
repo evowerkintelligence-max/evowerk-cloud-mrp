@@ -655,3 +655,11 @@ describe("ProductDetail (the 'Show working' panel)", () => {
     expect(html).toContain("25");
   });
 });
+
+describe("cross-link to Inventory", () => {
+  it("links each product row to its Warehouse inventory detail", () => {
+    const html = render((qc) => qc.setQueryData(["planning-grid"], GRID));
+    expect(html).toContain('href="/warehouse?item=p-1"');
+    expect(html).toContain('href="/warehouse?item=p-2"');
+  });
+});

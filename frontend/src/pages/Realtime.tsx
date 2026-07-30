@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Radio } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { subscribeToSSE } from "../lib/sse";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
@@ -23,7 +22,7 @@ interface StreamSnapshot {
   ts: string | null;
   stream_id: string;
   name: string;
-  status: "running" | "error" | "stopped" | "not_running_in_this_process";
+  status: "running" | "error" | "stopped" | "starting";
   error: string | null;
   rows_in_window: number;
   rows_collected: number;
@@ -31,13 +30,20 @@ interface StreamSnapshot {
   duration_s: number | null;
   last_tick_s: number | null;
   metrics: Record<string, number>;
+  interval_seconds?: number;
+}
+
+interface SamplesResponse {
+  stream_id: string;
+  cursor: number | null;
+  samples: Partial<StreamSnapshot>[];
 }
 
 const STATUS_VARIANT: Record<string, "success" | "warning" | "danger" | "neutral"> = {
   running: "success",
   error: "danger",
   stopped: "neutral",
-  not_running_in_this_process: "warning",
+  starting: "warning",
 };
 
 // column_map keys StreamRunner.snapshot() reads - see app/services/realtime.py.
@@ -65,13 +71,32 @@ function emptyForm() {
 
 function LiveMetrics({ streamId, initial }: { streamId: string; initial: StreamSnapshot }) {
   const [snap, setSnap] = useState<StreamSnapshot>(initial);
+  const cursor = useRef<number | null>(null);
 
+  // Incremental sync: pass back the last cursor so the server returns only
+  // samples written since the previous poll - nothing is ever re-sent.
   useEffect(() => {
-    const unsubscribe = subscribeToSSE<StreamSnapshot>(
-      `/realtime/streams/${streamId}/events`,
-      (data) => setSnap(data),
-    );
-    return unsubscribe;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const qs = cursor.current != null ? `?since=${cursor.current}` : "";
+        const res = await apiFetch(`/realtime/streams/${streamId}/samples${qs}`);
+        if (!res.ok || cancelled) return;
+        const data: SamplesResponse = await res.json();
+        if (cancelled) return;
+        if (data.cursor != null) cursor.current = data.cursor;
+        const latest = data.samples[data.samples.length - 1];
+        if (latest) setSnap((prev) => ({ ...prev, ...latest }));
+      } catch {
+        // transient network error - next interval retries
+      }
+    };
+    sync();
+    const id = setInterval(sync, (initial.interval_seconds ?? 5) * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [streamId]);
 
   const metricEntries = Object.entries(snap.metrics);
@@ -128,7 +153,7 @@ export function Realtime() {
       if (!res.ok) throw new Error("Failed to load streams");
       return res.json();
     },
-    refetchInterval: 5000, // list view uses polling; the live detail view below uses SSE
+    refetchInterval: 5000, // list view polls; the detail dialog syncs incrementally by cursor
   });
 
   const create = useMutation({

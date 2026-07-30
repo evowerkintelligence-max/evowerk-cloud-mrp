@@ -5,7 +5,7 @@ app.services.realtime.StreamCollector inside the collector's per-window
 transaction (the caller commits)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,11 +16,27 @@ from app.services.anomaly import WINDOW, score_reading
 
 
 async def ingest_rows(db: AsyncSession, stream: RealtimeStream, rows: list[dict]) -> None:
+    """Persist one SensorReading per (row, mapped sensor), rescore that
+    sensor's trailing window, and flag it if it went out of control.
+
+    ponytail: one INSERT plus a flush plus two SELECTs per row per sensor,
+    all in the caller's single transaction, so a full 1000-row window with 3
+    sensors is ~12k round trips. Fine at the interval-poll rates streams
+    actually run at, not fine for a backfill. Upgrade path: bulk-insert the
+    window's readings first, then score each sensor once off an incrementally
+    maintained window instead of re-SELECTing the trailing 200 per row.
+    """
     if not stream.sensor_map or not stream.machine:
         return
 
-    now = datetime.now(timezone.utc)
-    for row in rows:
+    # One distinct, increasing timestamp per row, so the scoring path's
+    # ORDER BY ts DESC is a real arrival order and points[-1] is genuinely the
+    # newest reading. Shared timestamps made that ordering arbitrary while the
+    # anomaly row still pinned a specific reading.id. Offsets run backwards
+    # from now so the window's rows stay inside the window's real time.
+    now = datetime.now(timezone.utc) - timedelta(microseconds=max(0, len(rows) - 1))
+    for i, row in enumerate(rows):
+        ts = now + timedelta(microseconds=i)
         for sensor, field in stream.sensor_map.items():
             raw = row.get(field)
             if raw is None:
@@ -31,7 +47,7 @@ async def ingest_rows(db: AsyncSession, stream: RealtimeStream, rows: list[dict]
                 continue
 
             reading = SensorReading(
-                org_id=stream.org_id, machine=stream.machine, sensor=sensor, value=value, ts=now,
+                org_id=stream.org_id, machine=stream.machine, sensor=sensor, value=value, ts=ts,
             )
             db.add(reading)
             await db.flush()

@@ -3,9 +3,11 @@ dedup, cursor sync, and retention. Replaces the broker-era cache/producer
 tests."""
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from app.db import session as db_session
@@ -271,6 +273,119 @@ async def test_fetch_error_does_not_reingest_the_whole_source(client):
     assert [s.status for s in samples] == ["running", "error", "running"]
     assert [s.rows_in_window for s in samples] == [2, 0, 0]  # window 3 is NOT a re-ingest
     assert [s.rows_collected for s in samples] == [2, 2, 2]
+
+
+async def test_failed_write_does_not_mark_rows_as_seen(client, monkeypatch):
+    """A DB write that blows up (deadlock, statement timeout, an ingest_rows
+    integrity error) must not advance the dedup state: those rows never
+    reached raw_rows or sensor_readings, so the next window has to re-offer
+    them instead of dropping them forever."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db, machine="M1", sensor_map={"vib_x": "vibration_x_mm_s"})
+
+    batch1 = [{"vibration_x_mm_s": 1.0}]
+    batch2 = [{"vibration_x_mm_s": 1.0}, {"vibration_x_mm_s": 2.0}]
+    c = _collector_for(stream, [batch1, batch2])
+    await c._seed_counters()
+    await c._poll_once()  # window 1 commits normally
+
+    real_ingest = realtime_service.ingest_rows
+    failing = {"on": True}
+
+    async def _maybe_boom(*args, **kwargs):
+        if failing["on"]:
+            raise RuntimeError("deadlock detected")
+        return await real_ingest(*args, **kwargs)
+
+    # monkeypatch.undo() is not usable here: the `client` fixture shares this
+    # same monkeypatch instance and undoing it would restore the real
+    # (non-test) session factory.
+    monkeypatch.setattr(realtime_service, "ingest_rows", _maybe_boom)
+    # _run swallows this (logger.exception) and polls again, so the collector
+    # survives; what matters is the state it survives with.
+    with pytest.raises(RuntimeError):
+        await c._poll_once()
+
+    failing["on"] = False
+    await c._poll_once()  # window 3: SAME source table, the lost row must reappear
+
+    async with db_session.async_session_factory() as db:
+        samples = (
+            await db.execute(
+                select(RealtimeSample).where(RealtimeSample.stream_id == stream.id).order_by(RealtimeSample.id)
+            )
+        ).scalars().all()
+        readings = (await db.execute(select(SensorReading).where(SensorReading.machine == "M1"))).scalars().all()
+    # The failed window left no sample behind (rolled back), and its row is
+    # recovered by the next one rather than silently lost.
+    assert [s.rows_in_window for s in samples] == [1, 1]
+    assert [s.rows_collected for s in samples] == [1, 2]
+    assert samples[1].raw_rows == [{"vibration_x_mm_s": 2.0}]
+    assert sorted(r.value for r in readings) == [1.0, 2.0]
+
+
+async def test_dedup_state_rehydrates_from_samples_on_restart(client):
+    """A restart must not re-ingest the whole source table: _seed_counters
+    rebuilds _prev from the rows already persisted in this stream's samples."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db, machine="M1", sensor_map={"vib_x": "vibration_x_mm_s"})
+
+    batch = [{"vibration_x_mm_s": 10.0}, {"vibration_x_mm_s": 11.0}]
+    c = _collector_for(stream, [batch])
+    await c._seed_counters()
+    await c._poll_once()
+
+    restarted = _collector_for(stream, [batch])  # fresh process, empty _prev
+    await restarted._seed_counters()
+    await restarted._poll_once()
+
+    async with db_session.async_session_factory() as db:
+        samples = (
+            await db.execute(
+                select(RealtimeSample).where(RealtimeSample.stream_id == stream.id).order_by(RealtimeSample.id)
+            )
+        ).scalars().all()
+        readings = (await db.execute(select(SensorReading).where(SensorReading.machine == "M1"))).scalars().all()
+    assert [s.rows_in_window for s in samples] == [2, 0]  # not a full re-ingest
+    assert [s.rows_collected for s in samples] == [2, 2]
+    assert len(readings) == 2
+
+
+async def test_stream_lock_degrades_off_postgres(client, monkeypatch):
+    """pg_try_advisory_lock does not exist on the SQLite test DB (nor on any
+    non-Postgres deployment): the collector must collect unlocked rather than
+    refuse to start."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db)
+
+    key = realtime_service._advisory_lock_key(stream.id)
+    assert -(2**63) <= key < 2**63  # Postgres advisory locks take int8 only
+
+    may_collect, lock_db = await realtime_service._try_lock_stream(stream.id)
+    assert may_collect is True
+    assert lock_db is None
+
+    # And the real _run path gets past the lock gate and writes a sample.
+    monkeypatch.setattr(
+        realtime_service, "get_connector", lambda *a, **k: _StubConnector([[{"units": 1, "scrap": 0}]])
+    )
+    c = _collector_for(stream, [[]])
+    c.start()
+    try:
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            async with db_session.async_session_factory() as db:
+                samples = (
+                    await db.execute(select(RealtimeSample).where(RealtimeSample.stream_id == stream.id))
+                ).scalars().all()
+            if samples:
+                break
+    finally:
+        await c.stop()
+    assert [s.rows_in_window for s in samples] == [1]
 
 
 async def test_poll_once_feeds_sensor_ingest(client):

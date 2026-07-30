@@ -65,10 +65,10 @@ def new_rows_since_last_poll(
     semantics keep genuinely duplicate rows within one poll.
 
     ponytail: two identical rows in ADJACENT polls with no distinguishing
-    column are treated as re-fetched, and a process restart resets prev so
-    the whole table re-ingests, in _MAX_ROWS_PER_WINDOW-sized windows.
-    Upgrade path: persist a per-stream high-water column or row-hash set if
-    either bites.
+    column are treated as re-fetched, not as a second row. Upgrade path:
+    persist a per-stream high-water column if that bites. (`prev` itself
+    survives restarts, rehydrated from persisted samples: see
+    StreamCollector._seed_counters.)
     """
     keys = [_row_key(r) for r in rows]
     cur = Counter(keys)
@@ -81,6 +81,60 @@ def new_rows_since_last_poll(
             out.append(row)
     out.reverse()
     return out, cur
+
+
+# ── Single-collector-per-stream lock ─────────────────────────────────────────
+
+def _advisory_lock_key(stream_id: uuid.UUID) -> int:
+    """Stream UUID folded into a signed int8, the only key width Postgres
+    advisory locks accept."""
+    low = stream_id.int & 0xFFFF_FFFF_FFFF_FFFF
+    return low - 0x1_0000_0000_0000_0000 if low >= 0x8000_0000_0000_0000 else low
+
+
+async def _try_lock_stream(stream_id: uuid.UUID) -> tuple[bool, AsyncSession | None]:
+    """Session-scoped Postgres advisory lock so only ONE replica collects a
+    given stream. Returns (may_collect, the session holding the lock); the
+    caller keeps that session open for the collector's whole life and passes
+    it to _unlock_stream at the end.
+
+    ponytail: the lock only stops two replicas of THIS app from collecting the
+    same stream, which is where duplicate SensorReading rows come from
+    (duplicates collapse the I-MR moving range, and with it UCL/LCL, so the
+    CBM alerts flood). It does NOT cover a separate deployment pointed at the
+    same database, a lock silently lost to a Postgres failover mid-run, or
+    row-level dedup of any kind, and it is a deliberate no-op on non-Postgres
+    dialects (the SQLite test DB), where it never refuses to collect. Upgrade
+    path: a leased ownership row per stream with a heartbeat, if collectors
+    ever need to fail over to another replica rather than just not collide.
+    """
+    db = db_session.async_session_factory()
+    if db.get_bind().dialect.name != "postgresql":
+        await db.close()
+        return True, None
+    try:
+        acquired = bool(
+            (await db.execute(select(func.pg_try_advisory_lock(_advisory_lock_key(stream_id))))).scalar()
+        )
+    except Exception:
+        logger.warning("collector %s: advisory lock unavailable, collecting unlocked", stream_id)
+        await db.close()
+        return True, None
+    if not acquired:
+        await db.close()
+        return False, None
+    return True, db
+
+
+async def _unlock_stream(db: AsyncSession, stream_id: uuid.UUID) -> None:
+    """Closing the session alone would return the connection to the pool with
+    the advisory lock still held on it, so unlock explicitly first."""
+    try:
+        await db.execute(select(func.pg_advisory_unlock(_advisory_lock_key(stream_id))))
+    except Exception:
+        logger.warning("collector %s: advisory unlock failed", stream_id)
+    finally:
+        await db.close()
 
 
 # ── Collector ────────────────────────────────────────────────────────────────
@@ -148,7 +202,16 @@ class StreamCollector:
             self._executor.shutdown(wait=False)
 
     async def _run(self) -> None:
+        lock_db: AsyncSession | None = None
         try:
+            may_collect, lock_db = await _try_lock_stream(self.stream_id)
+            if not may_collect:
+                # Another replica owns this stream. Stop cleanly instead of
+                # retrying: a second collector would write its own duplicate
+                # samples and duplicate sensor readings, not take over.
+                self.status = "stopped"
+                logger.info("collector %s: stream held by another replica", self.stream_id)
+                return
             # Seeded BEFORE the connector init so a failing connector's error
             # sample still carries the stream's real accumulated counters
             # instead of resetting them to zero.
@@ -174,16 +237,34 @@ class StreamCollector:
         except asyncio.CancelledError:
             pass
         finally:
+            if lock_db is not None:
+                await _unlock_stream(lock_db, self.stream_id)
             self._executor.shutdown(wait=False)
 
     async def _seed_counters(self) -> None:
-        """Carry rows_collected/duration_s over from the stream's latest
-        sample so the counters survive restarts."""
+        """Carry rows_collected/duration_s AND the dedup state over from the
+        stream's persisted samples so a restart neither resets the counters
+        nor re-ingests the source table. Every already-ingested row is in some
+        sample's raw_rows, so the samples ARE the dedup state.
+
+        ponytail: recent_rows caps its scan at the newest 200 samples, so
+        rehydration covers exactly the rows those samples hold, not all
+        history. For an append-only source that is exact (the rows the source
+        still returns are the recent ones). For a connector that re-returns a
+        large stable table, rows that have aged past the newest 200 samples
+        look new again after a restart and get re-ingested once. Upgrade path:
+        persist a per-stream row-hash digest alongside the stream row, or
+        paginate the rehydration scan past the 200-sample cap.
+        """
         async with db_session.async_session_factory() as db:
             latest = await _latest_sample(db, self.stream_id)
+            # n counts ROWS; ask for more than 200 capped samples can hold so
+            # the scan, not n, is what bounds the result.
+            rows = await recent_rows(db, self.stream_id, 200 * _MAX_ROWS_PER_WINDOW)
         if latest is not None:
             self._rows_collected = latest.rows_collected
             self._duration_base = latest.duration_s
+        self._prev = Counter(_row_key(r) for r in rows)
 
     def _fetch_and_dedup(self) -> tuple[list[dict[str, Any]], Counter]:
         """Runs on the collector's executor. The dedup rides along with the
@@ -195,6 +276,7 @@ class StreamCollector:
 
     async def _poll_once(self) -> None:
         loop = asyncio.get_running_loop()
+        next_prev: Counter | None = None  # None: leave _prev alone (fetch error)
         try:
             new_rows, seen = await loop.run_in_executor(self._executor, self._fetch_and_dedup)
         except Exception as exc:
@@ -213,28 +295,31 @@ class StreamCollector:
                 # next poll picks them up instead of them being marked seen and
                 # lost forever. Adopting nothing at all would instead re-emit
                 # this same window's rows on the next poll, as duplicates.
-                self._prev = seen - Counter(_row_key(r) for r in deferred)
+                next_prev = seen - Counter(_row_key(r) for r in deferred)
             else:
-                self._prev = seen
+                next_prev = seen
+        # The dedup state advances ONLY once the rows are durable. If the write
+        # raises (deadlock, statement timeout, an ingest_rows integrity error),
+        # _run logs and polls again, and these rows are still unseen, so the
+        # next window re-offers them instead of dropping them forever.
         await self._write_sample(new_rows)
+        if next_prev is not None:
+            self._prev = next_prev
         await _maybe_prune()
 
     async def _write_sample(self, new_rows: list[dict[str, Any]]) -> None:
         now_mono = time.monotonic()
-        if new_rows:
-            self._last_rows_at = now_mono
-        self._rows_collected += len(new_rows)
+        last_rows_at = now_mono if new_rows else self._last_rows_at
+        rows_collected = self._rows_collected + len(new_rows)
         sample = RealtimeSample(
             org_id=self.org_id,
             stream_id=self.stream_id,
             status=self.status,
             error=self.error,
             rows_in_window=len(new_rows),
-            rows_collected=self._rows_collected,
+            rows_collected=rows_collected,
             duration_s=self._duration_base + int(now_mono - self._started),
-            last_tick_s=(
-                round(now_mono - self._last_rows_at, 1) if self._last_rows_at is not None else None
-            ),
+            last_tick_s=(round(now_mono - last_rows_at, 1) if last_rows_at is not None else None),
             metrics=compute_window_metrics(new_rows, self.column_map),
             raw_rows=new_rows,
         )
@@ -247,6 +332,9 @@ class StreamCollector:
                 if new_rows:
                     await ingest_rows(db, stream, new_rows)
             await db.commit()
+        # Committed: only now do the in-memory counters move.
+        self._rows_collected = rows_collected
+        self._last_rows_at = last_rows_at
 
 
 async def _maybe_prune() -> None:

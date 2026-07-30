@@ -595,7 +595,7 @@ export function InventoryPanel() {
 
             {(() => {
               const line = analyticsByItem.get(detail.data.item_id);
-              return line ? <AnalyticsDetail itemId={detail.data.item_id} line={line} /> : null;
+              return line ? <AnalyticsDetail key={detail.data.item_id} itemId={detail.data.item_id} line={line} /> : null;
             })()}
           </CardContent>
         </Card>

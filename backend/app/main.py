@@ -15,7 +15,6 @@ from app.api.routes import (
     bi,
     boms,
     cbm,
-    computer_vision,
     customers,
     data_chat,
     datasets,
@@ -159,7 +158,6 @@ app.include_router(predictive.router, dependencies=[Depends(require_feature("pre
 app.include_router(mfg_forecast.router, dependencies=[Depends(require_feature("mfg_forecast"))])
 app.include_router(work_centers.router)
 app.include_router(work_orders.router, dependencies=[Depends(require_feature("production"))])
-app.include_router(computer_vision.router, dependencies=[Depends(require_feature("computer_vision"))])
 app.include_router(data_chat.router, dependencies=[Depends(require_feature("data_chat"))])
 app.include_router(alerts.router)
 app.include_router(device_tokens.router)

@@ -4,7 +4,6 @@ import {
   Boxes,
   Brain,
   CalendarRange,
-  Camera,
   Database,
   Factory,
   FileStack,
@@ -96,7 +95,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/rca-cases", label: "Root Cause Analysis", icon: Search, keywords: ["rca", "5 why", "fishbone"], featureKey: "rca_cases" },
       { to: "/predictive", label: "Predictive Maintenance", icon: Wrench, keywords: ["failure prediction", "maintenance"], featureKey: "predictive" },
       { to: "/mfg-forecast", label: "Manufacturing Forecast", icon: TrendingUp, keywords: ["production forecast"], featureKey: "mfg_forecast" },
-      { to: "/computer-vision", label: "Computer Vision", icon: Camera, keywords: ["image", "defect detection", "camera"], featureKey: "computer_vision" },
     ],
   },
   {

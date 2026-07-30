@@ -9,7 +9,7 @@ from google import genai
 from app.core.config import get_settings
 
 # Stateless Gemini wrapper shared by every LLM-backed feature (data chat,
-# computer vision, report narration). Ported from the desktop app's
+# report narration). Ported from the desktop app's
 # backend/llm/gemini_provider.py. The SDK client is sync-only, so calls run in
 # a thread via asyncio.to_thread to avoid blocking the event loop.
 
@@ -73,28 +73,3 @@ async def generate_json(
         return json.loads(text)
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"Model did not return valid JSON. Raw output: {text[:500]}") from exc
-
-
-async def generate_from_image(
-    image_bytes: bytes,
-    mime_type: str,
-    prompt: str,
-    *,
-    system: str | None = None,
-) -> str:
-    """Vision call for computer_vision.py - image + text prompt in, text out."""
-    client = _client()
-    parts: list[object] = []
-    if system:
-        parts.append(f"[SYSTEM]\n{system}\n")
-    parts.append(prompt)
-    parts.append(genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-
-    def _call() -> str:
-        resp = client.models.generate_content(
-            model=get_settings().gemini_model,
-            contents=parts,
-        )
-        return (resp.text or "").strip()
-
-    return await asyncio.to_thread(_call)

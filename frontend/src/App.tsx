@@ -8,6 +8,7 @@ import { AppShell } from "./components/AppShell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
 import { Login } from "./pages/Login";
+import { Privacy } from "./pages/Privacy";
 import { ForgotPassword } from "./pages/ForgotPassword";
 import { ResetPassword } from "./pages/ResetPassword";
 import { VerifyEmail } from "./pages/VerifyEmail";
@@ -62,8 +63,8 @@ const Realtime = lazyPage(() => import("./pages/Realtime"), "Realtime");
 const RcaCases = lazyPage(() => import("./pages/RcaCases"), "RcaCases");
 const Predictive = lazyPage(() => import("./pages/Predictive"), "Predictive");
 const MfgForecast = lazyPage(() => import("./pages/MfgForecast"), "MfgForecast");
-const ComputerVision = lazyPage(() => import("./pages/ComputerVision"), "ComputerVision");
 const Alerts = lazyPage(() => import("./pages/Alerts"), "Alerts");
+const Settings = lazyPage(() => import("./pages/Settings"), "Settings");
 const StaffPortal = lazyPage(() => import("./pages/staff/StaffPortal"), "StaffPortal");
 const CheckIn = lazyPage(() => import("./pages/CheckIn"), "CheckIn");
 
@@ -134,6 +135,7 @@ export function App() {
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/privacy" element={<Privacy />} />
           <Route path="/staff" element={<RequireStaffSession><StaffPortal /></RequireStaffSession>} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -203,8 +205,8 @@ export function App() {
             <Route path="/rca-cases" element={<RequireFeature feature="rca_cases"><RcaCases /></RequireFeature>} />
             <Route path="/predictive" element={<RequireFeature feature="predictive"><Predictive /></RequireFeature>} />
             <Route path="/mfg-forecast" element={<RequireFeature feature="mfg_forecast"><MfgForecast /></RequireFeature>} />
-            <Route path="/computer-vision" element={<RequireFeature feature="computer_vision"><ComputerVision /></RequireFeature>} />
             <Route path="/alerts" element={<Alerts />} />
+            <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
       </Suspense>

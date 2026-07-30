@@ -88,7 +88,6 @@ Organized by feature area. Each maps to a backend router (`backend/app/api/route
 ### Quality & RCA
 - Defect-rate/DPU analysis.
 - Root-cause cases with fishbone-style cause trees and CAPA actions.
-- Computer vision: image-based defect/PPE detection via Gemini vision.
 
 ### Predictive maintenance (add-on)
 - Machine risk scoring and maintenance scheduling.

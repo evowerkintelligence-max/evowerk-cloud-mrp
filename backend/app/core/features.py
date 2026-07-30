@@ -34,7 +34,6 @@ FEATURES: dict[str, tuple[str, str]] = {
     "simulation": ("Simulation", "premium"),
     "rca_cases": ("Root Cause Analysis", "premium"),
     "mfg_forecast": ("Manufacturing Forecast", "premium"),
-    "computer_vision": ("Computer Vision", "premium"),
 }
 
 CORE_FEATURES: list[str] = [k for k, (_, tier) in FEATURES.items() if tier == "core"]

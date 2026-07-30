@@ -140,7 +140,7 @@ _GRANTED_IN_TESTS = [
     "plant_summary", "oee", "pace_tracking", "downtime", "downtime_tracking",
     "throughput", "scrap", "shifts", "spc", "kpis", "kpi_dashboards",
     "reports", "data_chat", "automl", "predictive", "simulation",
-    "rca_cases", "mfg_forecast", "computer_vision",
+    "rca_cases", "mfg_forecast",
 ]
 
 

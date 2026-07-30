@@ -30,7 +30,6 @@ on top of that, a full manufacturing feature set:
   fishbone-style cause trees and CAPA actions.
 - **Predictive maintenance**: machine risk scoring and maintenance
   scheduling.
-- **Computer vision**: image-based defect/PPE detection via Gemini vision.
 - **AutoML**: sklearn model bake-off, SHAP explainability, drift detection.
 - **BI / ad-hoc analytics**: dataset upload & cleaning, pivot/SQL query,
   custom dashboards/charts, KPIs, saved reports with AI narration, and a

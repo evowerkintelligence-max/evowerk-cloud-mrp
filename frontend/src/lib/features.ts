@@ -33,7 +33,6 @@ export const FEATURES: Record<string, FeatureDef> = {
   simulation: { label: "Simulation", tier: "premium" },
   rca_cases: { label: "Root Cause Analysis", tier: "premium" },
   mfg_forecast: { label: "Manufacturing Forecast", tier: "premium" },
-  computer_vision: { label: "Computer Vision", tier: "premium" },
 };
 
 export const CORE_FEATURES: string[] = Object.entries(FEATURES)

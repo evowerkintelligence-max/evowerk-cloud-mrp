@@ -48,7 +48,7 @@ reportlab>=4.0.0
 # Python, the bundled SVG factory needs no Pillow.
 qrcode>=7.4.0
 
-# Gemini client for LLM-backed features (data chat, computer vision, report
+# Gemini client for LLM-backed features (data chat, report
 # narration) ported from the desktop app. Each caller degrades to a
 # deterministic fallback when GEMINI_API_KEY is unset, so this is a soft
 # dependency at runtime even though it's a hard pip dependency.

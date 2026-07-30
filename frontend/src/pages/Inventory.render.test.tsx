@@ -4,7 +4,8 @@ import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { InsightBanner } from "./inventory/InsightBanner";
-import type { RcaResult } from "./inventory/types";
+import { AnalyticsDetail } from "./inventory/AnalyticsDetail";
+import type { RcaResult, InventoryAnalyticsLine } from "./inventory/types";
 
 function renderWithProviders(node: ReturnType<typeof createElement>, seed: (qc: QueryClient) => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,5 +73,50 @@ describe("InsightBanner", () => {
       qc.setQueryData(["inventory-rca-auto"], SIGNIFICANT_RESULT),
     );
     expect(html).not.toContain("Expected");
+  });
+});
+
+const ANALYTICS_LINE: InventoryAnalyticsLine = {
+  item_id: "i-1",
+  reorder_point: 120,
+  safety_stock: 40,
+  days_of_supply: 12,
+  abc_class: "A",
+  xyz_class: "X",
+  status: "low",
+};
+
+describe("AnalyticsDetail", () => {
+  function renderDetail() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return renderToString(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(AnalyticsDetail, { itemId: "i-1", line: ANALYTICS_LINE }),
+        ),
+      ),
+    )
+      .split("<!-- -->")
+      .join("");
+  }
+
+  it("explains why the item has its status in plain language", () => {
+    const html = renderDetail();
+    expect(html).toContain("12 days of stock left, below your reorder point of 120 units");
+    expect(html).toContain("High-value item, steady demand");
+  });
+
+  it("hides the raw numbers until requested", () => {
+    const html = renderDetail();
+    expect(html).not.toContain("Safety stock");
+  });
+
+  it("shows a what-if lead time field", () => {
+    const html = renderDetail();
+    expect(html).toContain("What if lead time were");
   });
 });

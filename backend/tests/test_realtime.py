@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -10,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from app.services import realtime as realtime_service
-from app.services import realtime_cache
+from app.services.connectors import get_connector
 
 PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
 
@@ -37,28 +35,23 @@ def fake_rest_server():
 
 
 @pytest.fixture(autouse=True)
-def _stop_all_runners_after_each_test():
-    """Streams are real background threads registered in module-level state -
-    without this, a runner from one test could keep polling into the next."""
-    yield
-    realtime_service.stop_all_runners()
+def _no_background_polling(monkeypatch):
+    """No collector polls on its own here. A real collector task would poll
+    and write samples through conftest's single StaticPool SQLite connection
+    at the same time as the request under test, and cancelling it mid-write
+    invalidates that shared connection for everyone (production pools one
+    connection per session, so this is a test-DB artifact). Tests that need a
+    sample drive `_poll_once()` by hand instead, which is deterministic and
+    needs no sleeps."""
+    monkeypatch.setattr(realtime_service.StreamCollector, "start", lambda self: None)
 
 
 @pytest.fixture(autouse=True)
-async def _cache_consumer():
-    """The ASGITransport test client never runs app.main's lifespan (see
-    conftest.client), so realtime_cache's background consumer - which
-    _snapshot_dict reads from - never starts on its own in this process.
-    Only start it when a broker is actually reachable (REDPANDA_BROKERS set,
-    same gate every other live-infra test in this plan uses); otherwise
-    leave it unstarted so these tests keep exercising the "not seen yet"
-    fallback path exactly as before, without needing live infra."""
-    if os.environ.get("REDPANDA_BROKERS"):
-        await realtime_cache.start_cache_consumer()
-        yield
-        await realtime_cache.stop_cache_consumer()
-    else:
-        yield
+async def _stop_all_runners_after_each_test():
+    """Streams are real background tasks registered in module-level state -
+    without this, a collector from one test could keep polling into the next."""
+    yield
+    await realtime_service.stop_all_runners()
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
@@ -87,15 +80,20 @@ def _h(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+async def _drive_one_poll(stream_id):
+    """One deterministic collection window for the stream's registered
+    collector. Its `start` was no-op'd by _no_background_polling, so `_run`
+    never built the connector: build it the same way `_run` does."""
+    collector = realtime_service.get_runner(stream_id)
+    assert collector is not None, "the route should have registered a collector"
+    if collector._conn is None:
+        collector._conn = get_connector(collector.integration_type, collector.integration_config)
+    await collector._seed_counters()
+    await collector._poll_once()
+    return collector
+
+
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not os.environ.get("REDPANDA_BROKERS"),
-    reason="needs a live Redpanda + Flink cluster to actually produce a windowed "
-    "metrics snapshot (e.g. `docker compose up redpanda flink-jobmanager "
-    "flink-taskmanager` and submit realtime_metrics_job.py) - without one, "
-    "realtime_cache never populates and this can only ever see the "
-    "not-yet-seen fallback, same as every other live-infra test in this plan",
-)
 async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -115,31 +113,29 @@ async def test_stream_collects_and_computes_metrics(client, fake_rest_server):
     assert create.status_code == 200, create.text
     stream_id = create.json()["stream_id"]
 
-    # Give the background collector a couple of ticks. Poll budget is wider
-    # than the Flink job's fixed 5s tumbling window (~12s total) so metrics
-    # have time to arrive even against live infra.
-    for _ in range(40):
-        snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
-        if snap["rows_collected"] > 0:
-            break
-        await asyncio.sleep(0.3)
+    # Collect exactly one window, against the fake REST server, by hand.
+    await _drive_one_poll(stream_id)
 
+    snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
     assert snap["status"] == "running"
     assert snap["rows_collected"] > 0
-    assert snap["metrics"]["throughput"] > 0
-    assert snap["metrics"]["scrap_rate_pct"] == pytest.approx(10.0)
 
+    # The fake REST server returns the same single row every poll: the first
+    # window ingests it, later windows dedup to empty. Metrics therefore live
+    # in the first non-empty history point, not necessarily the latest sample.
     history = (await client.get(f"/realtime/streams/{stream_id}/history", headers=headers)).json()
     assert len(history["points"]) > 0
+    first_window = next(p for p in history["points"] if p["metrics"].get("throughput"))
+    assert first_window["metrics"]["throughput"] > 0
+    assert first_window["metrics"]["scrap_rate_pct"] == pytest.approx(10.0)
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not os.environ.get("REDPANDA_BROKERS"),
-    reason="needs a live Redpanda + Flink cluster - see "
-    "test_stream_collects_and_computes_metrics for why",
-)
 async def test_stop_then_start_resumes_collection(client, fake_rest_server):
+    """/stop tears the collector out of the registry and reports "stopped";
+    /start puts a fresh one back. Asserted on the registry, not on a written
+    sample: whether a sample has landed yet is a timing question, and
+    collection itself is covered by test_stream_collects_and_computes_metrics."""
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
     base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
@@ -157,32 +153,17 @@ async def test_stop_then_start_resumes_collection(client, fake_rest_server):
     assert realtime_service.get_runner(stream_id) is None
 
     start = await client.post(f"/realtime/streams/{stream_id}/start", headers=headers)
+    assert start.status_code == 200, start.text
+    # "starting" (no sample yet), not "stopped": desired_status flipped back.
+    assert start.json()["status"] == "starting"
     assert realtime_service.get_runner(stream_id) is not None
-
-    # The /start response's own status field reflects whatever realtime_cache
-    # has cached at that instant, which is empty immediately after a restart -
-    # a real snapshot needs a Flink window (fixed 5s) to close first. Poll the
-    # same way test_stream_collects_and_computes_metrics does rather than
-    # asserting on the immediate response.
-    snap = start.json()
-    for _ in range(40):
-        if snap["status"] == "running":
-            break
-        snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
-        await asyncio.sleep(0.3)
-    assert snap["status"] == "running"
 
 
 @pytest.mark.asyncio
-async def test_stopped_stream_with_stale_cache_reports_stopped_and_real_name(client, fake_rest_server, monkeypatch):
-    """Regression test for the final-review bug in _snapshot_dict: once
-    realtime_cache has ever cached a real snapshot for a stream_id,
-    get_snapshot() keeps returning it forever (nothing overwrites/evicts a
-    stopped stream's last snapshot) - and that cached snapshot's "name" is
-    the raw stream_id (the Flink job's MetricSnapshot.name = key), not
-    stream.name. No live broker is needed to prove _snapshot_dict handles
-    both: a fake cached snapshot is injected directly into a CacheConsumer
-    instance rather than running one against Redpanda."""
+async def test_stopped_stream_keeps_final_counters_and_reports_stopped(client, fake_rest_server):
+    """A stopped stream reports its real final counters from its last
+    persisted sample, with status overlaid to 'stopped' and name from the
+    stream row (samples don't carry the human-readable name)."""
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
     base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
@@ -195,25 +176,22 @@ async def test_stopped_stream_with_stale_cache_reports_stopped_and_real_name(cli
     )
     stream_id = create.json()["stream_id"]
 
-    fake_consumer = realtime_cache.CacheConsumer(group_id="test", brokers="unused")
-    fake_consumer._snapshots[stream_id] = {
-        "ts": 1.0, "stream_id": stream_id, "name": stream_id,
-        "status": "running", "error": None,
-        "rows_in_window": 3, "rows_collected": 3,
-        "duration": "00:00:05", "duration_s": 5.0, "last_tick_s": 1.0,
-        "metrics": {"throughput": 1.0},
-    }
-    monkeypatch.setattr(realtime_cache, "_instance", fake_consumer)
+    # Seed a persisted sample directly (deterministic, no timing dependence).
+    from app.db import session as db_session
+    from app.models.realtime import RealtimeSample, RealtimeStream
+    from sqlalchemy import select
 
-    # While running, the cached data is used but "name" is overlaid with the
-    # real stream name instead of the raw stream_id.
-    running_snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
-    assert running_snap["status"] == "running"
-    assert running_snap["name"] == "Line 9"
+    async with db_session.async_session_factory() as db:
+        stream = (
+            await db.execute(select(RealtimeStream).where(RealtimeStream.id == uuid.UUID(stream_id)))
+        ).scalar_one()
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            rows_in_window=3, rows_collected=3, duration_s=5, last_tick_s=1.0,
+            metrics={"throughput": 1.0}, raw_rows=[],
+        ))
+        await db.commit()
 
-    # Stop the stream. The cache still holds the stale "running" snapshot
-    # (nothing ever overwrites it), but the reported status must reflect the
-    # stop, not the stale cache.
     stop = await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
     assert stop.json()["status"] == "stopped"
     assert stop.json()["name"] == "Line 9"
@@ -221,6 +199,110 @@ async def test_stopped_stream_with_stale_cache_reports_stopped_and_real_name(cli
     snap = (await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers)).json()
     assert snap["status"] == "stopped"
     assert snap["name"] == "Line 9"
+    assert snap["rows_collected"] == 3  # real final counters, not a zeroed shell
+    assert snap["metrics"]["throughput"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_stopped_stream_samples_report_stopped_status(client, fake_rest_server):
+    """/samples must agree with /snapshot: a stopped stream's persisted
+    samples still say "running" (stopping writes no sample), so the route
+    overlays "stopped" without touching the counters."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
+    integration_id = await _create_rest_integration(client, headers, base_url)
+
+    create = await client.post(
+        "/realtime/streams",
+        headers=headers,
+        json={"integration_id": integration_id, "name": "Line 11", "interval_seconds": 1, "column_map": {}},
+    )
+    stream_id = create.json()["stream_id"]
+
+    from app.db import session as db_session
+    from app.models.realtime import RealtimeSample, RealtimeStream
+    from sqlalchemy import select
+
+    async with db_session.async_session_factory() as db:
+        stream = (
+            await db.execute(select(RealtimeStream).where(RealtimeStream.id == uuid.UUID(stream_id)))
+        ).scalar_one()
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            rows_in_window=2, rows_collected=7, duration_s=5, last_tick_s=1.0,
+            metrics={"throughput": 2.0}, raw_rows=[],
+        ))
+        await db.commit()
+
+    stop = await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
+    assert stop.status_code == 200, stop.text
+
+    body = (await client.get(f"/realtime/streams/{stream_id}/samples", headers=headers)).json()
+    assert len(body["samples"]) == 1
+    sample = body["samples"][0]
+    assert sample["status"] == "stopped"
+    assert sample["rows_collected"] == 7  # only the status was overridden
+    assert sample["metrics"]["throughput"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_live_stream_samples_report_stale_when_collector_went_silent(client, fake_rest_server):
+    """/samples must derive staleness the same way _assemble_snapshot does: a
+    stream still marked "running" whose newest sample is far older than its
+    poll window is a dead collector, not a live one. Without this, opening
+    the live dialog on a dead stream would merge the first poll's "running"
+    sample onto the "stale" snapshot state it opened with and hide the
+    problem."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
+    integration_id = await _create_rest_integration(client, headers, base_url)
+
+    create = await client.post(
+        "/realtime/streams",
+        headers=headers,
+        json={"integration_id": integration_id, "name": "Line 12", "interval_seconds": 1, "column_map": {}},
+    )
+    stream_id = create.json()["stream_id"]
+
+    from datetime import datetime, timedelta, timezone
+
+    from app.db import session as db_session
+    from app.models.realtime import RealtimeSample, RealtimeStream
+    from sqlalchemy import select
+
+    async with db_session.async_session_factory() as db:
+        stream = (
+            await db.execute(select(RealtimeStream).where(RealtimeStream.id == uuid.UUID(stream_id)))
+        ).scalar_one()
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            ts=datetime.now(timezone.utc) - timedelta(hours=1),
+            rows_in_window=1, rows_collected=1, duration_s=5, last_tick_s=1.0,
+            metrics={}, raw_rows=[],
+        ))
+        await db.commit()
+
+    # Stream itself was never stopped, but its only sample is an hour old:
+    # comfortably past the stale window (max(30s, 5 * 1s interval) = 30s).
+    body = (await client.get(f"/realtime/streams/{stream_id}/samples", headers=headers)).json()
+    assert len(body["samples"]) == 1
+    assert body["samples"][0]["status"] == "stale"
+
+    # A fresh sample on the same stream reports "running": pins the other
+    # side of the boundary, not just the stale direction.
+    async with db_session.async_session_factory() as db:
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            rows_in_window=1, rows_collected=2, duration_s=6, last_tick_s=1.0,
+            metrics={}, raw_rows=[],
+        ))
+        await db.commit()
+
+    body = (await client.get(f"/realtime/streams/{stream_id}/samples", headers=headers)).json()
+    assert len(body["samples"]) == 1
+    assert body["samples"][0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -242,7 +324,7 @@ async def test_resume_all_streams_reattaches_after_simulated_restart(client, fak
 
     # Simulate a process restart: the in-memory registry is wiped, but the DB
     # row (desired_status="running") survives.
-    realtime_service.stop_all_runners()
+    await realtime_service.stop_all_runners()
     assert realtime_service.get_runner(stream_id) is None
 
     await realtime_service.resume_all_streams()
@@ -264,7 +346,7 @@ async def test_resume_all_streams_skips_stopped_streams(client, fake_rest_server
     stream_id = create.json()["stream_id"]
     await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
 
-    realtime_service.stop_all_runners()
+    await realtime_service.stop_all_runners()
     await realtime_service.resume_all_streams()
     assert realtime_service.get_runner(stream_id) is None
 
@@ -291,19 +373,24 @@ async def test_delete_stream_stops_runner_and_removes_definition(client, fake_re
     assert missing.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_sse_generator_yields_first_snapshot_frame(client, fake_rest_server):
-    """Exercises app.api.routes.realtime._sse_generator directly rather than
-    through a live client.stream() HTTP round-trip: httpx's ASGITransport
-    doesn't reliably signal "client disconnected" back to the app when a
-    stream() block exits early, so an app-side `while True` generator like
-    this one can hang forever waiting for a disconnect the test transport
-    never delivers. The SSE route's headers are static config passed
-    straight to StreamingResponse (media_type/Cache-Control), not logic, so
-    they don't need their own live-request test; this test covers what
-    actually is this module's logic - the row lookup and snapshot framing."""
-    from app.api.routes.realtime import _sse_generator
+class _GrowingStubConnector:
+    """Feeds fetch_all one queued batch per call, repeating the last. Each
+    batch here adds exactly one row, so every poll dedups down to one new
+    row and writes exactly one sample."""
 
+    def __init__(self, batches):
+        self.batches = list(batches)
+
+    def fetch_all(self):
+        if len(self.batches) > 1:
+            return self.batches.pop(0)
+        return self.batches[0]
+
+
+@pytest.mark.asyncio
+async def test_samples_endpoint_returns_only_new_rows_per_cursor(client, fake_rest_server):
+    """The incremental-sync contract: a client that passes back the cursor
+    it last received gets only samples written since, never a duplicate."""
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
     base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
@@ -312,21 +399,53 @@ async def test_sse_generator_yields_first_snapshot_frame(client, fake_rest_serve
     create = await client.post(
         "/realtime/streams",
         headers=headers,
-        json={"integration_id": integration_id, "interval_seconds": 1, "column_map": {}},
+        json={"integration_id": integration_id, "interval_seconds": 1, "column_map": {"units_col": "units"}},
     )
     stream_id = create.json()["stream_id"]
-    org_id = uuid.UUID((await client.get("/orgs/me", headers=headers)).json()["id"])
-    await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
 
-    gen = _sse_generator(uuid.UUID(stream_id), org_id, request=None)
-    try:
-        first = await gen.__anext__()
-        assert first.startswith("data: ")
-        payload = json.loads(first[len("data: ") :])
-        assert payload["stream_id"] == stream_id
-        assert payload["status"] == "stopped"
-    finally:
-        await gen.aclose()
+    # Three hand-driven windows, one new row each: no sleeps, no background task.
+    collector = realtime_service.get_runner(stream_id)
+    assert collector is not None
+    collector._conn = _GrowingStubConnector([
+        [{"units": 1}],
+        [{"units": 1}, {"units": 2}],
+        [{"units": 1}, {"units": 2}, {"units": 3}],
+    ])
+    await collector._seed_counters()
+    await collector._poll_once()
+
+    first = (await client.get(f"/realtime/streams/{stream_id}/samples", headers=headers)).json()
+    assert [s["rows_collected"] for s in first["samples"]] == [1]  # no cursor: latest only
+    cursor = first["cursor"]
+    assert cursor is not None
+
+    await collector._poll_once()
+    await collector._poll_once()
+
+    page = (
+        await client.get(f"/realtime/streams/{stream_id}/samples?since={cursor}", headers=headers)
+    ).json()
+    # Exactly the two windows written after the cursor, oldest first. The
+    # sample the first call already delivered (rows_collected 1) is not resent.
+    assert [s["rows_collected"] for s in page["samples"]] == [2, 3]
+    assert page["cursor"] > cursor
+
+    # The cursor is a real sample id, and the page is everything past it.
+    from app.db import session as db_session
+    from app.models.realtime import RealtimeSample
+    from sqlalchemy import select
+
+    async with db_session.async_session_factory() as db:
+        ids = (
+            await db.execute(
+                select(RealtimeSample.id)
+                .where(RealtimeSample.stream_id == uuid.UUID(stream_id))
+                .order_by(RealtimeSample.id)
+            )
+        ).scalars().all()
+    assert cursor == ids[0]
+    assert page["cursor"] == ids[-1]
+    assert len(page["samples"]) == len(ids) - 1  # nothing skipped, nothing duplicated
 
 
 @pytest.mark.asyncio
@@ -384,8 +503,11 @@ async def test_cannot_access_another_orgs_stream(client, fake_rest_server):
 
     token_b = await _register_and_login(client, email="b@example.com", org_name="OrgB")
     headers_b = {"Authorization": f"Bearer {token_b}"}
-    res = await client.get(f"/realtime/streams/{stream_id}/snapshot", headers=headers_b)
-    assert res.status_code == 404
+    # Every route that hands out another org's stream data, not just /snapshot:
+    # /samples and /history are the ones that egress rows.
+    for path in ("snapshot", "samples", "samples?since=0", "history"):
+        res = await client.get(f"/realtime/streams/{stream_id}/{path}", headers=headers_b)
+        assert res.status_code == 404, f"{path} -> {res.status_code}"
 
 
 @pytest.mark.asyncio

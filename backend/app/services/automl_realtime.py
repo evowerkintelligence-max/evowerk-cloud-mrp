@@ -6,12 +6,12 @@ Same in-process-thread precedent as app.services.realtime's old StreamRunner
 (now TickProducer): one lightweight background thread per binding, no new
 job queue. Each tick:
 
-1. Scores the stream's recent raw rows (app.services.realtime_cache.
-   recent_rows(), sourced from the realtime.ticks Redpanda topic - not the
-   Flink job's windowed metrics, which don't carry the raw feature columns a
-   trained pipeline needs) against the run's trained pipeline
+1. Scores the stream's recent raw rows (app.services.realtime.recent_rows(),
+   flattened from the stream's persisted RealtimeSample raw_rows - not the
+   windowed metrics, which don't carry the raw feature columns a trained
+   pipeline needs) against the run's trained pipeline
    (automl_engine.predict_with_model) and publishes the result via
-   realtime_cache.set_external_metric() - existing stream_metric alert rules
+   app.services.realtime.set_external_metric() - existing stream_metric alert rules
    (app.services.alerts.eval_stream_metric) already know how to alert on
    whatever shows up in a stream's metrics dict, so nothing new is needed
    there.
@@ -25,14 +25,9 @@ job queue. Each tick:
    producing a new, versioned AutoMLRun + AutoMLLiveBinding rather than
    overwriting the old ones.
 
-Reads via realtime_cache rather than the old in-process StreamRunner buffer,
-so - unlike the original design - scoring/drift now work from *any* backend
-replica regardless of which one is actually running the stream's collector
-(every replica's CacheConsumer sees every tick, per its module docstring).
-The one caveat carried forward: realtime_cache's raw-row buffer is itself
-in-memory per replica, so a fresh replica has an empty buffer until ticks
-start arriving - a binding scored immediately after a redeploy is a silent
-no-op tick until then, not an error, same posture as before.
+Reads and publishes via Postgres, so scoring/drift work from any replica with
+no warm-up: a fresh replica sees the stream's full persisted sample history
+immediately.
 """
 from __future__ import annotations
 
@@ -53,7 +48,7 @@ from app.models.automl_live_binding import AutoMLLiveBinding
 from app.models.automl_run import AutoMLRun
 from app.services import automl_engine, automl_storage
 from app.services import datasets as ds_service
-from app.services import realtime_cache
+from app.services import realtime as realtime_service
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +58,7 @@ logger = logging.getLogger(__name__)
 # customer has asked for sub-30s AutoML scoring and the stream itself is
 # already polling on its own interval upstream.
 _SCORE_POLL_SECONDS = 30
-# Raw rows pulled from the stream's live buffer per tick, for both scoring
+# Raw rows pulled from the stream's persisted samples per tick, for both scoring
 # and drift-checking - large enough for lag/rolling features, small enough
 # to stay cheap on every tick.
 _WINDOW_ROWS = 50
@@ -98,9 +93,9 @@ async def _tick(db: AsyncSession, binding_id: uuid.UUID) -> None:
     if run is None or run.status != "success" or not run.model_path:
         return
 
-    rows = realtime_cache.recent_rows(binding.stream_id, _WINDOW_ROWS)
+    rows = await realtime_service.recent_rows(db, binding.stream_id, _WINDOW_ROWS)
     if not rows:
-        return  # no ticks buffered for this stream in this replica yet - nothing to score this tick
+        return  # no samples persisted for this stream yet - nothing to score this tick
     df = pd.DataFrame(rows)
 
     try:
@@ -112,7 +107,7 @@ async def _tick(db: AsyncSession, binding_id: uuid.UUID) -> None:
     meta = run.meta or {}
     score = _score_latest(pipe, meta, df)
     if score is not None:
-        realtime_cache.set_external_metric(binding.stream_id, binding.metric_name, score)
+        await realtime_service.set_external_metric(db, binding.stream_id, binding.metric_name, score)
         binding.last_scored_at = datetime.now(timezone.utc)
 
     due = binding.last_drift_check_at is None or (
@@ -164,7 +159,7 @@ async def _check_drift(db: AsyncSession, binding: AutoMLLiveBinding, run: AutoML
 async def _retrain_on_drift(db: AsyncSession, binding: AutoMLLiveBinding, run: AutoMLRun) -> None:
     from app.services.automl_runner import execute_automl_run
 
-    rows = realtime_cache.recent_rows(binding.stream_id, 10_000)
+    rows = await realtime_service.recent_rows(db, binding.stream_id, 10_000)
     if len(rows) < 20:
         return  # not enough accumulated stream data yet to retrain on
 

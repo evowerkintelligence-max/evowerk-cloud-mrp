@@ -61,10 +61,10 @@ class Settings(BaseSettings):
     # IP (office NAT, VPN, campus network), so limits must comfortably clear at
     # least a few dozen concurrent legitimate users, not just ~10.
     redis_url: str = "redis://localhost:6379/0"
-    # docker-compose's redpanda service only publishes its external listener
-    # on 19092 to the host (9092 is internal-only, for other containers) -
-    # this default matches running the backend on the host against compose.
-    redpanda_brokers: str = "localhost:19092"
+    # How long realtime_samples rows are kept. One row per stream per poll
+    # window (a 5s stream writes ~17k rows/day), pruned hourly by whichever
+    # collector polls first past the hour mark (see app.services.realtime).
+    realtime_retention_days: int = 7
     rate_limit_register_per_hour: int = 20
     rate_limit_login_per_5min: int = 60
     rate_limit_refresh_per_5min: int = 120

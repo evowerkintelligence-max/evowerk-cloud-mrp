@@ -25,8 +25,6 @@ from app.core import redis_client
 from app.db import session as db_session
 from app.db.base import Base
 from app.main import app
-from app.services import realtime as realtime_service
-from app.services import realtime_cache
 from app.models import (  # noqa: F401 - register models on the metadata
     alert,
     audit,
@@ -98,19 +96,6 @@ async def _get_redis_override():
 
 app.dependency_overrides[db_session.get_db] = _get_db_override
 app.dependency_overrides[redis_client.get_redis_pool] = _get_redis_override
-
-
-async def _noop(*_args, **_kwargs) -> None:
-    return None
-
-
-# app.main's lifespan hard-requires a live Kafka/Redpanda broker (realtime
-# streaming), which this script otherwise has no fake for (unlike DB/Redis
-# above) - no-op it so the app can actually start without Docker.
-realtime_service.resume_all_streams = _noop
-realtime_service.stop_all_runners = lambda: None
-realtime_cache.start_cache_consumer = _noop
-realtime_cache.stop_cache_consumer = _noop
 
 
 async def _init_tables():

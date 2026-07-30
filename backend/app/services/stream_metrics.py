@@ -1,19 +1,9 @@
-# backend/streaming/metrics.py
-"""Pure metric-computation formulas, ported unchanged from the old
-StreamRunner.snapshot() (app.services.realtime, pre-Redpanda). Kept as a
-standalone pure function - no Flink imports - so it's unit-testable without
-a cluster and reusable by the Flink job's window function.
-
-Semantic note: the formulas are unchanged, but what `rows` covers is not.
-StreamRunner accumulated up to 10,000 rows across a stream's whole session
-(when accumulate=True, the default), so absolute-sum fields like
-`throughput`/`total_downtime_min` grew over time. The Flink job (see
-realtime_metrics_job.py) calls this once per fixed 5-second tumbling
-window, so those same fields now report only that window's activity - a
-much smaller number for the same stream. Ratio fields (scrap_rate_pct,
-fpy_pct, oee_pct and friends) are unaffected since they're already
-normalized. Any stream_metric alert rule tuned against the old cumulative
-values needs re-tuning against the new per-window scale."""
+"""Pure window-metric formulas (throughput/scrap/OEE/downtime), ported
+unchanged from the old StreamRunner.snapshot(). Called once per collector
+poll window by app.services.realtime.StreamCollector over that window's NEW
+rows only (post-dedup), so absolute-sum fields report per-window activity.
+Ratio fields (scrap_rate_pct, fpy_pct, oee_pct and friends) are normalized
+and unaffected by window size."""
 from __future__ import annotations
 
 from typing import Any

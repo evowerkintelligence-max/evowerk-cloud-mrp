@@ -49,7 +49,7 @@ const LINE: InventoryAnalyticsLine = {
 describe("whyThisStatusSentence", () => {
   it("explains a low item with its reorder point and value/demand class", () => {
     expect(whyThisStatusSentence(LINE)).toBe(
-      "12 days of stock left, below your reorder point of 120 units. High-value item, Steady demand.",
+      "12 days of stock left, below your reorder point of 120 units. High-value item, steady demand.",
     );
   });
 

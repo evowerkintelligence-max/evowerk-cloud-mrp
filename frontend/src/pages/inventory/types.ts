@@ -71,7 +71,11 @@ function classFragment(line: InventoryAnalyticsLine): string {
   const parts = [abcLabel(line.abc_class), xyzLabel(line.xyz_class)].filter(
     (p): p is string => p !== null,
   );
-  return parts.length > 0 ? ` ${parts.join(", ")}.` : "";
+  if (parts.length === 0) return "";
+  const sentence = parts
+    .map((p, i) => (i === 0 ? p : p.charAt(0).toLowerCase() + p.slice(1)))
+    .join(", ");
+  return ` ${sentence}.`;
 }
 
 export function whyThisStatusSentence(line: InventoryAnalyticsLine): string {

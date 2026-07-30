@@ -45,7 +45,33 @@ into phases with an explicit build order instead of one design doc.
 | 3 | **Multi-UOM selling engine** | Extends `ItemUnit`/`factor_to_base` (today BOM-line-only) into sales orders, purchase orders, and inventory transactions | Nothing structurally, but blocks Phase 4 | Indian tax invoices must report quantity/value in the UOM actually sold — GST can't be built correctly on a single-UOM order flow. Also a prerequisite for meaningful barcode scan quantities (Phase 5) |
 | 4 | **GST & Indian compliance** | HSN codes, CGST/SGST/IGST calculation, E-Way Bill + E-Invoice API integration | Phase 3 (correct per-line UOM), existing Sales/Purchase Orders (already built) | Highest-stakes, highest-effort piece — a government-integration project. Sequenced after its prerequisite so it isn't built on a shaky foundation |
 | 5 | **Barcode & QR scanning** | Camera-based scan-to-count, scan-to-pick, scan-to-lookup on mobile | Phase 3 (a scanned pick needs to know what UOM was scanned) | Independent capability, sequenced after Multi-UOM so a scan resolves to a real quantity |
-| 7 | **Materialized/cached analytics** | Precomputed tables for stock aging, ABC, turnover at scale | Phases 1–2 (needs something worth caching first) | Deliberately last — the engine computes live specifically to avoid stale-cache bugs; only worth the complexity once real data volume makes live compute slow |
+| 7 | **Materialized/cached analytics** | Precomputed tables for stock aging, ABC, turnover at scale | Phases 1–2 (needs something worth caching first) | Deliberately last among the feature phases — the engine computes live specifically to avoid stale-cache bugs; only worth the complexity once real data volume makes live compute slow |
+| 8 | **MRP-wide cohesion pass** | Unify status colors, terminology, and cross-links across Planning, Sales Orders, Work Orders, Procurement, and Inventory | All feature phases (1 through 7) | Deliberately last: fix consistency once, after every phase has finished adding pages/screens, instead of doing the cleanup repeatedly as each phase lands |
+
+### Phase 8 detail: verified cohesion gaps
+
+A `frontend/src/lib/status.ts` already exists as the intended single source
+of truth for status-badge colors (PO/SO/WO/inventory status → color), but
+adoption is inconsistent, confirmed by reading the actual pages:
+
+- `Production.tsx:79` defines its own local `statusVariant()` instead of
+  the `woStatusVariant` already defined in `lib/status.ts` for work
+  orders — duplicate logic that can silently drift from the shared
+  mapping.
+- `Planning.tsx:151` uses its own `materialsStatusVariant`, a different
+  pattern again (defensible as planning-specific, but not reconciled
+  with the others).
+- `lib/status.ts`'s own `INVENTORY_STATUS` map colors `dead_stock` and
+  `low` identically (both "warning"/amber) despite being opposite
+  problems — too much stock vs. too little.
+- `PurchaseOrders.tsx` is the one page that uses the shared lib
+  correctly (`poStatusVariant`) — the baseline the others should match.
+
+Phase 8 should also cover shared terminology (does every page call it
+"stockout" or does one say "out of stock"?) and the Planning Grid ↔
+Inventory Analytics cross-links from
+[[2026-07-31-inventory-analytics-ui-design]] §6, generalized to
+Sales/Production/Procurement where relevant.
 
 Explicitly out of this roadmap: demand forecasting improvements (existing
 moving-average/exponential-smoothing engine stays as-is; any AI/ML

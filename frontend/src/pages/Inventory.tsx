@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { PackageCheck, TrendingDown, TrendingUp, Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
@@ -14,6 +15,9 @@ import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { humanize, inventoryStatusVariant } from "@/lib/status";
 import { cn } from "@/lib/utils";
+import { AnalyticsDetail } from "./inventory/AnalyticsDetail";
+import { InsightBanner } from "./inventory/InsightBanner";
+import { sortInventoryRows, type InventoryAnalyticsLine } from "./inventory/types";
 
 const REASON_CODES = [
   { value: "cycle_count", label: "Cycle count" },
@@ -64,13 +68,6 @@ interface InventoryDetail extends InventoryItem {
   transactions: InventoryTransaction[];
 }
 
-interface InventoryAnalyticsLine {
-  item_id: string;
-  reorder_point: number | null;
-  days_of_supply: number | null;
-  status: string;
-}
-
 interface AdjustmentRequestSummary {
   id: string;
   status: string;
@@ -84,7 +81,8 @@ interface AdjustmentOutcome {
 
 export function InventoryPanel() {
   const queryClient = useQueryClient();
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(searchParams.get("item"));
   const [consumeQty, setConsumeQty] = useState("1");
   const [consumeLoc, setConsumeLoc] = useState("");
   const [adjustDelta, setAdjustDelta] = useState("1");
@@ -119,6 +117,7 @@ export function InventoryPanel() {
     },
   });
   const analyticsByItem = new Map(analytics.data?.map((a) => [a.item_id, a]));
+  const sortedBalances = balances.data ? sortInventoryRows(balances.data, analyticsByItem) : undefined;
 
   // Summary counts over the full analytics set (not paginated) — a quick read on stock health.
   const statusCounts = (analytics.data ?? []).reduce(
@@ -252,6 +251,8 @@ export function InventoryPanel() {
 
   return (
     <div>
+      <InsightBanner />
+
       {error && (
         <Alert variant="destructive" className="mb-6">
           {error}
@@ -264,7 +265,7 @@ export function InventoryPanel() {
         </Alert>
       )}
 
-      {balances.data && balances.data.length > 0 && analytics.data && (
+      {sortedBalances && sortedBalances.length > 0 && analytics.data && (
         <div className="mb-8 grid grid-cols-3 gap-4">
           {statTiles.map((t, i) => (
             <StatCard
@@ -278,7 +279,7 @@ export function InventoryPanel() {
         </div>
       )}
 
-      {balances.data && balances.data.length === 0 ? (
+      {sortedBalances && sortedBalances.length === 0 ? (
         <EmptyState
           icon={<Warehouse />}
           title="No stock yet"
@@ -297,7 +298,7 @@ export function InventoryPanel() {
               </TR>
             </THead>
             <TBody>
-              {balances.data?.map((bal) => {
+              {sortedBalances?.map((bal) => {
                 const a = analyticsByItem.get(bal.item_id);
                 return (
                   <TR
@@ -329,8 +330,13 @@ export function InventoryPanel() {
       {detail.data && (
         <Card>
           <CardHeader>
-            <CardTitle>
-              {detail.data.item_sku} - {detail.data.item_name}
+            <CardTitle className="flex items-center justify-between">
+              <span>
+                {detail.data.item_sku} - {detail.data.item_name}
+              </span>
+              <Link to="/planning" className="text-xs font-normal text-muted-foreground underline">
+                View in Planning
+              </Link>
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}
@@ -586,6 +592,11 @@ export function InventoryPanel() {
                 </TBody>
               </Table>
             </TableWrap>
+
+            {(() => {
+              const line = analyticsByItem.get(detail.data.item_id);
+              return line ? <AnalyticsDetail itemId={detail.data.item_id} line={line} /> : null;
+            })()}
           </CardContent>
         </Card>
       )}

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { InsightBanner } from "./inventory/InsightBanner";
 import { AnalyticsDetail } from "./inventory/AnalyticsDetail";
 import type { RcaResult, InventoryAnalyticsLine } from "./inventory/types";
+import { InventoryPanel } from "./Inventory";
 
 function renderWithProviders(node: ReturnType<typeof createElement>, seed: (qc: QueryClient) => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -118,5 +119,105 @@ describe("AnalyticsDetail", () => {
   it("shows a what-if lead time field", () => {
     const html = renderDetail();
     expect(html).toContain("What if lead time were");
+  });
+});
+
+// Deliberately seeded with the healthy item first and the stockout item
+// second, so the "sorts the most urgent item first" test actually exercises
+// sortInventoryRows rather than passing by coincidence of API order.
+const BALANCES = [
+  {
+    item_id: "healthy-c",
+    item_sku: "HC",
+    item_name: "Cardboard Box",
+    unit_of_measure: "ea",
+    quantity_on_hand: "500",
+    by_location: [],
+  },
+  {
+    item_id: "stockout-a",
+    item_sku: "SA",
+    item_name: "Steel Rod",
+    unit_of_measure: "ea",
+    quantity_on_hand: "0",
+    by_location: [],
+  },
+];
+
+const ANALYTICS_LINES = [
+  {
+    item_id: "stockout-a",
+    reorder_point: 50,
+    safety_stock: 10,
+    days_of_supply: 0,
+    abc_class: "A",
+    xyz_class: "Z",
+    status: "stockout",
+  },
+  {
+    item_id: "healthy-c",
+    reorder_point: 20,
+    safety_stock: 5,
+    days_of_supply: 90,
+    abc_class: "C",
+    xyz_class: "X",
+    status: "healthy",
+  },
+];
+
+function renderInventoryPanel(seed: (qc: QueryClient) => void, initialPath = "/warehouse") {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seed(qc);
+  return renderToString(
+    createElement(
+      MemoryRouter,
+      { initialEntries: [initialPath] },
+      createElement(QueryClientProvider, { client: qc }, createElement(InventoryPanel)),
+    ),
+  )
+    .split("<!-- -->")
+    .join("");
+}
+
+describe("InventoryPanel integration", () => {
+  it("sorts the most urgent, highest-value item first", () => {
+    const html = renderInventoryPanel((qc) => {
+      qc.setQueryData(["inventory"], BALANCES);
+      qc.setQueryData(["inventory-analytics"], ANALYTICS_LINES);
+      qc.setQueryData(["locations"], []);
+    });
+    expect(html.indexOf("Steel Rod")).toBeLessThan(html.indexOf("Cardboard Box"));
+  });
+
+  it("auto-selects and expands the row named by ?item= on load", () => {
+    const html = renderInventoryPanel(
+      (qc) => {
+        qc.setQueryData(["inventory"], BALANCES);
+        qc.setQueryData(["inventory-analytics"], ANALYTICS_LINES);
+        qc.setQueryData(["locations"], []);
+        qc.setQueryData(["inventory", "healthy-c"], {
+          ...BALANCES[0], // BALANCES[0] is healthy-c (Cardboard Box) - see the seed order note above
+          transactions: [],
+        });
+      },
+      "/warehouse?item=healthy-c",
+    );
+    expect(html).toContain("Why this status");
+  });
+
+  it("links to the Planning Grid from the row detail", () => {
+    const html = renderInventoryPanel(
+      (qc) => {
+        qc.setQueryData(["inventory"], BALANCES);
+        qc.setQueryData(["inventory-analytics"], ANALYTICS_LINES);
+        qc.setQueryData(["locations"], []);
+        qc.setQueryData(["inventory", "healthy-c"], {
+          ...BALANCES[0], // BALANCES[0] is healthy-c (Cardboard Box) - see the seed order note above
+          transactions: [],
+        });
+      },
+      "/warehouse?item=healthy-c",
+    );
+    expect(html).toContain('href="/planning"');
   });
 });

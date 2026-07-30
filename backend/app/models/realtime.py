@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -21,9 +22,8 @@ class RealtimeStream(Base):
     `desired_status` survive a restart, and app.main's startup hook resumes
     any stream still marked "running" so a redeploy doesn't silently lose it.
 
-    `id` doubles as the stream_id used for the SSE route and the on-disk tick
-    history file (app.services.realtime.history_path), so a resumed stream
-    keeps its history contiguous.
+    `id` doubles as the stream_id on RealtimeSample rows, so a resumed stream
+    keeps its sample history contiguous.
     """
 
     __tablename__ = "realtime_streams"
@@ -56,6 +56,65 @@ class RealtimeStream(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class RealtimeSample(Base):
+    """One collector poll window, written by app.services.realtime.
+    StreamCollector: the durable replacement for the old broker pipeline's
+    windowed snapshot, the per-replica cache dict, AND the per-container
+    JSONL history files. `id` is the incremental-sync cursor: the frontend
+    passes back the highest id it has seen and only newer rows are returned,
+    so nothing is ever re-sent."""
+
+    __tablename__ = "realtime_samples"
+    __table_args__ = (Index("ix_realtime_samples_stream_id_id", "stream_id", "id"),)
+
+    # BigInteger in prod; plain INTEGER on SQLite so autoincrement works in tests.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    stream_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("realtime_streams.id", ondelete="CASCADE"), nullable=False
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    rows_in_window: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rows_collected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_s: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_tick_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # This window's NEW rows (post-dedup), capped at 1000 by the collector.
+    # Backs app.services.realtime.recent_rows for AutoML live scoring.
+    raw_rows: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class RealtimeStreamMetric(Base):
+    """Externally computed live metrics (today: AutoML risk scores) merged
+    into a stream's snapshot metrics at read time. Replaces realtime_cache.
+    set_external_metric. A separate row per (stream, name) with a composite
+    PK so concurrent publishers upsert race-free instead of read-modify-
+    writing a JSON blob."""
+
+    __tablename__ = "realtime_stream_metrics"
+
+    stream_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("realtime_streams.id", ondelete="CASCADE"), primary_key=True
+    )
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # Any + explicit JSON column: union annotations don't resolve in
+    # SQLAlchemy's type map. Values are floats today (AutoML scores).
+    value: Mapped[Any] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

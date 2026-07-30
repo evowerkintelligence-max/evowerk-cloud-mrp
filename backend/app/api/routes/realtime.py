@@ -85,6 +85,7 @@ def _start(stream: RealtimeStream, integration: Integration) -> None:
 
     realtime_service.start_runner(
         stream_id=stream.id,
+        org_id=stream.org_id,
         name=stream.name,
         integration_type=integration.type,
         integration_config=decrypt_config(integration.config),
@@ -179,7 +180,7 @@ async def stop_stream(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
-    realtime_service.stop_runner(stream.id)
+    await realtime_service.stop_runner(stream.id)
     stream.desired_status = "stopped"
     await db.commit()
     return await _snapshot_for(db, current.org_id, stream)
@@ -190,7 +191,7 @@ async def delete_stream(
     stream_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
-    realtime_service.stop_runner(stream.id)
+    await realtime_service.stop_runner(stream.id)
     realtime_service.delete_history(str(stream.id))
     await db.delete(stream)
     await log_event(db, action="realtime_stream.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(stream_id))

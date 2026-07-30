@@ -108,7 +108,7 @@ async def _noop(*_args, **_kwargs) -> None:
 # streaming), which this script otherwise has no fake for (unlike DB/Redis
 # above) - no-op it so the app can actually start without Docker.
 realtime_service.resume_all_streams = _noop
-realtime_service.stop_all_runners = lambda: None
+realtime_service.stop_all_runners = _noop
 realtime_cache.start_cache_consumer = _noop
 realtime_cache.stop_cache_consumer = _noop
 

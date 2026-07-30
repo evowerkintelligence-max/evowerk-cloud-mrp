@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     automl_realtime_service.stop_all_binding_schedulers()
     await sensor_consumer.stop_sensor_consumer()
     await realtime_cache.stop_cache_consumer()
-    realtime_service.stop_all_runners()
+    await realtime_service.stop_all_runners()
 
 
 app = FastAPI(

@@ -37,11 +37,25 @@ def fake_rest_server():
 
 
 @pytest.fixture(autouse=True)
-def _stop_all_runners_after_each_test():
-    """Streams are real background threads registered in module-level state -
-    without this, a runner from one test could keep polling into the next."""
+def _no_background_polling(monkeypatch):
+    """These route tests assert on the runner registry and the snapshot
+    fallback, not on collection itself. A real collector task would poll and
+    write samples through conftest's single StaticPool SQLite connection at
+    the same time as the request under test, and cancelling it mid-write
+    invalidates that shared connection for everyone (production pools one
+    connection per session, so this is a test-DB artifact). Gated on
+    REDPANDA_BROKERS, same as _cache_consumer below, so the live-infra tests
+    still collect for real."""
+    if not os.environ.get("REDPANDA_BROKERS"):
+        monkeypatch.setattr(realtime_service.StreamCollector, "start", lambda self: None)
+
+
+@pytest.fixture(autouse=True)
+async def _stop_all_runners_after_each_test():
+    """Streams are real background tasks registered in module-level state -
+    without this, a collector from one test could keep polling into the next."""
     yield
-    realtime_service.stop_all_runners()
+    await realtime_service.stop_all_runners()
 
 
 @pytest.fixture(autouse=True)
@@ -242,7 +256,7 @@ async def test_resume_all_streams_reattaches_after_simulated_restart(client, fak
 
     # Simulate a process restart: the in-memory registry is wiped, but the DB
     # row (desired_status="running") survives.
-    realtime_service.stop_all_runners()
+    await realtime_service.stop_all_runners()
     assert realtime_service.get_runner(stream_id) is None
 
     await realtime_service.resume_all_streams()
@@ -264,7 +278,7 @@ async def test_resume_all_streams_skips_stopped_streams(client, fake_rest_server
     stream_id = create.json()["stream_id"]
     await client.post(f"/realtime/streams/{stream_id}/stop", headers=headers)
 
-    realtime_service.stop_all_runners()
+    await realtime_service.stop_all_runners()
     await realtime_service.resume_all_streams()
     assert realtime_service.get_runner(stream_id) is None
 

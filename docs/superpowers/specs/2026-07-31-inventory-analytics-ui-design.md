@@ -131,7 +131,31 @@ a `dimension` field indicating which one won.
 Everything else reuses existing, unchanged endpoints: `/inventory/analytics`,
 `/inventory/rca` (manual dimension picker), `/inventory/scenario-compare`.
 
-## 6. Testing
+## 6. Cross-links with the Planning Grid
+
+The Planning Grid (`/planning`, already shipped) and this Inventory
+Analytics UI (`/inventory`) stay two separate screens with two separate
+jobs — forward-looking "what to make/buy" vs. diagnostic "what's wrong
+with current stock" — but they're one connected system, not two
+unrelated features, and should read that way:
+
+- **Planning Grid → Inventory Analytics**: each product row gets a small
+  link (e.g. an info icon next to the SKU) to that item's row on
+  `/inventory`, auto-expanded to its analytics detail (§4). Lets a user
+  planning a build check *why* a material looks risky without leaving
+  the planning flow to go hunting.
+- **Inventory Analytics → Planning Grid**: the RCA insight banner (§2)
+  gets a "View affected items in Planning" link that navigates to
+  `/planning` filtered/highlighted to the SKUs behind the finding — e.g.
+  clicking through on "Acme Supplier" highlights every product row whose
+  materials depend on that supplier.
+
+No new backend endpoints for this — both are client-side navigation with
+an `item_id`/`skus` query param the existing pages read; the Planning
+Grid and Inventory pages already fetch by item id so this is routing,
+not new data.
+
+## 7. Testing
 
 - Backend: new test file for `GET /inventory/rca/auto` — picks the
   highest-chi² significant dimension, returns the no-significant-dimension

@@ -146,3 +146,35 @@ async def compute_rca(db: AsyncSession, org_id: uuid.UUID, dimension: str) -> Rc
         low_expected_frequency_warning=low_expected,
         values=values,
     )
+
+
+async def compute_rca_auto(db: AsyncSession, org_id: uuid.UUID) -> RcaResult:
+    """Runs compute_rca across every dimension in DIMENSIONS and returns the
+    one most likely to explain stockouts/lows: the highest chi-square
+    statistic among results with at least one significant value. Pure
+    orchestration for the Inventory tab's auto-surfaced insight banner - no
+    new statistics beyond compute_rca itself. Ties go to whichever dimension
+    comes first in DIMENSIONS, since only a strictly greater statistic
+    replaces the current best as dimensions are tried in that order."""
+    best: RcaResult | None = None
+    best_chi2 = -1.0
+    for dimension in DIMENSIONS:
+        result = await compute_rca(db, org_id, dimension)
+        if result.method != "chi_square_independence" or result.chi2_statistic is None:
+            continue
+        if not any(v.is_significant for v in result.values):
+            continue
+        if result.chi2_statistic > best_chi2:
+            best = result
+            best_chi2 = result.chi2_statistic
+    if best is not None:
+        return best
+    return RcaResult(
+        dimension="",
+        method="no_significant_dimension",
+        chi2_statistic=None,
+        p_value=None,
+        degrees_of_freedom=None,
+        low_expected_frequency_warning=False,
+        values=[],
+    )

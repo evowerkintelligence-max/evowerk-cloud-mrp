@@ -239,6 +239,40 @@ async def test_connector_error_writes_error_sample_and_stream_last_error(client)
     assert refreshed.last_error == latest.error
 
 
+async def test_fetch_error_does_not_reingest_the_whole_source(client):
+    """A transient fetch failure keeps the dedup state (_prev): the poll after
+    it must see the unchanged source table as already-seen, not re-ingest
+    every row as new."""
+    await _register_and_login(client)
+    async with db_session.async_session_factory() as db:
+        stream = await _seed_stream(db)
+
+    class _Boom:
+        def fetch_all(self):
+            raise RuntimeError("source down")
+
+    batch = [{"units": 10, "scrap": 1}, {"units": 20, "scrap": 2}]
+    c = _collector_for(stream, [batch])
+    await c._seed_counters()
+    await c._poll_once()  # window 1: both rows are new
+
+    c._conn = _Boom()
+    await c._poll_once()  # window 2: error, no rows, dedup state preserved
+
+    c._conn = _StubConnector([batch])  # same table as window 1, nothing added
+    await c._poll_once()
+
+    async with db_session.async_session_factory() as db:
+        samples = (
+            await db.execute(
+                select(RealtimeSample).where(RealtimeSample.stream_id == stream.id).order_by(RealtimeSample.id)
+            )
+        ).scalars().all()
+    assert [s.status for s in samples] == ["running", "error", "running"]
+    assert [s.rows_in_window for s in samples] == [2, 0, 0]  # window 3 is NOT a re-ingest
+    assert [s.rows_collected for s in samples] == [2, 2, 2]
+
+
 async def test_poll_once_feeds_sensor_ingest(client):
     await _register_and_login(client)
     async with db_session.async_session_factory() as db:

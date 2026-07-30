@@ -1,22 +1,12 @@
-"""Real-time streaming API — manages live-polling collectors over
-Integrations. Ported from the desktop app's routes/realtime.py; the
-persistence/resume model is described in app.services.realtime and
-app.models.realtime.
-
-Note on auth for the SSE route: native browser `EventSource` can't set an
-Authorization header, so the frontend must use a fetch-based SSE reader
-(manually parsing `data: ...` frames) instead of `new EventSource(url)`, to
-keep the same Bearer-token auth as every other route rather than falling back
-to a token-in-query-string (which ends up logged in access logs/proxies).
-"""
+"""Realtime streams API. Collectors (app.services.realtime.StreamCollector)
+write one RealtimeSample row per poll window; every read here is a plain DB
+query, so any replica can serve any stream. The frontend syncs incrementally
+via GET .../samples?since=<cursor> instead of holding an SSE connection."""
 from __future__ import annotations
 
-import asyncio
-import json
 import uuid
 
-from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,10 +15,9 @@ from app.api.deps import CurrentUser, get_current_user, get_or_404
 from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.integration import Integration
-from app.models.realtime import RealtimeStream
+from app.models.realtime import RealtimeSample, RealtimeStream
 from app.services import alerts as alerts_service
 from app.services import realtime as realtime_service
-from app.services import realtime_cache
 
 router = APIRouter(prefix="/realtime", tags=["realtime"])
 
@@ -47,37 +36,11 @@ class StreamCreate(BaseModel):
     sensor_map: dict[str, str] = Field(default_factory=dict)
 
 
-def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
-    """Live snapshot from the realtime_cache (populated by the Flink job's
-    output via realtime_cache.CacheConsumer) if this stream has produced at
-    least one windowed metrics message anywhere in the cluster, else a
-    definition-only snapshot.
-
-    A stopped stream's cached snapshot is never used, even if one exists -
-    stopping a TickProducer means no more ticks/windows will ever arrive to
-    overwrite it, so the cache would otherwise report a stale "running"
-    snapshot forever. And when a cached snapshot IS used, its "name" field
-    is overlaid with stream.name: the Flink job's MetricSnapshot.name is the
-    stream_id (its key), not the human-readable name - RealtimeStream isn't
-    in the tick payload, so this is the one place that can fill it in."""
-    snap = realtime_cache.get_snapshot(stream.id) if stream.desired_status != "stopped" else None
-    if snap is None:
-        snap = {
-            "ts": None, "stream_id": str(stream.id), "name": stream.name,
-            "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
-            "error": stream.last_error,
-            "rows_in_window": 0, "rows_collected": 0,
-            "duration": None, "duration_s": None, "last_tick_s": None, "metrics": {},
-        }
-    else:
-        snap = {**snap, "name": stream.name}
+async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStream) -> dict:
+    snap = await realtime_service.latest_snapshot(db, stream)
+    alerts = await alerts_service.stream_alerts(db, org_id, stream.id)
     snap["alerts"] = [vars(a) for a in alerts]
     return snap
-
-
-async def _snapshot_for(db: AsyncSession, org_id: uuid.UUID, stream: RealtimeStream) -> dict:
-    alerts = await alerts_service.stream_alerts(db, org_id, stream.id)
-    return _snapshot_dict(stream, alerts)
 
 
 def _start(stream: RealtimeStream, integration: Integration) -> None:
@@ -134,9 +97,15 @@ async def list_streams(current: CurrentUser = Depends(get_current_user), db: Asy
     rows = (
         await db.execute(select(RealtimeStream).where(RealtimeStream.org_id == current.org_id).order_by(RealtimeStream.name))
     ).scalars().all()
+    snaps = await realtime_service.latest_snapshots_bulk(db, rows)
     # One query for every stream's alert rules instead of one per stream.
     alerts_by_stream = await alerts_service.stream_alerts_bulk(db, current.org_id, [s.id for s in rows])
-    return {"streams": [_snapshot_dict(s, alerts_by_stream.get(str(s.id), [])) for s in rows]}
+    out = []
+    for s in rows:
+        snap = snaps[str(s.id)]
+        snap["alerts"] = [vars(a) for a in alerts_by_stream.get(str(s.id), [])]
+        out.append(snap)
+    return {"streams": out}
 
 
 @router.get("/streams/{stream_id}/snapshot")
@@ -147,6 +116,29 @@ async def stream_snapshot(
     return await _snapshot_for(db, current.org_id, stream)
 
 
+@router.get("/streams/{stream_id}/samples")
+async def stream_samples(
+    stream_id: uuid.UUID,
+    since: int | None = None,
+    limit: int = 500,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Incremental sync: samples with id > `since`, oldest first (`limit`
+    capped at 2000; a truncated page self-heals because `cursor` is the
+    highest id returned). Without `since`, returns only the latest sample.
+    External metrics (AutoML live scores) are merged into the newest
+    returned sample, mirroring the old snapshot-cache merge."""
+    await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
+    rows, cursor = await realtime_service.samples_since(db, stream_id, since, limit)
+    samples = [realtime_service.sample_dict(s) for s in rows]
+    if samples:
+        external = await realtime_service.external_metrics(db, stream_id)
+        if external:
+            samples[-1]["metrics"] = {**samples[-1]["metrics"], **external}
+    return {"stream_id": str(stream_id), "cursor": cursor, "samples": samples}
+
+
 @router.get("/streams/{stream_id}/history")
 async def stream_history(
     stream_id: uuid.UUID,
@@ -154,10 +146,24 @@ async def stream_history(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Persisted tick history — survives a backend restart and works even
-    while the stream isn't currently running in this process."""
+    """Persisted sample history: durable across restarts and visible from
+    every replica (the old per-container JSONL files were neither)."""
     await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
-    return {"stream_id": str(stream_id), "points": realtime_service.read_history(str(stream_id), max_points=limit)}
+    limit = max(1, min(20_000, int(limit)))
+    rows = (
+        await db.execute(
+            select(RealtimeSample)
+            .where(RealtimeSample.stream_id == stream_id)
+            .order_by(RealtimeSample.id.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    # desc() + reversed(): the most recent `limit` samples, presented
+    # oldest-first. An ascending query would return the OLDEST `limit` instead.
+    points = [
+        {"ts": s.ts.isoformat() if s.ts else None, "metrics": s.metrics} for s in reversed(rows)
+    ]
+    return {"stream_id": str(stream_id), "points": points}
 
 
 @router.post("/streams/{stream_id}/start")
@@ -192,66 +198,6 @@ async def delete_stream(
 ):
     stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     await realtime_service.stop_runner(stream.id)
-    realtime_service.delete_history(str(stream.id))
-    await db.delete(stream)
+    await db.delete(stream)  # realtime_samples rows cascade with the stream
     await log_event(db, action="realtime_stream.deleted", org_id=current.org_id, actor_user_id=current.id, target=str(stream_id))
     await db.commit()
-
-
-# -----------------------------
-# SSE feed
-# -----------------------------
-
-async def _sse_generator(stream_id: uuid.UUID, org_id: uuid.UUID, request: Request):
-    from app.db import session as db_session
-
-    async def _load_stream() -> RealtimeStream | None:
-        async with db_session.async_session_factory() as db:
-            return (
-                await db.execute(select(RealtimeStream).where(RealtimeStream.id == stream_id, RealtimeStream.org_id == org_id))
-            ).scalar_one_or_none()
-
-    async def _snapshot(stream: RealtimeStream) -> dict:
-        async with db_session.async_session_factory() as db:
-            return await _snapshot_for(db, org_id, stream)
-
-    stream = await _load_stream()
-    if stream is None:
-        yield f"event: error\ndata: {json.dumps({'error': 'stream not found'})}\n\n"
-        return
-
-    yield f"data: {json.dumps(await _snapshot(stream))}\n\n"
-
-    try:
-        while True:
-            if await request.is_disconnected():
-                break
-            runner = realtime_service.get_runner(stream_id)
-            await asyncio.sleep(runner.interval_seconds if runner else stream.interval_seconds)
-
-            stream = await _load_stream()
-            if stream is None:
-                yield f"event: stopped\ndata: {json.dumps({'stream_id': str(stream_id)})}\n\n"
-                break
-            yield f"data: {json.dumps(await _snapshot(stream))}\n\n"
-    except asyncio.CancelledError:
-        pass
-
-
-@router.get("/streams/{stream_id}/events")
-async def stream_events(
-    stream_id: uuid.UUID,
-    request: Request,
-    current: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")  # 404s before opening the stream if unknown/foreign
-    return StreamingResponse(
-        _sse_generator(stream_id, current.org_id, request),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )

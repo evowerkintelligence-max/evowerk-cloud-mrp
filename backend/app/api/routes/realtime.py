@@ -133,14 +133,21 @@ async def stream_samples(
     stream = await get_or_404(db, RealtimeStream, current.org_id, stream_id, "Stream not found")
     rows, cursor = await realtime_service.samples_since(db, stream_id, since, limit)
     samples = [realtime_service.sample_dict(s) for s in rows]
-    # Same status override _assemble_snapshot applies (status only, counters
+    # Same status overrides _assemble_snapshot applies (status only, counters
     # and metrics untouched): the collector only ever persists "running" or
-    # "error", so without this /samples would report "running" for a stream
-    # the user stopped and disagree with /snapshot. Clients merge polled
-    # samples onto snapshot state, so the two must not disagree.
+    # "error", so without these /samples would report "running" for a stream
+    # the user stopped, or for one whose collector went silent (stale), and
+    # disagree with /snapshot. Clients merge polled samples onto snapshot
+    # state, so the two must not disagree. Stale is derived only for the
+    # newest returned sample: older samples in the page were genuinely
+    # "running" when written, the client only merges the last element anyway,
+    # and "stopped" takes precedence over "stale", matching
+    # _assemble_snapshot's ordering.
     if stream.desired_status == "stopped":
         for sample in samples:
             sample["status"] = "stopped"
+    elif samples and samples[-1]["status"] == "running" and realtime_service._is_stale(stream, rows[-1]):
+        samples[-1]["status"] = "stale"
     if samples:
         external = await realtime_service.external_metrics(db, stream_id)
         if external:

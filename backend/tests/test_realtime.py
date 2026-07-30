@@ -247,6 +247,65 @@ async def test_stopped_stream_samples_report_stopped_status(client, fake_rest_se
 
 
 @pytest.mark.asyncio
+async def test_live_stream_samples_report_stale_when_collector_went_silent(client, fake_rest_server):
+    """/samples must derive staleness the same way _assemble_snapshot does: a
+    stream still marked "running" whose newest sample is far older than its
+    poll window is a dead collector, not a live one. Without this, opening
+    the live dialog on a dead stream would merge the first poll's "running"
+    sample onto the "stale" snapshot state it opened with and hide the
+    problem."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = f"http://127.0.0.1:{fake_rest_server.server_port}"
+    integration_id = await _create_rest_integration(client, headers, base_url)
+
+    create = await client.post(
+        "/realtime/streams",
+        headers=headers,
+        json={"integration_id": integration_id, "name": "Line 12", "interval_seconds": 1, "column_map": {}},
+    )
+    stream_id = create.json()["stream_id"]
+
+    from datetime import datetime, timedelta, timezone
+
+    from app.db import session as db_session
+    from app.models.realtime import RealtimeSample, RealtimeStream
+    from sqlalchemy import select
+
+    async with db_session.async_session_factory() as db:
+        stream = (
+            await db.execute(select(RealtimeStream).where(RealtimeStream.id == uuid.UUID(stream_id)))
+        ).scalar_one()
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            ts=datetime.now(timezone.utc) - timedelta(hours=1),
+            rows_in_window=1, rows_collected=1, duration_s=5, last_tick_s=1.0,
+            metrics={}, raw_rows=[],
+        ))
+        await db.commit()
+
+    # Stream itself was never stopped, but its only sample is an hour old:
+    # comfortably past the stale window (max(30s, 5 * 1s interval) = 30s).
+    body = (await client.get(f"/realtime/streams/{stream_id}/samples", headers=headers)).json()
+    assert len(body["samples"]) == 1
+    assert body["samples"][0]["status"] == "stale"
+
+    # A fresh sample on the same stream reports "running": pins the other
+    # side of the boundary, not just the stale direction.
+    async with db_session.async_session_factory() as db:
+        db.add(RealtimeSample(
+            org_id=stream.org_id, stream_id=stream.id, status="running",
+            rows_in_window=1, rows_collected=2, duration_s=6, last_tick_s=1.0,
+            metrics={}, raw_rows=[],
+        ))
+        await db.commit()
+
+    body = (await client.get(f"/realtime/streams/{stream_id}/samples", headers=headers)).json()
+    assert len(body["samples"]) == 1
+    assert body["samples"][0]["status"] == "running"
+
+
+@pytest.mark.asyncio
 async def test_resume_all_streams_reattaches_after_simulated_restart(client, fake_rest_server):
     """The whole point of persisting stream definitions in the DB: a process
     restart (redeploy/crash) shouldn't permanently lose a "running" stream."""

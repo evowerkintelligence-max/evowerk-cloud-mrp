@@ -43,7 +43,7 @@ class RealtimeStream(Base):
     # together. None = this stream stays OEE-only, unaffected by CBM.
     machine: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # {"vib_x": "vibration_x_mm_s", ...} - sensor channel name -> the field
-    # name to read from Tick.row. See app.services.sensor_consumer.
+    # name to read from a polled row. See app.services.sensor_ingest.
     sensor_map: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     accumulate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -101,8 +101,9 @@ class RealtimeSample(Base):
 
 class RealtimeStreamMetric(Base):
     """Externally computed live metrics (today: AutoML risk scores) merged
-    into a stream's snapshot metrics at read time. Replaces realtime_cache.
-    set_external_metric. A separate row per (stream, name) with a composite
+    into a stream's snapshot metrics at read time, written by
+    app.services.realtime.set_external_metric. A separate row per (stream,
+    name) with a composite
     PK so concurrent publishers upsert race-free instead of read-modify-
     writing a JSON blob."""
 

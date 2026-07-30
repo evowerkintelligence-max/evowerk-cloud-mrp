@@ -689,7 +689,7 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
 
 async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUID) -> list[AlertTrigger]:
     """Enabled stream_metric rules targeting this stream, evaluated live - used
-    by realtime.py's SSE feed to attach alarm state to each tick snapshot."""
+    by realtime.py's snapshot route to attach alarm state to each snapshot."""
     result = await db.execute(
         select(AlertRule).where(
             AlertRule.org_id == org_id,

@@ -26,7 +26,6 @@ import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -433,47 +432,6 @@ async def set_external_metric(db: AsyncSession, stream_id: uuid.UUID, name: str,
             stream_id=stream_id, name=name, value=value, updated_at=datetime.now(timezone.utc)
         )
     )
-
-
-# ── TEMPORARY JSONL history shims (deleted in the broker-stack removal task;
-# realtime_cache.py and the /history route still import these until then) ────
-
-def _history_dir() -> Path:
-    settings = get_settings()
-    root = Path(settings.data_dir)
-    root = root if root.is_absolute() else (Path.cwd() / root).resolve()
-    d = root / "realtime"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def history_path(stream_id: str) -> Path:
-    return _history_dir() / f"{stream_id}.jsonl"
-
-
-def read_history(stream_id: str, max_points: int = 2000) -> list[dict[str, Any]]:
-    path = history_path(stream_id)
-    if not path.exists():
-        return []
-    max_points = max(1, min(20_000, int(max_points)))
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    out: list[dict[str, Any]] = []
-    for line in lines[-max_points:]:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
-
-
-def delete_history(stream_id: str) -> None:
-    try:
-        history_path(stream_id).unlink()
-    except FileNotFoundError:
-        pass
 
 
 # ── Global registry (this process only) ──────────────────────────────────────

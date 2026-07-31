@@ -49,17 +49,3 @@ export function itemTypeVariant(type: string): Variant {
 export function humanize(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
-const INVENTORY_STATUS: Record<string, Variant> = {
-  stockout: "danger",
-  low: "warning",
-  dead_stock: "warning",
-  excess: "info",
-  slow_moving: "neutral",
-  healthy: "success",
-  no_data: "neutral",
-};
-
-export function inventoryStatusVariant(status: string): Variant {
-  return INVENTORY_STATUS[status] ?? "neutral";
-}

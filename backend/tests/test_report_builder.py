@@ -414,22 +414,18 @@ async def test_cross_org_isolation_on_custom_report(client):
     assert (await client.delete(f"/reports/custom/{report_id}", headers=headers_b)).status_code == 404
 
 
-async def test_kind_report_section_inventory_analytics_needs_no_params(client):
+@pytest.mark.parametrize("kind", ["inventory-analytics", "rca", "scenario"])
+async def test_creating_a_report_with_a_retired_inventory_analytics_kind_is_rejected(client, kind):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
 
-    created = await client.post(
+    res = await client.post(
         "/reports/custom", headers=headers,
-        json={
-            "name": "Inventory capture",
-            "sections": [{"type": "kind_report", "report_kind": "inventory-analytics"}],
-        },
+        json={"name": "Old capture", "sections": [{"type": "kind_report", "report_kind": kind}]},
     )
-    report_id = created.json()["id"]
 
-    res = await client.get(f"/reports/custom/{report_id}/render?format=html", headers=headers)
-    assert res.status_code == 200, res.text
-    assert b"Item positions" in res.content
+    assert res.status_code == 400
+    assert "retired" in res.json()["detail"].lower()
 
 
 async def test_kind_report_section_rejects_unknown_kind(client):

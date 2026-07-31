@@ -25,7 +25,6 @@ from app.api.routes import (
     forecasts,
     integrations,
     inventory,
-    inventory_analytics,
     items,
     kpi_dashboards,
     kpis,
@@ -33,6 +32,7 @@ from app.api.routes import (
     lots,
     machines,
     mfg_forecast,
+    morning_brief,
     oauth,
     oee,
     operator_capture,
@@ -118,7 +118,7 @@ app.include_router(operator_capture.router)
 # Must be registered before inventory.router: /inventory/analytics is a
 # static path that would otherwise be shadowed by inventory.router's
 # /inventory/{item_id} (Starlette matches path shape before UUID validation).
-app.include_router(inventory_analytics.router, dependencies=[Depends(require_feature("warehouse"))])
+app.include_router(morning_brief.router, dependencies=[Depends(require_feature("warehouse"))])
 app.include_router(inventory.router, dependencies=[Depends(require_feature("warehouse"))])
 app.include_router(forecasts.router, dependencies=[Depends(require_feature("planning"))])
 app.include_router(forecasts.mrp_router, dependencies=[Depends(require_feature("planning"))])

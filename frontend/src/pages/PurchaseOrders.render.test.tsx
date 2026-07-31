@@ -63,4 +63,9 @@ describe("PurchaseOrdersPanel", () => {
     expect(html).toContain("PO-14");
     expect(html).not.toContain("Late");
   });
+
+  it("shows the expected delivery date in the list", () => {
+    const html = renderPos([LATE_PO]);
+    expect(html).toContain(YESTERDAY);
+  });
 });

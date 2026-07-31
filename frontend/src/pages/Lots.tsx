@@ -68,7 +68,6 @@ interface FefoConsumeLine {
   expiry_date: string | null;
 }
 
-
 function daysUntil(dateStr: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);

@@ -325,6 +325,7 @@ export function PurchaseOrdersPanel() {
               <TR>
                 <TH>PO #</TH>
                 <TH>Supplier</TH>
+                <TH>Expected</TH>
                 <TH>Status</TH>
               </TR>
             </THead>
@@ -337,6 +338,7 @@ export function PurchaseOrdersPanel() {
                 >
                   <TD className="font-medium">PO-{po.po_number}</TD>
                   <TD>{po.supplier_name}</TD>
+                  <TD className="text-muted-foreground">{po.expected_delivery_date ?? "—"}</TD>
                   <TD>
                     <div className="flex flex-wrap items-center gap-1">
                       <Badge variant={poStatusVariant(po.status)}>{humanize(po.status)}</Badge>

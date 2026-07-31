@@ -3,6 +3,12 @@
 Date: 2026-07-31
 Status: order agreed, Phase 1 design approved below; phases 1.5+ still need their own design pass before implementation.
 
+**Update (2026-07-31):** Phase 1 (Inventory Analytics UI) was fully reverted
+in `85ea66d` before Phases 1.5-7 started. Phase 8 has since shipped,
+re-scoped to match the post-revert codebase — see
+`docs/superpowers/specs/2026-07-31-mrp-cohesion-pass-design.md`, not the
+"Phase 8 detail" section below (which describes gaps that no longer exist).
+
 ## Context
 
 The MRP overhaul (Planning Grid → Sales Orders as committed demand → Work

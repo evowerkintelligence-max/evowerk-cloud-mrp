@@ -19,7 +19,7 @@ from app.services.morning_brief import (
     compute_lot_alerts,
     compute_morning_brief,
 )
-from app.services.rca import DIMENSIONS, RcaDimensionValue, RcaResult, compute_rca
+from app.services.rca import DIMENSIONS, RcaDimensionValue, RcaResult, compute_rca, compute_rca_auto
 from app.services.work_orders import JobAlertLine, compute_job_alerts
 from app.services.scenario import ScenarioDelta, compare_lead_time_scenario
 
@@ -239,6 +239,18 @@ async def get_rca(
     if dimension not in DIMENSIONS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"dimension must be one of {sorted(DIMENSIONS)}")
     result = await compute_rca(db, current.org_id, dimension)
+    return _rca_to_response(result)
+
+
+@router.get("/rca/auto", response_model=RcaResponse)
+async def get_rca_auto(
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Runs RCA across supplier/item_type/abc_class and returns the single
+    most statistically significant finding, for the Inventory tab's
+    auto-surfaced insight banner. See app.services.rca.compute_rca_auto."""
+    result = await compute_rca_auto(db, current.org_id)
     return _rca_to_response(result)
 
 

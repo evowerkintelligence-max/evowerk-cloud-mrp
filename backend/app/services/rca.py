@@ -84,17 +84,26 @@ async def _dimension_value_by_item(
     return {item_id: (name or "unassigned") for item_id, name in rows.all()}
 
 
-async def compute_rca(db: AsyncSession, org_id: uuid.UUID, dimension: str) -> RcaResult:
+async def compute_rca(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    dimension: str,
+    lines: list[InventoryAnalyticsLine] | None = None,
+) -> RcaResult:
     """Is an item's stockout/low status associated with `dimension` (which
     supplier, item type, or ABC class)? A chi-square test of independence
     over a [dimension value] x [at-risk, not-at-risk] contingency table,
     followed by the standardized residual per value - the standard way to
     read off which specific values are driving a significant association,
-    ranked by |residual| (biggest anomaly first)."""
+    ranked by |residual| (biggest anomaly first). If `lines` is provided,
+    it's used instead of recomputing - callers that need the same analytics
+    lines across several calls (see compute_rca_auto) can compute them once
+    and reuse them."""
     if dimension not in DIMENSIONS:
         raise ValueError(f"Unknown RCA dimension: {dimension}")
 
-    lines = await compute_inventory_analytics(db, org_id)
+    if lines is None:
+        lines = await compute_inventory_analytics(db, org_id)
     if not lines:
         return _empty_result(dimension)
 
@@ -145,4 +154,42 @@ async def compute_rca(db: AsyncSession, org_id: uuid.UUID, dimension: str) -> Rc
         degrees_of_freedom=int(dof),
         low_expected_frequency_warning=low_expected,
         values=values,
+    )
+
+
+async def compute_rca_auto(db: AsyncSession, org_id: uuid.UUID) -> RcaResult:
+    """Runs compute_rca across every dimension in DIMENSIONS and returns the
+    one most likely to explain stockouts/lows: the lowest p-value among
+    results with at least one significant value. p-value (not the raw
+    chi-square statistic) is the correct cross-dimension comparison, since
+    chi-square magnitude isn't comparable across dimensions with different
+    degrees of freedom - a higher-cardinality dimension (e.g. supplier) would
+    otherwise win almost by construction regardless of which finding is
+    actually strongest. Pure orchestration for the Inventory tab's
+    auto-surfaced insight banner - no new statistics beyond compute_rca
+    itself. Ties go to whichever dimension comes first in DIMENSIONS, since
+    only a strictly lower p-value replaces the current best as dimensions
+    are tried in that order."""
+    lines = await compute_inventory_analytics(db, org_id)
+    best: RcaResult | None = None
+    best_p = 2.0  # p-values are in [0, 1]; sentinel above the valid range
+    for dimension in DIMENSIONS:
+        result = await compute_rca(db, org_id, dimension, lines=lines)
+        if result.method != "chi_square_independence" or result.p_value is None:
+            continue
+        if not any(v.is_significant for v in result.values):
+            continue
+        if result.p_value < best_p:
+            best = result
+            best_p = result.p_value
+    if best is not None:
+        return best
+    return RcaResult(
+        dimension="",
+        method="no_significant_dimension",
+        chi2_statistic=None,
+        p_value=None,
+        degrees_of_freedom=None,
+        low_expected_frequency_warning=False,
+        values=[],
     )

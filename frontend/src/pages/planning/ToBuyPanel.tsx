@@ -100,7 +100,7 @@ export function ToBuyPanel({ rows, canOrder }: { rows: GridToBuy[]; canOrder: bo
               <ul className="space-y-1 text-sm">
                 {result.created.map((po) => (
                   <li key={po.po_id} className="flex items-center gap-2">
-                    <Badge variant="success">Draft PO #{po.po_number}</Badge>
+                    <Badge variant="success">Draft PO-{po.po_number}</Badge>
                     {po.supplier_name} · {po.line_count} line{po.line_count === 1 ? "" : "s"}
                   </li>
                 ))}

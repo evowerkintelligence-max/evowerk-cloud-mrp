@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
@@ -76,7 +77,8 @@ interface AdjustmentOutcome {
 
 export function InventoryPanel() {
   const queryClient = useQueryClient();
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(searchParams.get("item"));
   const [consumeQty, setConsumeQty] = useState("1");
   const [consumeLoc, setConsumeLoc] = useState("");
   const [adjustDelta, setAdjustDelta] = useState("1");
@@ -272,8 +274,13 @@ export function InventoryPanel() {
       {detail.data && (
         <Card>
           <CardHeader>
-            <CardTitle>
-              {detail.data.item_sku} - {detail.data.item_name}
+            <CardTitle className="flex items-center justify-between">
+              <span>
+                {detail.data.item_sku} - {detail.data.item_name}
+              </span>
+              <Link to="/planning" className="text-xs font-normal text-muted-foreground underline">
+                View in Planning
+              </Link>
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}

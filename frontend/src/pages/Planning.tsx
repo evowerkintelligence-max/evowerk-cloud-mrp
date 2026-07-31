@@ -136,7 +136,12 @@ export function Planning() {
                       <TR>
                         <TD>
                           <span className="font-medium">{product.item_name}</span>
-                          <span className="block text-xs text-muted-foreground">{product.item_sku}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {product.item_sku}{" "}
+                            <Link to={`/warehouse?item=${product.item_id}`} className="underline">
+                              View in Inventory
+                            </Link>
+                          </span>
                         </TD>
                         <TD>
                           <PlannedQtyInput

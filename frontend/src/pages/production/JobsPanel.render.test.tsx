@@ -29,4 +29,9 @@ describe("JobsPanel", () => {
     expect(html).toContain("Edit");
     expect(html).toContain("Finish");
   });
+
+  it("links a job's item to its Inventory page", () => {
+    const html = renderJobs((qc) => qc.setQueryData(["work-orders", "", ""], [RUNNING]));
+    expect(html).toContain('href="/warehouse?item=item-1"');
+  });
 });

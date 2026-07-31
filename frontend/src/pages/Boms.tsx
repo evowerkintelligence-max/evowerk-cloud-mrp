@@ -23,7 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { ItemSelect } from "@/components/ItemSelect";
-import { humanize } from "@/lib/status";
+import { humanize, lifecycleStatusVariant } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 interface ItemResponse {
@@ -74,12 +74,6 @@ interface BomDetailResponse extends BomResponse {
 // trip to the 400 the backend now also enforces.
 const MAX_LINE_QUANTITY = 99999999.9999;
 const MAX_SCRAP_PCT = 100;
-
-function bomStatusVariant(status: string) {
-  if (status === "active") return "success" as const;
-  if (status === "archived") return "neutral" as const;
-  return "warning" as const; // draft
-}
 
 // Recursively explodes a line into its component's own active BOM, if it has
 // one - lazily fetched only once expanded, reusing the same GET /boms/{id}
@@ -684,7 +678,7 @@ export function Boms() {
                   </TD>
                   <TD className="text-muted-foreground">v{bom.version}</TD>
                   <TD>
-                    <Badge variant={bomStatusVariant(bom.status)}>{humanize(bom.status)}</Badge>
+                    <Badge variant={lifecycleStatusVariant(bom.status)}>{humanize(bom.status)}</Badge>
                   </TD>
                 </TR>
               ))}
@@ -698,7 +692,7 @@ export function Boms() {
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               {bomDetail.data.item_sku} · v{bomDetail.data.version}
-              <Badge variant={bomStatusVariant(bomDetail.data.status)}>
+              <Badge variant={lifecycleStatusVariant(bomDetail.data.status)}>
                 {humanize(bomDetail.data.status)}
               </Badge>
             </CardTitle>

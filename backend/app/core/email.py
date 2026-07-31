@@ -38,7 +38,10 @@ async def send_email(to: str, subject: str, body: str) -> None:
     if settings.ses_from_email:
         await _send_via_ses(to, subject, body)
         return
-    logger.info("send_email (no SES sender configured, not actually sent): to=%s subject=%s\n%s", to, subject, body)
+    # Deliberately omits `body`: it carries the reset/verify link and its
+    # single-use token, and this path also runs in prod if ses_from_email is
+    # never configured - logs shouldn't hold live auth tokens in plaintext.
+    logger.info("send_email (no SES sender configured, not actually sent): to=%s subject=%s", to, subject)
 
 
 async def send_password_reset_email(to: str, token: str) -> None:

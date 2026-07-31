@@ -60,7 +60,10 @@ export function ComputerVision() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Computer Vision" description="Upload a shop-floor image for defect detection, PPE compliance, or object counting." />
+      <PageHeader
+        title="Computer Vision"
+        description="Upload a shop-floor image for defect detection, PPE compliance, or object counting. Findings are AI-generated (Google Gemini) — verify before acting on them."
+      />
 
       <Card>
         <CardHeader>

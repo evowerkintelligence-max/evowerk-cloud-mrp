@@ -23,11 +23,11 @@ async def daily_consumption_by_item(
     Python - not SQL date_trunc/date() - since tests run on SQLite and prod on
     Postgres, and no shared cross-dialect date-bucketing helper exists.
 
-    Shared by inventory_analytics (safety stock / ABC-XYZ) and
-    demand_forecasting (moving-average / exp-smoothing projection) - one
-    source of truth for "what did this item actually consume, per day."
-    `item_ids` narrows to specific items (e.g. a single-item forecast call);
-    omit to pull every item in the org (e.g. the analytics list endpoint).
+    Shared by planning_grid (net requirements) and demand_forecasting
+    (moving-average / exp-smoothing projection) - one source of truth for
+    "what did this item actually consume, per day." `item_ids` narrows to
+    specific items (e.g. a single-item forecast call); omit to pull every
+    item in the org.
     """
     daily: dict[uuid.UUID, dict[date, Decimal]] = {}
 

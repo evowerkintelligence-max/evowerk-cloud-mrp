@@ -22,7 +22,6 @@ from app.api.routes.scrap import ScrapComputeRequest, compute_scrap
 from app.api.routes.shifts import ShiftAnalyzeRequest, analyze_shifts
 from app.api.routes.spc import SPCRequest, analyze_spc
 from app.api.routes.throughput import ThroughputComputeRequest, compute_throughput
-from app.models.bom import Item
 from app.models.dashboard import Chart
 from app.models.dataset import Dataset
 from app.models.report_spec import SavedReport
@@ -32,29 +31,25 @@ from app.services import datasets as ds_service
 from app.services import llm
 from app.services import rca_cases as rca_cases_service
 from app.services import sql_query as sql_query_service
-from app.services.inventory_analytics import compute_inventory_analytics
-from app.services.rca import DIMENSIONS, RcaResult, compute_rca
-from app.services.scenario import compare_lead_time_scenario
 
 # Ported from a desktop app's reports_v2 (ReportSpec + csv/html/pdf renderers).
 # Dropped on the way over: the on-disk spec store, the artifact registry, and
 # the BI-widget embeds - all of that existed to snapshot a *workflow run*, and
-# every source here (MRP plan, analytics, RCA, scenario) is recomputed from
-# live org data on request instead. A report is therefore a pure function of
-# (org, kind, params) and needs no table, no migration and no report_id: build
-# a Report, render it, stream it.
+# every source here is recomputed from live org data on request instead. A
+# report is therefore a pure function of (org, kind, params) and needs no
+# table, no migration and no report_id: build a Report, render it, stream it.
 #
 # AI narration (ported from report_narrate.py, see narrate_report below) keeps
 # that same shape: nothing is stored, a Report is narrated fresh on request
 # from whatever data it just computed.
 BRAND = "EvoWerk Cloud MRP"
 
-KINDS = ("inventory-analytics", "rca", "scenario", "dataset")
+KINDS = ("dataset",)
 # Kinds that used to be in KINDS and can still show up in an old
 # saved_reports.spec / report_inbox_items.spec captured before removal (see
 # _resolve_kind_report_sections). Never add a kind here to bring it back -
 # these stay permanently unbuildable, only tolerated in stored specs.
-RETIRED_KINDS = ("mrp-plan",)
+RETIRED_KINDS = ("mrp-plan", "inventory-analytics", "rca", "scenario")
 
 
 def reject_retired_kind_sections(sections: list[ReportSectionSpec]) -> None:
@@ -174,211 +169,6 @@ def _now() -> datetime:
 # --------------------------------------------------------------------------- #
 # Builders - one per report kind
 # --------------------------------------------------------------------------- #
-async def build_inventory_analytics_report(db: AsyncSession, org_id: uuid.UUID) -> Report:
-    lines = await compute_inventory_analytics(db, org_id)
-    counts: dict[str, int] = {}
-    for ln in lines:
-        counts[ln.status] = counts.get(ln.status, 0) + 1
-
-    return Report(
-        slug="inventory-analytics",
-        title="Inventory Analytics",
-        subtitle="Reorder point, safety stock, days of supply and ABC/XYZ classification",
-        org_name=await _org_name(db, org_id),
-        generated_at=_now(),
-        kpis=[
-            ("Items", _int(len(lines))),
-            ("Stockout", _int(counts.get("stockout", 0))),
-            ("Low", _int(counts.get("low", 0))),
-            ("Excess", _int(counts.get("excess", 0))),
-            ("Slow moving", _int(counts.get("slow_moving", 0))),
-            ("Dead stock", _int(counts.get("dead_stock", 0))),
-            ("Healthy", _int(counts.get("healthy", 0))),
-        ],
-        sections=[
-            Section(
-                title="Item positions",
-                columns=[
-                    "SKU",
-                    "Item",
-                    "Status",
-                    "On hand",
-                    "Avg daily demand",
-                    "Demand std",
-                    "Lead time (d)",
-                    "Safety stock",
-                    "Reorder point",
-                    "Days of supply",
-                    "ABC",
-                    "XYZ",
-                ],
-                rows=[
-                    [
-                        ln.item_sku,
-                        ln.item_name,
-                        ln.status,
-                        _num(ln.on_hand),
-                        _num(ln.avg_daily_demand),
-                        _num(ln.demand_std),
-                        _int(ln.lead_time_days),
-                        _num(ln.safety_stock),
-                        _num(ln.reorder_point),
-                        _num(ln.days_of_supply, dp=1),
-                        _text(ln.abc_class),
-                        _text(ln.xyz_class),
-                    ]
-                    for ln in lines
-                ],
-                note=None if lines else "No items yet.",
-            )
-        ],
-        notes=[
-            "Safety stock = z × σ_DLT at the target cycle service level; "
-            "σ_DLT = √(L × σ_d² + d² × σ_L²) (APICS CPIM).",
-            "Reorder point = average demand during lead time + safety stock.",
-            "ABC classes items by annualised consumption value (Pareto); XYZ by demand variability "
-            "(coefficient of variation).",
-            "Where consumption history is too short to estimate variability, an assumed 30% "
-            "coefficient of variation is used — see the demand std source column of the API.",
-        ],
-    )
-
-
-def _rca_kpis(result: RcaResult) -> list[tuple[str, str]]:
-    if result.method == "insufficient_data":
-        return [("Method", "Insufficient data")]
-    significant = sum(1 for v in result.values if v.is_significant)
-    return [
-        ("Method", "Chi-square independence"),
-        ("χ² statistic", _num(result.chi2_statistic)),
-        ("p-value", _num(result.p_value, dp=4)),
-        ("Degrees of freedom", _int(result.degrees_of_freedom)),
-        ("Significant values", _int(significant)),
-        ("Association", "Yes (p < 0.05)" if (result.p_value or 1.0) < 0.05 else "Not detected"),
-    ]
-
-
-async def build_rca_report(db: AsyncSession, org_id: uuid.UUID, dimension: str) -> Report:
-    result = await compute_rca(db, org_id, dimension)
-    label = dimension.replace("_", " ")
-
-    notes = [
-        "Chi-square test of independence over a [dimension value] × [at risk, not at risk] "
-        "contingency table. At risk = an item whose status is stockout or low.",
-        "Standardized residual = (observed − expected) / √expected. |residual| > 1.96 marks a value "
-        "contributing significantly to the association at the two-tailed 95% level.",
-        "A positive residual means more at-risk items than independence predicts; negative means fewer.",
-    ]
-    if result.method == "insufficient_data":
-        notes.append(
-            "Not enough data for a valid test: fewer than two dimension values were present, or every "
-            "item fell on the same side of the at-risk split."
-        )
-    elif result.low_expected_frequency_warning:
-        notes.append(
-            "Warning: at least one expected cell count is below 5. The chi-square approximation is "
-            "unreliable at this sample size — treat the p-value as indicative only."
-        )
-
-    return Report(
-        slug=f"rca-{dimension.replace('_', '-')}",
-        title="Root Cause Analysis",
-        subtitle=f"Stockout and low-stock risk by {label}",
-        org_name=await _org_name(db, org_id),
-        generated_at=_now(),
-        kpis=_rca_kpis(result),
-        sections=[
-            Section(
-                title=f"Findings by {label}",
-                columns=[
-                    label.title(),
-                    "Items",
-                    "At risk",
-                    "Expected at risk",
-                    "Std. residual",
-                    "Significant",
-                ],
-                rows=[
-                    [
-                        v.value,
-                        _int(v.item_count),
-                        _int(v.at_risk_count),
-                        _num(v.expected_at_risk_count),
-                        _num(v.standardized_residual),
-                        "Yes" if v.is_significant else "No",
-                    ]
-                    for v in result.values
-                ],
-                note="Ranked by |standardized residual| — biggest anomaly first."
-                if result.values
-                else "No findings to rank.",
-            )
-        ],
-        notes=notes,
-    )
-
-
-async def build_scenario_report(
-    db: AsyncSession, org_id: uuid.UUID, lead_time_overrides: dict[uuid.UUID, int]
-) -> Report:
-    deltas = await compare_lead_time_scenario(db, org_id, lead_time_overrides)
-    counts: dict[str, int] = {}
-    for d in deltas:
-        counts[d.classification] = counts.get(d.classification, 0) + 1
-
-    return Report(
-        slug="scenario-comparison",
-        title="Scenario Comparison",
-        subtitle=f"Lead-time what-if across {len(lead_time_overrides)} item(s) — nothing was persisted",
-        org_name=await _org_name(db, org_id),
-        generated_at=_now(),
-        kpis=[
-            ("Items compared", _int(len(deltas))),
-            ("Regressed", _int(counts.get("regressed", 0))),
-            ("Improved", _int(counts.get("improved", 0))),
-            ("Unchanged", _int(counts.get("unchanged", 0))),
-        ],
-        sections=[
-            Section(
-                title="Baseline vs scenario",
-                columns=[
-                    "SKU",
-                    "Item",
-                    "Lead time (base → scenario)",
-                    "Reorder point Δ",
-                    "Safety stock Δ",
-                    "Days of supply Δ",
-                    "Status (base → scenario)",
-                    "Result",
-                ],
-                rows=[
-                    [
-                        d.item_sku,
-                        d.item_name,
-                        f"{_int(d.baseline_lead_time_days)} → {_int(d.scenario_lead_time_days)}",
-                        _num(d.reorder_point_delta),
-                        _num(d.safety_stock_delta),
-                        _num(d.days_of_supply_delta, dp=1),
-                        f"{d.baseline_status} → {d.scenario_status}",
-                        d.classification,
-                    ]
-                    for d in deltas
-                ],
-                note="Regressions first, then improvements, ranked by |reorder point Δ| within each group."
-                if deltas
-                else "No comparable items: the overridden items produced no analytics rows.",
-            )
-        ],
-        notes=[
-            "Both sides are computed fresh from the same live data and differ only in the lead time fed "
-            "to the reorder-point and safety-stock model. No override is written to the database.",
-            "Improved / regressed compares how far each status sits from healthy — a move from excess "
-            "toward healthy improves just as a move from low toward healthy does.",
-            "A longer lead time raises σ_DLT, so both safety stock and reorder point rise with it.",
-        ],
-    )
-
-
 async def build_dataset_report(db: AsyncSession, org_id: uuid.UUID, dataset: Dataset) -> Report:
     """A report over an uploaded dataset instead of live org data - a capped
     row preview plus the same size/shape KPIs the Datasets page shows.
@@ -423,48 +213,6 @@ async def build_dataset_report(db: AsyncSession, org_id: uuid.UUID, dataset: Dat
 # the custom-report-builder "kind_report" capture type (see ReportSectionSpec
 # below): both need "given a kind name and its params, build the Report."
 # --------------------------------------------------------------------------- #
-async def _parse_lead_times(
-    db: AsyncSession, org_id: uuid.UUID, raw: str | None
-) -> dict[uuid.UUID, int]:
-    """`lead_times=<item_id>:<days>,<item_id>:<days>` - the scenario report's
-    overrides live in the query string so a report is one GET and downloads
-    from a plain link, like every other kind."""
-    if not raw or not raw.strip():
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "scenario reports need lead_times=<item_id>:<days>[,<item_id>:<days>]",
-        )
-
-    overrides: dict[uuid.UUID, int] = {}
-    for pair in raw.split(","):
-        item_raw, sep, days_raw = pair.strip().partition(":")
-        if not sep:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Malformed lead_times entry: {pair}")
-        try:
-            item_id = uuid.UUID(item_raw)
-        except ValueError:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid item_id: {item_raw}") from None
-        try:
-            days = int(days_raw)
-        except ValueError:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid lead time: {days_raw}") from None
-        if days < 0:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"lead_time_days must be non-negative (item {item_raw})"
-            )
-        overrides[item_id] = days
-
-    found = (
-        await db.execute(select(Item.id).where(Item.org_id == org_id, Item.id.in_(overrides.keys())))
-    ).scalars().all()
-    missing = overrides.keys() - set(found)
-    if missing:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, f"Unknown item(s) for this org: {', '.join(str(m) for m in missing)}"
-        )
-    return overrides
-
-
 async def build_report_by_kind(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -472,25 +220,13 @@ async def build_report_by_kind(
     *,
     horizon_start: date | None,
     horizon_end: date | None,
-    dimension: str,
-    lead_times: str | None,
     dataset_id: str | None,
 ) -> Report:
-    if kind == "inventory-analytics":
-        return await build_inventory_analytics_report(db, org_id)
-    if kind == "rca":
-        if dimension not in DIMENSIONS:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"dimension must be one of {sorted(DIMENSIONS)}"
-            )
-        return await build_rca_report(db, org_id, dimension)
-    if kind == "dataset":
-        if not dataset_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "dataset reports need dataset_id")
-        dataset = await ds_service.resolve_dataset(db, org_id, dataset_id)
-        return await build_dataset_report(db, org_id, dataset)
-    # kind == "scenario" - validated by the caller against KINDS.
-    return await build_scenario_report(db, org_id, await _parse_lead_times(db, org_id, lead_times))
+    # kind == "dataset" - the only entry left in KINDS; validated by the caller.
+    if not dataset_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "dataset reports need dataset_id")
+    dataset = await ds_service.resolve_dataset(db, org_id, dataset_id)
+    return await build_dataset_report(db, org_id, dataset)
 
 
 # --------------------------------------------------------------------------- #
@@ -631,8 +367,6 @@ async def _resolve_kind_report_sections(db: AsyncSession, org_id: uuid.UUID, spe
     report = await build_report_by_kind(
         db, org_id, spec.report_kind,
         horizon_start=horizon_start, horizon_end=horizon_end,
-        dimension=params.get("dimension", "supplier"),
-        lead_times=params.get("lead_times"),
         dataset_id=params.get("dataset_id"),
     )
     return report.sections

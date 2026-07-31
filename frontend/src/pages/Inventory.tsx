@@ -1,10 +1,9 @@
 import { FormEvent, useState } from "react";
-import { PackageCheck, TrendingDown, TrendingUp, Warehouse } from "lucide-react";
+import { Warehouse } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
 import { EmptyState } from "@/components/EmptyState";
-import { StatCard, STAT_TONES } from "@/components/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -12,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { humanize, inventoryStatusVariant } from "@/lib/status";
+import { humanize } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 const REASON_CODES = [
@@ -64,13 +63,6 @@ interface InventoryDetail extends InventoryItem {
   transactions: InventoryTransaction[];
 }
 
-interface InventoryAnalyticsLine {
-  item_id: string;
-  reorder_point: number | null;
-  days_of_supply: number | null;
-  status: string;
-}
-
 interface AdjustmentRequestSummary {
   id: string;
   status: string;
@@ -109,32 +101,6 @@ export function InventoryPanel() {
       return res.json();
     },
   });
-
-  const analytics = useQuery<InventoryAnalyticsLine[]>({
-    queryKey: ["inventory-analytics"],
-    queryFn: async () => {
-      const res = await apiFetch("/inventory/analytics");
-      if (!res.ok) throw new Error("Failed to load inventory analytics");
-      return (await res.json()).lines;
-    },
-  });
-  const analyticsByItem = new Map(analytics.data?.map((a) => [a.item_id, a]));
-
-  // Summary counts over the full analytics set (not paginated) — a quick read on stock health.
-  const statusCounts = (analytics.data ?? []).reduce(
-    (acc, a) => {
-      if (a.status === "stockout" || a.status === "low") acc.low += 1;
-      else if (a.status === "excess") acc.excess += 1;
-      else if (a.status === "healthy") acc.healthy += 1;
-      return acc;
-    },
-    { low: 0, excess: 0, healthy: 0 },
-  );
-  const statTiles = [
-    { label: "Low stock", value: statusCounts.low, icon: <TrendingDown /> },
-    { label: "Excess", value: statusCounts.excess, icon: <TrendingUp /> },
-    { label: "Healthy", value: statusCounts.healthy, icon: <PackageCheck /> },
-  ];
 
   const locations = useQuery<LocationResponse[]>({
     queryKey: ["locations"],
@@ -264,20 +230,6 @@ export function InventoryPanel() {
         </Alert>
       )}
 
-      {balances.data && balances.data.length > 0 && analytics.data && (
-        <div className="mb-8 grid grid-cols-3 gap-4">
-          {statTiles.map((t, i) => (
-            <StatCard
-              key={t.label}
-              label={t.label}
-              value={t.value}
-              icon={t.icon}
-              tone={STAT_TONES[i % STAT_TONES.length]}
-            />
-          ))}
-        </div>
-      )}
-
       {balances.data && balances.data.length === 0 ? (
         <EmptyState
           icon={<Warehouse />}
@@ -293,34 +245,25 @@ export function InventoryPanel() {
                 <TH>Total on hand</TH>
                 <TH>By location</TH>
                 <TH>UoM</TH>
-                <TH>Status</TH>
               </TR>
             </THead>
             <TBody>
-              {balances.data?.map((bal) => {
-                const a = analyticsByItem.get(bal.item_id);
-                return (
-                  <TR
-                    key={bal.item_id}
-                    onClick={() => setSelectedItemId(bal.item_id)}
-                    className={cn("cursor-pointer", selectedItemId === bal.item_id && "bg-primary/5")}
-                  >
-                    <TD className="font-medium">
-                      {bal.item_sku} - {bal.item_name}
-                    </TD>
-                    <TD>{bal.quantity_on_hand}</TD>
-                    <TD className="text-muted-foreground">
-                      {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
-                    </TD>
-                    <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
-                    <TD>
-                      {a && a.status !== "no_data" && (
-                        <Badge variant={inventoryStatusVariant(a.status)}>{humanize(a.status)}</Badge>
-                      )}
-                    </TD>
-                  </TR>
-                );
-              })}
+              {balances.data?.map((bal) => (
+                <TR
+                  key={bal.item_id}
+                  onClick={() => setSelectedItemId(bal.item_id)}
+                  className={cn("cursor-pointer", selectedItemId === bal.item_id && "bg-primary/5")}
+                >
+                  <TD className="font-medium">
+                    {bal.item_sku} - {bal.item_name}
+                  </TD>
+                  <TD>{bal.quantity_on_hand}</TD>
+                  <TD className="text-muted-foreground">
+                    {bal.by_location.map((lq) => `${lq.location_code}: ${lq.quantity_on_hand}`).join(", ")}
+                  </TD>
+                  <TD className="text-muted-foreground">{bal.unit_of_measure}</TD>
+                </TR>
+              ))}
             </TBody>
           </Table>
         </TableWrap>
@@ -334,17 +277,6 @@ export function InventoryPanel() {
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Total on hand: {detail.data.quantity_on_hand} {detail.data.unit_of_measure}
-              {(() => {
-                const a = analyticsByItem.get(detail.data.item_id);
-                if (!a || a.reorder_point == null) return null;
-                return (
-                  <>
-                    {" "}
-                    · Reorder point: {a.reorder_point.toFixed(2)}{" "}
-                    <Badge variant={inventoryStatusVariant(a.status)}>{humanize(a.status)}</Badge>
-                  </>
-                );
-              })()}
             </p>
           </CardHeader>
           <CardContent className="space-y-6">

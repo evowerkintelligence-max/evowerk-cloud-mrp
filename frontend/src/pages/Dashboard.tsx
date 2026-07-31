@@ -11,22 +11,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { humanize, inventoryStatusVariant } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 interface OrgResponse {
   id: string;
   name: string;
-}
-
-interface BriefLine {
-  item_id: string;
-  item_sku: string;
-  item_name: string;
-  status: string;
-  days_of_supply: number | null;
-  days_of_supply_delta: number | null;
-  is_new_this_week: boolean;
 }
 
 interface LotAlert {
@@ -39,17 +28,8 @@ interface LotAlert {
 }
 
 interface MorningBriefResponse {
-  lines: BriefLine[];
   lot_alerts: LotAlert[];
 }
-
-const STATUS_BORDER: Record<string, string> = {
-  stockout: "border-l-rose-500",
-  low: "border-l-amber-500",
-  excess: "border-l-sky-500",
-  slow_moving: "border-l-slate-500",
-  dead_stock: "border-l-orange-500",
-};
 
 const REASON_BORDER: Record<string, string> = {
   on_hold: "border-l-amber-500",
@@ -113,7 +93,7 @@ export function Dashboard() {
       return res.json();
     },
   });
-  const briefEmpty = !brief.data || (brief.data.lines.length === 0 && brief.data.lot_alerts.length === 0);
+  const briefEmpty = !brief.data || brief.data.lot_alerts.length === 0;
 
   // Re-render periodically so the "Updated Xm ago" label keeps advancing on
   // its own instead of freezing at whatever it read on the last data fetch.
@@ -188,7 +168,7 @@ export function Dashboard() {
           </div>
           <div>
             <CardTitle>Morning Brief</CardTitle>
-            <CardDescription>Items and lots needing attention, vs. 7 days ago</CardDescription>
+            <CardDescription>Lots on hold or expiring soon</CardDescription>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {brief.dataUpdatedAt > 0 && (
@@ -216,33 +196,6 @@ export function Dashboard() {
             <p className="text-sm text-muted-foreground">Nothing needs attention today.</p>
           ) : (
             <div className="space-y-2">
-              {brief.data!.lines.map((line) => (
-                <Link
-                  key={line.item_id}
-                  to="/planning"
-                  className={cn(
-                    "flex items-center justify-between gap-3 rounded-md border-l-[6px] bg-secondary/20 px-3 py-2 text-sm transition-colors hover:translate-x-0.5 hover:bg-secondary/40",
-                    STATUS_BORDER[line.status] ?? "border-l-border",
-                  )}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold">
-                      {line.item_sku} — {line.item_name}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {line.days_of_supply != null
-                        ? `${line.days_of_supply.toFixed(1)} days of supply`
-                        : "No demand history"}
-                      {line.days_of_supply_delta != null &&
-                        ` · ${line.days_of_supply_delta >= 0 ? "+" : ""}${line.days_of_supply_delta.toFixed(1)}d vs last week`}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {line.is_new_this_week && <Badge variant="danger">New</Badge>}
-                    <Badge variant={inventoryStatusVariant(line.status)}>{humanize(line.status)}</Badge>
-                  </div>
-                </Link>
-              ))}
               {brief.data!.lot_alerts.map((alert) => (
                 <Link
                   key={alert.lot_id}

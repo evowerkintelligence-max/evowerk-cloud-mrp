@@ -18,7 +18,6 @@ from app.models import (  # noqa: F401 - registers models with Base.metadata
     device_token,
     forecast,
     inventory,
-    inventory_snapshot,
     integration,
     kpi,
     location,

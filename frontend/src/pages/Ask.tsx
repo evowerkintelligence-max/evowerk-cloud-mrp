@@ -210,7 +210,7 @@ export function Ask() {
     <div className="flex h-[calc(100vh-6rem)] flex-col">
       <PageHeader
         title="Ask your data"
-        description="Natural-language Q&A over any uploaded dataset."
+        description="Natural-language Q&A over any uploaded dataset. Answers are AI-generated (Google Gemini) — verify before acting on them."
         actions={
           <div className="flex items-center gap-2">
             <Select value={dataSource} onChange={(e) => onChangeDataSource(e.target.value)} className="w-56">

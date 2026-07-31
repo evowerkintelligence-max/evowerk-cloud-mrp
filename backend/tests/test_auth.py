@@ -47,6 +47,31 @@ async def test_register_login_refresh_logout(client):
     assert after_logout.status_code == 401
 
 
+async def test_delete_account_scrubs_email_and_revokes_access(client):
+    await _register(client)
+    login = await client.post("/auth/login", json={"email": "alice@example.com", "password": PASSWORD})
+    tokens = login.json()
+    auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    wrong_password = await client.request("DELETE", "/auth/me", json={"password": "wrong"}, headers=auth)
+    assert wrong_password.status_code == 401
+
+    deleted = await client.request("DELETE", "/auth/me", json={"password": PASSWORD}, headers=auth)
+    assert deleted.status_code == 204
+
+    # the deleted account can no longer log in with its old email/password...
+    relogin = await client.post("/auth/login", json={"email": "alice@example.com", "password": PASSWORD})
+    assert relogin.status_code == 401
+
+    # ...and the old refresh token no longer works.
+    refreshed = await client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+    assert refreshed.status_code == 401
+
+    # the email is now free for a new registration (it's been anonymized, not left dangling).
+    reregistered = await _register(client)
+    assert reregistered["email"] == "alice@example.com"
+
+
 async def test_register_rejects_weak_password(client):
     res = await client.post(
         "/auth/register",

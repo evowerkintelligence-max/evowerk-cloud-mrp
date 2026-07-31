@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -19,6 +20,7 @@ from app.core.security import (
     encrypt_secret,
     generate_refresh_token,
     generate_totp_secret,
+    hash_password,
     hash_refresh_token,
     refresh_token_expiry,
     totp_provisioning_uri,
@@ -342,3 +344,38 @@ async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
         stored.revoked = True
         await log_event(db, action="user.logout", org_id=stored.org_id, actor_user_id=stored.user_id)
         await db.commit()
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    body: DeleteAccountRequest,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # GDPR Art. 17 erasure. This scrubs the account's only personal-data field
+    # (email) and revokes access rather than deleting the `users` row outright:
+    # dozens of tables (work orders, KPIs, audit trail...) have non-cascading
+    # `created_by` FKs to users.id, so a hard delete would either FK-violate or
+    # take down business records other org members still rely on.
+    user = current.user
+    if not await run_in_threadpool(verify_password, body.password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect password")
+
+    result = await db.execute(select(RefreshToken).where(RefreshToken.user_id == user.id, RefreshToken.revoked.is_(False)))
+    for token in result.scalars():
+        token.revoked = True
+
+    user.email = f"deleted-{user.id}@deleted.invalid"
+    user.hashed_password = await run_in_threadpool(hash_password, secrets.token_urlsafe(32))
+    user.mfa_enabled = False
+    user.mfa_secret = None
+    user.pending_mfa_secret = None
+    user.is_active = False
+
+    await log_event(db, action="user.deleted", org_id=user.org_id, actor_user_id=user.id, ip_address=_client_ip(request))
+    await db.commit()

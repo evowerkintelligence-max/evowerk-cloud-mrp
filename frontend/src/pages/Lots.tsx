@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { humanize } from "@/lib/status";
+import { humanize, lotStatusVariant } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 25;
@@ -68,11 +68,6 @@ interface FefoConsumeLine {
   expiry_date: string | null;
 }
 
-function lotStatusVariant(status: string) {
-  if (status === "on_hold") return "warning" as const;
-  if (status === "depleted") return "neutral" as const;
-  return "success" as const;
-}
 
 function daysUntil(dateStr: string): number {
   const today = new Date();

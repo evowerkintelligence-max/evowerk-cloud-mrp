@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { ItemSelect } from "@/components/ItemSelect";
-import { humanize } from "@/lib/status";
+import { humanize, lifecycleStatusVariant } from "@/lib/status";
 import { useCurrentUser } from "@/lib/currentUser";
 import { C, EChart, asUtcMs, rankedBarOption, resolveShiftForTime, useShiftSchedule, type ScheduleItem } from "./analytics/shared";
 import { JobsPanel } from "./production/JobsPanel";
@@ -73,12 +73,6 @@ interface ItemResponse {
   id: string;
   sku: string;
   name: string;
-}
-
-function statusVariant(status: string) {
-  if (status === "active") return "success" as const;
-  if (status === "retired" || status === "archived") return "neutral" as const;
-  return "warning" as const; // inactive / draft
 }
 
 /** Empty string -> null, so an untouched optional number field isn't sent as 0. */
@@ -242,7 +236,7 @@ function WorkCentersPanel() {
                   <TD className="font-medium">{wc.code}</TD>
                   <TD>{wc.name}</TD>
                   <TD>
-                    <Badge variant={statusVariant(wc.status)}>{humanize(wc.status)}</Badge>
+                    <Badge variant={lifecycleStatusVariant(wc.status)}>{humanize(wc.status)}</Badge>
                   </TD>
                   <TD className="text-muted-foreground">{wc.machine_capacity}</TD>
                   <TD className="text-muted-foreground">{wc.default_cycle_time_seconds ?? "-"}</TD>
@@ -475,7 +469,7 @@ function MachinesPanel() {
                   <TD>{m.name}</TD>
                   <TD className="text-muted-foreground">{workCenterLabel(m.work_center_id)}</TD>
                   <TD>
-                    <Badge variant={statusVariant(m.status)}>{humanize(m.status)}</Badge>
+                    <Badge variant={lifecycleStatusVariant(m.status)}>{humanize(m.status)}</Badge>
                   </TD>
                   <TD className="text-muted-foreground">{m.mtbf_hours ?? "-"}</TD>
                   <TD className="text-muted-foreground">{m.mttr_hours ?? "-"}</TD>
@@ -550,7 +544,7 @@ function OperatorRow({
         <TD className="text-muted-foreground">{operator.code ?? "-"}</TD>
         <TD className="text-muted-foreground">{operator.badge_id ? "Assigned" : "-"}</TD>
         <TD>
-          <Badge variant={statusVariant(operator.status)}>{humanize(operator.status)}</Badge>
+          <Badge variant={lifecycleStatusVariant(operator.status)}>{humanize(operator.status)}</Badge>
         </TD>
         <TD>{operator.needs_review ? <Badge variant="warning">Needs review</Badge> : ""}</TD>
       </TR>
@@ -988,7 +982,7 @@ function RoutingRow({
         <TD className="font-medium">{itemLabel}</TD>
         <TD className="text-muted-foreground">v{routing.version}</TD>
         <TD>
-          <Badge variant={statusVariant(routing.status)}>{humanize(routing.status)}</Badge>
+          <Badge variant={lifecycleStatusVariant(routing.status)}>{humanize(routing.status)}</Badge>
         </TD>
         <TD className="text-muted-foreground">{routing.steps.length}</TD>
         <TD>

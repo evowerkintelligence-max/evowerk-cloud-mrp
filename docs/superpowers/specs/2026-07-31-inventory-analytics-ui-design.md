@@ -66,10 +66,12 @@ No new page, no new nav item. Three additions to the existing screen:
 
 New backend endpoint: `GET /inventory/rca/auto`. It runs `compute_rca`
 across all three dimensions (supplier, item_type, abc_class) server-side
-and returns the single most statistically significant finding (highest
-chi² among results where `is_significant=True`), or an empty result if
+and returns the single most statistically significant finding (lowest
+p-value among results where `is_significant=True`), or an empty result if
 none clear the bar. This is orchestration only — it calls the existing
 `compute_rca` three times and picks a winner; no new statistical logic.
+(See §5 for why p-value, not chi², is the correct cross-dimension
+comparison.)
 Keeping the comparison server-side matches the existing project rule
 (seen in `services/planning_grid.py`) that engine-adjacent logic doesn't
 get re-implemented client-side.
@@ -126,10 +128,19 @@ One new endpoint, no new statistical logic:
 
 **`GET /inventory/rca/auto`** (any member) — runs `compute_rca` for
 `supplier`, `item_type`, and `abc_class`, returns the result with the
-highest `chi2_statistic` among those with `is_significant=True` and at
-least one value, or a `method: "no_significant_dimension"` empty result
-if none qualify. Same response shape as the existing `RcaResponse` plus
-a `dimension` field indicating which one won.
+lowest `p_value` among those with `is_significant=True` and at least one
+value, or a `method: "no_significant_dimension"` empty result if none
+qualify. Same response shape as the existing `RcaResponse` plus a
+`dimension` field indicating which one won.
+
+Correction made during final review: the original design compared by
+highest `chi2_statistic`, but chi-square magnitude isn't comparable
+across dimensions with different degrees of freedom (`supplier` has
+one category per supplier; `abc_class` has at most 4) — a
+higher-cardinality dimension wins almost by construction regardless of
+which finding is actually strongest. `p_value` already normalizes for
+degrees of freedom and was already computed by `compute_rca`, so
+comparing by it stays pure orchestration with no new statistics.
 
 Everything else reuses existing, unchanged endpoints: `/inventory/analytics`,
 `/inventory/rca` (manual dimension picker), `/inventory/scenario-compare`.
@@ -167,8 +178,10 @@ routing, not new data.
 ## 7. Testing
 
 - Backend: new test file for `GET /inventory/rca/auto` — picks the
-  highest-chi² significant dimension, returns the no-significant-dimension
-  case correctly, ties broken deterministically (by dimension name order).
+  lowest-p-value significant dimension (and specifically *which* value
+  within it, not just that some value is significant), returns the
+  no-significant-dimension case correctly, ties broken deterministically
+  (by dimension name order).
 - Frontend: extend the Inventory page's render test (create one following
   the `ProductionSetup.render.test.tsx` pattern if one doesn't already
   exist) for: banner render/dismiss, "check a different cause" dimension

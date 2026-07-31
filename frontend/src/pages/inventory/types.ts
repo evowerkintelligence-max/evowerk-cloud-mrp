@@ -122,7 +122,7 @@ export function rcaTopValue(result: RcaResult): RcaValue | null {
 const DIMENSION_PHRASING: Record<string, (value: string) => string> = {
   supplier: (value) => `Items from ${value}`,
   item_type: (value) => `${humanize(value)} items`,
-  abc_class: (value) => `${abcLabel(value) ?? "Unclassified"} items`,
+  abc_class: (value) => `${abcLabel(value)?.replace(/ item$/, "") ?? "Unclassified"} items`,
 };
 
 export function rcaBannerSentence(result: RcaResult): string | null {

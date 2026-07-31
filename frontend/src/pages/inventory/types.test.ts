@@ -154,7 +154,7 @@ describe("rcaTopValue / rcaBannerSentence", () => {
       values: [{ ...SIGNIFICANT_RESULT.values[0], value: "A" }],
     };
     const sentence = rcaBannerSentence(result);
-    expect(sentence).toContain("High-value item items");
+    expect(sentence).toContain("High-value items");
     expect(sentence).not.toContain("A class");
   });
 });

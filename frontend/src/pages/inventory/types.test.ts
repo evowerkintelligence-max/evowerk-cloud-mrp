@@ -121,6 +121,42 @@ describe("rcaTopValue / rcaBannerSentence", () => {
     };
     expect(rcaBannerSentence(result)).toBeNull();
   });
+
+  it("skips a significant but under-represented (negative-residual) value", () => {
+    const result: RcaResult = {
+      ...SIGNIFICANT_RESULT,
+      values: [
+        {
+          value: "Supplier B",
+          item_count: 10,
+          at_risk_count: 0,
+          expected_at_risk_count: 5,
+          standardized_residual: -2.24,
+          is_significant: true,
+        },
+        {
+          value: "Supplier A",
+          item_count: 10,
+          at_risk_count: 10,
+          expected_at_risk_count: 5,
+          standardized_residual: 2.24,
+          is_significant: true,
+        },
+      ],
+    };
+    expect(rcaTopValue(result)?.value).toBe("Supplier A");
+  });
+
+  it("translates a bare ABC letter to plain language in the banner", () => {
+    const result: RcaResult = {
+      ...SIGNIFICANT_RESULT,
+      dimension: "abc_class",
+      values: [{ ...SIGNIFICANT_RESULT.values[0], value: "A" }],
+    };
+    const sentence = rcaBannerSentence(result);
+    expect(sentence).toContain("High-value item items");
+    expect(sentence).not.toContain("A class");
+  });
 });
 
 describe("scenarioDeltaSentence", () => {

@@ -131,6 +131,14 @@ async def test_picks_the_significant_supplier_dimension(client, test_engine):
     assert body["method"] == "chi_square_independence"
     assert any(v["is_significant"] for v in body["values"])
 
+    # Assert which specific value wins, not just that something is
+    # significant - Supplier A is the all-stockout supplier, so it should
+    # have a positive standardized residual and be the top-ranked value.
+    top_value = body["values"][0]
+    assert top_value["value"] == "Supplier A"
+    assert top_value["is_significant"] is True
+    assert top_value["standardized_residual"] > 0
+
 
 async def test_org_isolation(client, test_engine):
     reg_a, _token_a = await _register_and_login(client, email="a@example.com", org_name="Org A")

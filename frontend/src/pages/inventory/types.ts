@@ -113,15 +113,16 @@ export function whyThisStatusSentence(line: InventoryAnalyticsLine): string {
 
 export function rcaTopValue(result: RcaResult): RcaValue | null {
   if (result.method !== "chi_square_independence") return null;
-  // Backend already sorts values by |standardized_residual| descending, so
-  // the first significant one is the biggest anomaly.
-  return result.values.find((v) => v.is_significant) ?? null;
+  // Backend sorts values by |standardized_residual| descending; require a
+  // positive residual too, since a negative one means "runs low LESS often
+  // than expected" - the opposite of what this banner reports.
+  return result.values.find((v) => v.is_significant && v.standardized_residual > 0) ?? null;
 }
 
 const DIMENSION_PHRASING: Record<string, (value: string) => string> = {
   supplier: (value) => `Items from ${value}`,
   item_type: (value) => `${humanize(value)} items`,
-  abc_class: (value) => `${value === "unclassified" ? "Unclassified" : value} class items`,
+  abc_class: (value) => `${abcLabel(value) ?? "Unclassified"} items`,
 };
 
 export function rcaBannerSentence(result: RcaResult): string | null {

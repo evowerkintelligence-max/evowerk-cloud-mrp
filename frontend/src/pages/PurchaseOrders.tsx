@@ -57,6 +57,15 @@ interface PurchaseOrderDetailResponse extends PurchaseOrderResponse {
 const CANCELLABLE_STATUSES = ["draft", "submitted"];
 const RECEIVABLE_STATUSES = ["submitted", "partially_received"];
 
+/** A submitted or partially-received PO whose expected delivery date has
+ * passed. Same treatment JobsPanel gives an overdue work order - a draft PO
+ * is excluded because it was never sent to the supplier in the first place. */
+function isLate(po: Pick<PurchaseOrderResponse, "status" | "expected_delivery_date">): boolean {
+  if (!RECEIVABLE_STATUSES.includes(po.status)) return false;
+  if (po.expected_delivery_date === null) return false;
+  return po.expected_delivery_date < new Date().toISOString().slice(0, 10);
+}
+
 export function PurchaseOrdersPanel() {
   const queryClient = useQueryClient();
   const [selectedPoId, setSelectedPoId] = useState<string | null>(null);
@@ -329,7 +338,10 @@ export function PurchaseOrdersPanel() {
                   <TD className="font-medium">PO-{po.po_number}</TD>
                   <TD>{po.supplier_name}</TD>
                   <TD>
-                    <Badge variant={poStatusVariant(po.status)}>{humanize(po.status)}</Badge>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge variant={poStatusVariant(po.status)}>{humanize(po.status)}</Badge>
+                      {isLate(po) && <Badge variant="danger">Late</Badge>}
+                    </div>
                   </TD>
                 </TR>
               ))}
@@ -368,6 +380,7 @@ export function PurchaseOrdersPanel() {
               <Badge variant={poStatusVariant(poDetail.data.status)}>
                 {humanize(poDetail.data.status)}
               </Badge>
+              {isLate(poDetail.data) && <Badge variant="danger">Late</Badge>}
             </CardTitle>
             <div className="flex items-center gap-2">
               {poDetail.data.status === "draft" && (

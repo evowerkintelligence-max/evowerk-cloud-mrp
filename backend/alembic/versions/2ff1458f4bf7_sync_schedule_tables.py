@@ -68,18 +68,22 @@ def upgrade() -> None:
     )
 
     # --- one-time data migration: alert_rules.config "stream_id" -> "schedule_id" ---
+    # config is `json` (not `jsonb`), which has no `?`/`-` operators - cast in
+    # and back out for this one statement.
     op.execute(
-        "UPDATE alert_rules SET config = (config - 'stream_id') || "
-        "jsonb_build_object('schedule_id', config->'stream_id') "
-        "WHERE type = 'stream_metric' AND config ? 'stream_id'"
+        "UPDATE alert_rules SET config = ("
+        "(config::jsonb - 'stream_id') || jsonb_build_object('schedule_id', config::jsonb->'stream_id')"
+        ")::json "
+        "WHERE type = 'stream_metric' AND config::jsonb ? 'stream_id'"
     )
 
 
 def downgrade() -> None:
     op.execute(
-        "UPDATE alert_rules SET config = (config - 'schedule_id') || "
-        "jsonb_build_object('stream_id', config->'schedule_id') "
-        "WHERE type = 'stream_metric' AND config ? 'schedule_id'"
+        "UPDATE alert_rules SET config = ("
+        "(config::jsonb - 'schedule_id') || jsonb_build_object('stream_id', config::jsonb->'schedule_id')"
+        ")::json "
+        "WHERE type = 'stream_metric' AND config::jsonb ? 'schedule_id'"
     )
 
     op.drop_constraint("fk_automl_runs_source_stream_id", "automl_runs", type_="foreignkey")

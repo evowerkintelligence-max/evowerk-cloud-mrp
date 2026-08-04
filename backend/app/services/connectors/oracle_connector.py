@@ -103,3 +103,29 @@ class OracleConnector:
 
     def fetch_all(self, max_rows: int = 500_000) -> list[dict[str, Any]]:
         return list(self.iter_rows(max_rows=max_rows))
+
+    def fetch_since(
+        self, cursor_column: str, cursor_value: str | None, max_rows: int = 500_000
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Same contract as SqlServerConnector.fetch_since - Oracle has no TOP,
+        so the row cap is a ROWNUM filter on the outer query instead."""
+        eng = self._engine()
+        try:
+            base = f"SELECT * FROM ({self.query})"
+            if cursor_value is not None:
+                inner = f"SELECT * FROM ({base}) WHERE {cursor_column} > :cursor_value ORDER BY {cursor_column}"  # nosec B608
+                wrapped = f"SELECT * FROM ({inner}) WHERE ROWNUM <= {max_rows}"  # nosec B608
+                params: dict[str, Any] = {"cursor_value": cursor_value}
+            else:
+                inner = f"SELECT * FROM ({base}) ORDER BY {cursor_column}"  # nosec B608
+                wrapped = f"SELECT * FROM ({inner}) WHERE ROWNUM <= {max_rows}"  # nosec B608
+                params = {}
+            with eng.connect() as conn:
+                result = conn.execute(text(wrapped), params)
+                cols = list(result.keys())
+                rows = [dict(zip(cols, row)) for row in result.fetchall()]
+        finally:
+            eng.dispose()
+
+        new_cursor = str(rows[-1][cursor_column]) if rows else cursor_value
+        return rows, new_cursor

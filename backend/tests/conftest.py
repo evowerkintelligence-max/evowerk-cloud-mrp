@@ -52,7 +52,6 @@ from app.models import (  # noqa: F401 - register models
     pace_tracking,
     procurement,
     rca_case,
-    realtime,
     report_spec,
     routing,
     sales,

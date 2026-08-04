@@ -1,11 +1,10 @@
 """RUL via Weibull survival analysis, calibrated against real breakdown
-history (DowntimeIncident where reason == "breakdown"). Refit is lazy,
-on the first read each day - this codebase has no job scheduler at all
-(confirmed: no APScheduler/celery/cron, and app.main's lifespan only starts
-the realtime/sensor Kafka consumers), and already has a documented pattern
-for exactly this problem: app.services.morning_brief's
-_ensure_todays_snapshot. This mirrors that pattern rather than adding a new
-scheduling mechanism."""
+history (DowntimeIncident where reason == "breakdown"). Refit is lazy, on the
+first read each day, rather than a dedicated daily job on the APScheduler
+instance app.services.sync_scheduler owns (that scheduler exists for
+per-schedule sync intervals, not a general-purpose cron) - mirrors the same
+pattern app.services.morning_brief's _ensure_todays_snapshot already uses for
+exactly this problem, rather than adding a second scheduling mechanism."""
 from __future__ import annotations
 
 import math

@@ -68,7 +68,3 @@ psycopg2-binary>=2.9.9  # Postgres (Azure Database for PostgreSQL / AWS RDS/Auro
 pymysql>=1.1.0      # MySQL (Azure Database for MySQL / AWS RDS/Aurora MySQL)
 paho-mqtt>=1.6.1,<2 # MQTT
 asyncua>=1.1.0      # OPC-UA
-
-# Realtime streaming: Redpanda (Kafka-protocol broker) + Flink pipeline
-kafka-python==3.0.8
-aiokafka==0.11.0

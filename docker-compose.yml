@@ -75,6 +75,32 @@ services:
     depends_on:
       - flink-jobmanager
 
+  # One-shot: the session cluster above (jobmanager+taskmanager) doesn't run
+  # any job by itself - streaming/realtime_metrics_job.py (the consumer that
+  # turns realtime.ticks into realtime.metrics for app.services.realtime_cache)
+  # has to be submitted via the Flink CLI. Without this, every TickProducer
+  # publishes into a void: Redpanda is reachable so the Kafka path is taken
+  # (not TickProducer's local-fallback), but nothing ever consumes it, so
+  # every stream sits at "not_running_in_this_process" forever regardless of
+  # whether the connector itself works. Idempotent (skips if the job is
+  # already listed) so re-running `docker compose up` doesn't submit a
+  # duplicate consumer of "realtime-metrics-job" on every restart.
+  flink-job-submitter:
+    build:
+      context: ./backend
+      dockerfile: streaming/flink.Dockerfile
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        until flink list -m flink-jobmanager:8081 >/tmp/joblist 2>&1; do sleep 2; done
+        grep -q 'realtime-metrics-job' /tmp/joblist || \
+          flink run --python /opt/flink/usrlib/streaming/realtime_metrics_job.py \
+            --jarfile /opt/flink/kafka-connector-bundle.jar -m flink-jobmanager:8081
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -106,6 +132,10 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    environment:
+      # "localhost" (vite.config.ts's default) is this container, not the
+      # backend - without this every proxied API call fails on ECONNREFUSED.
+      BACKEND_HOST: backend
     ports:
       - "5173:5173"
     depends_on:

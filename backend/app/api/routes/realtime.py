@@ -59,18 +59,43 @@ def _snapshot_dict(stream: RealtimeStream, alerts: list) -> dict:
     snapshot forever. And when a cached snapshot IS used, its "name" field
     is overlaid with stream.name: the Flink job's MetricSnapshot.name is the
     stream_id (its key), not the human-readable name - RealtimeStream isn't
-    in the tick payload, so this is the one place that can fill it in."""
+    in the tick payload, so this is the one place that can fill it in.
+
+    The in-process TickProducer (if this replica is the one running it) is
+    also consulted, two ways:
+      - No Kafka-derived snapshot exists yet, but the runner has one computed
+        locally (Redpanda unreachable - see TickProducer.local_snapshot) -
+        use that as a full stand-in, same shape as a Kafka-cache snapshot.
+      - Status/error: a connector failure (bad config, file missing, source
+        unreachable) never makes it into a Kafka tick - there's nothing to
+        publish when the poll itself failed - so it would otherwise be
+        invisible forever behind a vague "not_running_in_this_process"/
+        null-error snapshot."""
+    runner = realtime_service.get_runner(stream.id) if stream.desired_status != "stopped" else None
     snap = realtime_cache.get_snapshot(stream.id) if stream.desired_status != "stopped" else None
+    if snap is None and runner is not None:
+        snap = runner.local_snapshot()
     if snap is None:
+        if runner is not None and runner.status == "error":
+            status_val, error_val = "error", runner.error
+        else:
+            status_val = "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process"
+            error_val = stream.last_error
         snap = {
             "ts": None, "stream_id": str(stream.id), "name": stream.name,
-            "status": "stopped" if stream.desired_status == "stopped" else "not_running_in_this_process",
-            "error": stream.last_error,
+            "status": status_val, "error": error_val,
             "rows_in_window": 0, "rows_collected": 0,
             "duration": None, "duration_s": None, "last_tick_s": None, "metrics": {},
         }
     else:
         snap = {**snap, "name": stream.name}
+        if runner is not None and runner.status == "error":
+            # A tick succeeded at least once (there's a cached snapshot) but the
+            # runner has since started failing (e.g. source file/DB went away
+            # mid-stream) - the cache has no way to learn that on its own since
+            # a failed poll publishes nothing, so it would otherwise keep
+            # reporting the last-good snapshot as if the stream were still fine.
+            snap = {**snap, "status": "error", "error": runner.error}
     snap["alerts"] = [vars(a) for a in alerts]
     return snap
 

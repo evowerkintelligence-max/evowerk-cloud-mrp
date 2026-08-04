@@ -5,6 +5,12 @@ import react from "@vitejs/plugin-react";
 // Overridable so the SPA can point at a backend on a non-default port (e.g. when
 // something else already holds 8000 locally) without editing this file.
 const backendPort = process.env.BACKEND_PORT || "8000";
+// Host is overridable for the same reason. It has to be: under docker compose
+// this dev server runs in its own container, where "localhost" resolves to the
+// frontend container itself and every proxied API call dies on ECONNREFUSED.
+// Compose sets BACKEND_HOST=backend (the service name) so the proxy resolves
+// across the compose network; running `npm run dev` on the host needs no override.
+const backendHost = process.env.BACKEND_HOST || "localhost";
 
 export default defineConfig({
   plugins: [react()],
@@ -52,7 +58,7 @@ export default defineConfig({
       // calls never send that, so only real API calls get proxied.
       "^/(auth|orgs|items|boms|suppliers|purchase-orders|customers|sales-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|realtime|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm|admin|staff|planning|work-orders)(/|$|\\?)":
         {
-          target: `http://localhost:${backendPort}`,
+          target: `http://${backendHost}:${backendPort}`,
           bypass(req) {
             if (req.headers.accept?.includes("text/html")) return req.url;
           },

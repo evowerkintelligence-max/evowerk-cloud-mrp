@@ -296,37 +296,44 @@ def _eval_production_target(rule: AlertRule, dataset: Dataset, con, rel: str) ->
     )
 
 
-def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
-    """Targets a live realtime stream instead of a dataset - same
-    threshold/offender shape as the dataset evaluators above, reading the
-    realtime_cache snapshot (populated by the Flink windowed-aggregation
-    job) instead of querying a Dataset file.
+async def eval_stream_metric(db: AsyncSession, rule: AlertRule) -> AlertTrigger:
+    """Targets a scheduled sync's latest computed metrics instead of a
+    dataset - same threshold/offender shape as the dataset evaluators above.
+    Reads the most recent SyncTick for the schedule (app.services.sync_scheduler
+    writes one per successful sync) instead of the old realtime_cache snapshot.
 
-    Metric values here reflect only the last 5-second Flink window, not a
-    cumulative session total the way they did pre-Redpanda (see
-    streaming/metrics.py's module docstring) - thresholds on absolute-sum
-    metrics like throughput set before this pipeline shipped will need
-    re-tuning."""
-    from app.services import realtime_cache
+    Metric values here reflect only the batch synced in that one tick, not a
+    cumulative session total - same caveat app.services.metrics_calc carries
+    forward from the pre-Redpanda StreamRunner days: thresholds on
+    absolute-sum metrics like throughput may need re-tuning per your sync
+    interval."""
+    from app.models.sync_tick import SyncTick
 
     cfg = rule.config
-    stream_id = cfg.get("stream_id", "")
+    schedule_id = cfg.get("schedule_id", "")
     metric_name = cfg.get("metric_name", "")
     comparison = cfg.get("comparison", "gt")  # "gt" | "lt"
     threshold = float(cfg.get("threshold", 0))
 
-    snap = realtime_cache.get_snapshot(uuid.UUID(stream_id)) if stream_id else None
-    if snap is None:
+    tick = None
+    if schedule_id:
+        tick = (
+            await db.execute(
+                select(SyncTick).where(SyncTick.schedule_id == uuid.UUID(schedule_id))
+                .order_by(SyncTick.ts.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+    if tick is None:
         return AlertTrigger(
             str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
-            "Stream not running — nothing to evaluate.",
+            "Schedule has not synced yet — nothing to evaluate.",
         )
 
-    metrics = snap.get("metrics", {})
+    metrics = tick.metrics or {}
     if metric_name not in metrics:
         return AlertTrigger(
             str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
-            f"Metric '{metric_name}' not available on this stream yet.",
+            f"Metric '{metric_name}' not available on this schedule yet.",
         )
 
     value = float(metrics.get(metric_name) or 0.0)
@@ -338,7 +345,7 @@ def eval_stream_metric(rule: AlertRule) -> AlertTrigger:
     )
     return AlertTrigger(
         str(rule.id), rule.name, rule.type, rule.severity, triggered, round(value, 4), threshold,
-        message, [snap.get("name", stream_id)] if triggered else [],
+        message, [schedule_id] if triggered else [],
     )
 
 
@@ -576,7 +583,7 @@ async def evaluate_rule(
     *, dataset: Dataset | None = None, con=None, rel: str | None = None,
 ) -> AlertTrigger:
     if rule.type == "stream_metric":
-        return eval_stream_metric(rule)
+        return await eval_stream_metric(db, rule)
     if rule.type == "automl_risk":
         if rule.dataset_id is None:
             return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, "No dataset configured.")
@@ -669,37 +676,37 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
     return results
 
 
-async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUID) -> list[AlertTrigger]:
-    """Enabled stream_metric rules targeting this stream, evaluated live - used
-    by realtime.py's SSE feed to attach alarm state to each tick snapshot."""
+async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, schedule_id: uuid.UUID) -> list[AlertTrigger]:
+    """Enabled stream_metric rules targeting this schedule, evaluated live -
+    used by sync_schedules.py's list/snapshot endpoints to attach alarm state."""
     result = await db.execute(
         select(AlertRule).where(
             AlertRule.org_id == org_id,
             AlertRule.enabled.is_(True),
             AlertRule.type == "stream_metric",
-            AlertRule.config["stream_id"].as_string() == str(stream_id),
+            AlertRule.config["schedule_id"].as_string() == str(schedule_id),
         )
     )
-    return [eval_stream_metric(r) for r in result.scalars().all()]
+    return [await eval_stream_metric(db, r) for r in result.scalars().all()]
 
 
 async def stream_alerts_bulk(
-    db: AsyncSession, org_id: uuid.UUID, stream_ids: list[uuid.UUID],
+    db: AsyncSession, org_id: uuid.UUID, schedule_ids: list[uuid.UUID],
 ) -> dict[str, list[AlertTrigger]]:
-    """stream_alerts for N streams in one query - used by realtime.py's
-    list_streams so listing streams isn't a query per stream."""
-    if not stream_ids:
+    """stream_alerts for N schedules in one query - used by sync_schedules.py's
+    list_schedules so listing schedules isn't a query per schedule."""
+    if not schedule_ids:
         return {}
-    sids = [str(s) for s in stream_ids]
+    sids = [str(s) for s in schedule_ids]
     result = await db.execute(
         select(AlertRule).where(
             AlertRule.org_id == org_id,
             AlertRule.enabled.is_(True),
             AlertRule.type == "stream_metric",
-            AlertRule.config["stream_id"].as_string().in_(sids),
+            AlertRule.config["schedule_id"].as_string().in_(sids),
         )
     )
-    by_stream: dict[str, list[AlertTrigger]] = {}
+    by_schedule: dict[str, list[AlertTrigger]] = {}
     for rule in result.scalars().all():
-        by_stream.setdefault(rule.config.get("stream_id"), []).append(eval_stream_metric(rule))
-    return by_stream
+        by_schedule.setdefault(rule.config.get("schedule_id"), []).append(await eval_stream_metric(db, rule))
+    return by_schedule

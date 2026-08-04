@@ -21,13 +21,13 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete, select
 
 from app.db import session as db_session
+from app.models.automl_live_binding import AutoMLLiveBinding
 from app.models.integration import Integration
 from app.models.sync_schedule import SyncSchedule
 from app.models.sync_tick import SyncRow, SyncTick
-from app.services import metrics_calc
+from app.services import automl_realtime, metrics_calc, sensor_sync
 from app.services.connectors import get_connector
 from app.services.integrations import decrypt_config
-from app.services import sensor_sync
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,16 @@ async def _run_sync(db, schedule_id: uuid.UUID) -> None:
 
     if schedule.sensor_map and schedule.machine:
         await sensor_sync.process_rows(db, schedule, rows)
+
+    binding = (
+        await db.execute(
+            select(AutoMLLiveBinding).where(
+                AutoMLLiveBinding.schedule_id == schedule.id, AutoMLLiveBinding.enabled.is_(True)
+            )
+        )
+    ).scalar_one_or_none()
+    if binding is not None:
+        await automl_realtime.score_and_check_binding(db, binding.id, tick)
 
     schedule.cursor_value = new_cursor
     await db.commit()

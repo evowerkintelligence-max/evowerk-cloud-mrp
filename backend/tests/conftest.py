@@ -61,6 +61,8 @@ from app.models import (  # noqa: F401 - register models
     shift_schedule,
     simulation,
     staff,
+    sync_schedule,
+    sync_tick,
     telemetry,
     tenant,
     user,

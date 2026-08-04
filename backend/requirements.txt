@@ -63,6 +63,7 @@ google-genai>=1.0.0
 pyodbc>=5.1.0       # SQL Server - also needs the Microsoft ODBC driver installed
                     # in the runtime image (see Dockerfile); pip alone isn't enough.
 oracledb>=2.0.0     # Oracle - thin mode, no Oracle Instant Client needed
+psycopg2-binary>=2.9.9  # Postgres (Azure Database for PostgreSQL / AWS RDS/Aurora Postgres)
 paho-mqtt>=1.6.1,<2 # MQTT
 asyncua>=1.1.0      # OPC-UA
 

@@ -27,6 +27,7 @@ from app.models.sync_tick import SyncRow, SyncTick
 from app.services import metrics_calc
 from app.services.connectors import get_connector
 from app.services.integrations import decrypt_config
+from app.services import sensor_sync
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,9 @@ async def _run_sync(db, schedule_id: uuid.UUID) -> None:
         db.add(SyncRow(schedule_id=schedule.id, ts=now + timedelta(microseconds=i), row=row))
     await db.flush()
     await _trim_row_buffer(db, schedule.id)
+
+    if schedule.sensor_map and schedule.machine:
+        await sensor_sync.process_rows(db, schedule, rows)
 
     schedule.cursor_value = new_cursor
     await db.commit()

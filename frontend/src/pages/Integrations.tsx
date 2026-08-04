@@ -38,6 +38,8 @@ const CONFIG_HINTS: Record<string, string> = {
   excel: "No config needed here — upload a file after creating this integration.",
   sqlserver: '{"host": "...", "port": 1433, "database": "...", "username": "...", "password": "...", "query": "SELECT ..."}',
   oracle: '{"host": "...", "port": 1521, "service_name": "...", "username": "...", "password": "...", "query": "SELECT ..."}',
+  postgres: '{"host": "...", "port": 5432, "database": "...", "username": "...", "password": "...", "query": "SELECT ..."}',
+  mysql: '{"host": "...", "port": 3306, "database": "...", "username": "...", "password": "...", "query": "SELECT ..."}',
   sap_odata: '{"base_url": "https://...", "endpoint": "/sap/opu/odata/...", "auth_type": "basic", "auth_value": "user:pass", "response_path": "value"}',
   erp_rest: '{"base_url": "https://...", "endpoint": "/api/...", "auth_type": "bearer", "auth_value": "token", "response_path": "data"}',
   mes_rest: '{"base_url": "https://...", "endpoint": "/api/...", "auth_type": "none", "response_path": "value"}',

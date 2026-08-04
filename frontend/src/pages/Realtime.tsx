@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Radio } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-import { subscribeToSSE } from "../lib/sse";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
@@ -17,19 +16,16 @@ import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/tabl
 interface IntegrationOption {
   id: string;
   name: string;
+  type: string;
 }
 
-interface StreamSnapshot {
+interface ScheduleSnapshot {
   ts: string | null;
-  stream_id: string;
+  schedule_id: string;
   name: string;
-  status: "running" | "error" | "stopped" | "not_running_in_this_process";
+  status: "running" | "error" | "stopped" | "not_synced_yet";
   error: string | null;
-  rows_in_window: number;
-  rows_collected: number;
-  duration: string | null;
-  duration_s: number | null;
-  last_tick_s: number | null;
+  row_count: number;
   metrics: Record<string, number>;
 }
 
@@ -37,10 +33,14 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "danger" | "neutral
   running: "success",
   error: "danger",
   stopped: "neutral",
-  not_running_in_this_process: "warning",
+  not_synced_yet: "warning",
 };
 
-// column_map keys StreamRunner.snapshot() reads - see app/services/realtime.py.
+// The subset of Integration types whose connector implements fetch_since() -
+// keep this in sync with app/api/routes/sync_schedules.py's _INCREMENTAL_TYPES.
+const INCREMENTAL_TYPES = new Set(["sqlserver", "oracle", "postgres", "mysql"]);
+
+// column_map keys app/services/metrics_calc.py's compute_window_metrics reads.
 const COLUMN_MAP_FIELDS: { key: string; label: string }[] = [
   { key: "units_col", label: "Units column" },
   { key: "total_units_col", label: "Total units column" },
@@ -57,36 +57,37 @@ function emptyForm() {
     integration_id: "",
     name: "",
     machine: "",
-    interval_seconds: 5,
+    interval_seconds: 300,
+    cursor_column: "",
     columnMap: Object.fromEntries(COLUMN_MAP_FIELDS.map((f) => [f.key, ""])) as Record<string, string>,
     sensorMap: [] as { name: string; field: string }[],
   };
 }
 
-function LiveMetrics({ streamId, initial }: { streamId: string; initial: StreamSnapshot }) {
-  const [snap, setSnap] = useState<StreamSnapshot>(initial);
+function LiveMetrics({ scheduleId, initial }: { scheduleId: string; initial: ScheduleSnapshot }) {
+  const { data: snap } = useQuery<ScheduleSnapshot>({
+    queryKey: ["sync-schedule-snapshot", scheduleId],
+    queryFn: async () => {
+      const res = await apiFetch(`/sync-schedules/${scheduleId}/snapshot`);
+      if (!res.ok) throw new Error("Failed to load snapshot");
+      return res.json();
+    },
+    initialData: initial,
+    refetchInterval: 30_000, // polling replaces the old SSE push
+  });
 
-  useEffect(() => {
-    const unsubscribe = subscribeToSSE<StreamSnapshot>(
-      `/realtime/streams/${streamId}/events`,
-      (data) => setSnap(data),
-    );
-    return unsubscribe;
-  }, [streamId]);
-
-  const metricEntries = Object.entries(snap.metrics);
+  const current = snap ?? initial;
+  const metricEntries = Object.entries(current.metrics);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <Badge variant={STATUS_VARIANT[snap.status] ?? "neutral"}>{snap.status.replace(/_/g, " ")}</Badge>
-        {snap.error && <span className="text-sm text-destructive">{snap.error}</span>}
+        <Badge variant={STATUS_VARIANT[current.status] ?? "neutral"}>{current.status.replace(/_/g, " ")}</Badge>
+        {current.error && <span className="text-sm text-destructive">{current.error}</span>}
       </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Rows collected" value={snap.rows_collected} tone="primary" />
-        <StatCard label="Rows in window" value={snap.rows_in_window} tone="accent" />
-        <StatCard label="Duration" value={snap.duration ?? "—"} tone="success" />
-        <StatCard label="Last tick" value={snap.last_tick_s != null ? `${snap.last_tick_s}s ago` : "—"} tone="warning" />
+        <StatCard label="Rows in last sync" value={current.row_count} tone="primary" />
+        <StatCard label="Last synced" value={current.ts ? new Date(current.ts).toLocaleTimeString() : "—"} tone="accent" />
       </div>
       {metricEntries.length > 0 && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -109,7 +110,7 @@ export function Realtime() {
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState(emptyForm());
   const [formError, setFormError] = useState<string | null>(null);
-  const [liveFor, setLiveFor] = useState<StreamSnapshot | null>(null);
+  const [liveFor, setLiveFor] = useState<ScheduleSnapshot | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const integrations = useQuery<IntegrationOption[]>({
@@ -120,15 +121,16 @@ export function Realtime() {
       return res.json();
     },
   });
+  const incrementalIntegrations = integrations.data?.filter((i) => INCREMENTAL_TYPES.has(i.type)) ?? [];
 
-  const streams = useQuery<{ streams: StreamSnapshot[] }>({
-    queryKey: ["realtime-streams"],
+  const schedules = useQuery<{ schedules: ScheduleSnapshot[] }>({
+    queryKey: ["sync-schedules"],
     queryFn: async () => {
-      const res = await apiFetch("/realtime/streams");
-      if (!res.ok) throw new Error("Failed to load streams");
+      const res = await apiFetch("/sync-schedules");
+      if (!res.ok) throw new Error("Failed to load schedules");
       return res.json();
     },
-    refetchInterval: 5000, // list view uses polling; the live detail view below uses SSE
+    refetchInterval: 30_000,
   });
 
   const create = useMutation({
@@ -137,67 +139,68 @@ export function Realtime() {
       const sensor_map = Object.fromEntries(
         form.sensorMap.filter((s) => s.name.trim() && s.field.trim()).map((s) => [s.name.trim(), s.field.trim()]),
       );
-      const res = await apiFetch("/realtime/streams", {
+      const res = await apiFetch("/sync-schedules", {
         method: "POST",
         body: JSON.stringify({
           integration_id: form.integration_id,
           name: form.name,
           machine: form.machine.trim() || null,
           interval_seconds: form.interval_seconds,
+          cursor_column: form.cursor_column,
           column_map,
           sensor_map,
         }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create stream");
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create schedule");
       return res.json();
     },
     onSuccess: () => {
       setFormOpen(false);
       setForm(emptyForm());
       setFormError(null);
-      qc.invalidateQueries({ queryKey: ["realtime-streams"] });
+      qc.invalidateQueries({ queryKey: ["sync-schedules"] });
     },
     onError: (e: Error) => setFormError(e.message),
   });
 
   const toggle = useMutation({
-    mutationFn: async (stream: StreamSnapshot) => {
-      const action = stream.status === "stopped" ? "start" : "stop";
-      const res = await apiFetch(`/realtime/streams/${stream.stream_id}/${action}`, { method: "POST" });
+    mutationFn: async (schedule: ScheduleSnapshot) => {
+      const action = schedule.status === "stopped" ? "start" : "stop";
+      const res = await apiFetch(`/sync-schedules/${schedule.schedule_id}/${action}`, { method: "POST" });
       if (!res.ok) throw new Error("Request failed");
       return res.json();
     },
-    onMutate: (stream) => setBusyId(stream.stream_id),
+    onMutate: (schedule) => setBusyId(schedule.schedule_id),
     onSettled: () => {
       setBusyId(null);
-      qc.invalidateQueries({ queryKey: ["realtime-streams"] });
+      qc.invalidateQueries({ queryKey: ["sync-schedules"] });
     },
   });
 
   const remove = useMutation({
-    mutationFn: async (streamId: string) => {
-      const res = await apiFetch(`/realtime/streams/${streamId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete stream");
+    mutationFn: async (scheduleId: string) => {
+      const res = await apiFetch(`/sync-schedules/${scheduleId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete schedule");
     },
     onSettled: () => {
       setBusyId(null);
-      qc.invalidateQueries({ queryKey: ["realtime-streams"] });
+      qc.invalidateQueries({ queryKey: ["sync-schedules"] });
     },
   });
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Realtime"
-        description="Poll an integration on an interval and roll up live throughput/scrap/OEE metrics. Streams keep running across a backend restart if they were left running."
-        actions={<Button onClick={() => setFormOpen(true)}>New stream</Button>}
+        title="Scheduled sync"
+        description="Pull new rows from a cloud database integration on an interval and roll up throughput/scrap/OEE metrics from each batch."
+        actions={<Button onClick={() => setFormOpen(true)}>New schedule</Button>}
       />
 
-      {streams.data && streams.data.streams.length === 0 ? (
+      {schedules.data && schedules.data.schedules.length === 0 ? (
         <EmptyState
           icon={<Radio />}
-          title="No live streams yet"
-          description="Pick an integration and poll it on an interval to see live metrics."
+          title="No scheduled syncs yet"
+          description="Pick a cloud database integration and sync it on an interval to see rolled-up metrics."
         />
       ) : (
         <TableWrap>
@@ -206,29 +209,29 @@ export function Realtime() {
               <TR>
                 <TH>Name</TH>
                 <TH>Status</TH>
-                <TH>Rows collected</TH>
-                <TH>Last tick</TH>
+                <TH>Rows (last sync)</TH>
+                <TH>Last synced</TH>
                 <TH />
               </TR>
             </THead>
             <TBody>
-              {streams.data?.streams.map((s) => (
-                <TR key={s.stream_id}>
+              {schedules.data?.schedules.map((s) => (
+                <TR key={s.schedule_id}>
                   <TD className="font-medium">{s.name}</TD>
                   <TD>
                     <Badge variant={STATUS_VARIANT[s.status] ?? "neutral"}>{s.status.replace(/_/g, " ")}</Badge>
                   </TD>
-                  <TD className="text-muted-foreground">{s.rows_collected}</TD>
-                  <TD className="text-muted-foreground">{s.last_tick_s != null ? `${s.last_tick_s}s ago` : "—"}</TD>
+                  <TD className="text-muted-foreground">{s.row_count}</TD>
+                  <TD className="text-muted-foreground">{s.ts ? new Date(s.ts).toLocaleTimeString() : "—"}</TD>
                   <TD className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button variant="secondary" size="sm" onClick={() => setLiveFor(s)}>
-                        View live
+                        View details
                       </Button>
                       <Button
                         variant="secondary"
                         size="sm"
-                        loading={busyId === s.stream_id && toggle.isPending}
+                        loading={busyId === s.schedule_id && toggle.isPending}
                         onClick={() => toggle.mutate(s)}
                       >
                         {s.status === "stopped" ? "Start" : "Stop"}
@@ -236,10 +239,10 @@ export function Realtime() {
                       <Button
                         variant="destructive"
                         size="sm"
-                        loading={busyId === s.stream_id && remove.isPending}
+                        loading={busyId === s.schedule_id && remove.isPending}
                         onClick={() => {
-                          setBusyId(s.stream_id);
-                          remove.mutate(s.stream_id);
+                          setBusyId(s.schedule_id);
+                          remove.mutate(s.schedule_id);
                         }}
                       >
                         Delete
@@ -253,7 +256,7 @@ export function Realtime() {
         </TableWrap>
       )}
 
-      <Dialog open={formOpen} onClose={() => setFormOpen(false)} title="New stream">
+      <Dialog open={formOpen} onClose={() => setFormOpen(false)} title="New scheduled sync">
         <form
           className="space-y-4"
           onSubmit={(e) => {
@@ -261,14 +264,14 @@ export function Realtime() {
             create.mutate();
           }}
         >
-          <Field label="Integration">
+          <Field label="Integration" hint="Only cloud-database integrations that support incremental sync are listed.">
             <Select
               value={form.integration_id}
               onChange={(e) => setForm((f) => ({ ...f, integration_id: e.target.value }))}
               required
             >
               <option value="">Select an integration…</option>
-              {integrations.data?.map((i) => (
+              {incrementalIntegrations.map((i) => (
                 <option key={i.id} value={i.id}>{i.name}</option>
               ))}
             </Select>
@@ -276,13 +279,20 @@ export function Realtime() {
           <Field label="Name">
             <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           </Field>
-          <Field label="Poll interval (seconds)">
+          <Field label="Sync interval (seconds)" hint="Minimum 60 seconds — this runs on a schedule, not a live poll loop.">
             <Input
               type="number"
-              min={1}
-              max={300}
+              min={60}
+              max={86400}
               value={form.interval_seconds}
               onChange={(e) => setForm((f) => ({ ...f, interval_seconds: Number(e.target.value) }))}
+            />
+          </Field>
+          <Field label="Cursor column" hint="A timestamp or auto-increment id column in your source query — used to fetch only new rows each sync.">
+            <Input
+              value={form.cursor_column}
+              onChange={(e) => setForm((f) => ({ ...f, cursor_column: e.target.value }))}
+              required
             />
           </Field>
           <Field label="Column map" hint="Map your source's column names to the metrics engine reads. Leave blank to skip a metric.">
@@ -299,13 +309,13 @@ export function Realtime() {
               ))}
             </div>
           </Field>
-          <Field label="Machine (for CBM, optional)" hint="Set this to feed live sensor data from this stream into Predictive Maintenance's condition-based monitoring.">
+          <Field label="Machine (for CBM, optional)" hint="Set this to feed synced sensor data into Predictive Maintenance's condition-based monitoring.">
             <Input value={form.machine} onChange={(e) => setForm((f) => ({ ...f, machine: e.target.value }))} />
           </Field>
           {form.machine && (
             <Field
               label="Sensor map"
-              hint="Sensor name → field to read from each polled row. For an OPC-UA stream (one node per stream), map a single sensor name to the field 'value'."
+              hint="Sensor name → field to read from each synced row."
             >
               <div className="space-y-2">
                 {form.sensorMap.map((s, i) => (
@@ -355,8 +365,8 @@ export function Realtime() {
         </form>
       </Dialog>
 
-      <Dialog open={liveFor !== null} onClose={() => setLiveFor(null)} title={`Live — ${liveFor?.name ?? ""}`} className="max-w-2xl">
-        {liveFor && <LiveMetrics streamId={liveFor.stream_id} initial={liveFor} />}
+      <Dialog open={liveFor !== null} onClose={() => setLiveFor(null)} title={`Details — ${liveFor?.name ?? ""}`} className="max-w-2xl">
+        {liveFor && <LiveMetrics scheduleId={liveFor.schedule_id} initial={liveFor} />}
       </Dialog>
     </div>
   );

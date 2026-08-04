@@ -10,8 +10,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "2ff1458f4bf7"
-down_revision = "c4d5e6f7a8b9"
+revision = "2ff1458f4bf7"  # pragma: allowlist secret
+down_revision = "c4d5e6f7a8b9"  # pragma: allowlist secret
 branch_labels = None
 depends_on = None
 

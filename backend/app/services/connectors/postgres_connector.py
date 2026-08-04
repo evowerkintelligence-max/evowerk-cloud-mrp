@@ -95,9 +95,9 @@ class PostgresConnector:
             base = f"SELECT * FROM ({self.query}) AS _src"  # nosec B608
             if cursor_value is not None:
                 wrapped = (
-                    f"SELECT * FROM ({base}) AS _cursor WHERE {cursor_column} > :cursor_value "
+                    f"SELECT * FROM ({base}) AS _cursor WHERE {cursor_column} > :cursor_value "  # nosec B608 - cursor_column is admin-picked from preview() output, not request-time user input
                     f"ORDER BY {cursor_column} LIMIT {max_rows}"
-                )  # nosec B608 - cursor_column is admin-picked from preview() output, not request-time user input
+                )
                 params: dict[str, Any] = {"cursor_value": cursor_value}
             else:
                 wrapped = f"SELECT * FROM ({base}) AS _cursor ORDER BY {cursor_column} LIMIT {max_rows}"  # nosec B608

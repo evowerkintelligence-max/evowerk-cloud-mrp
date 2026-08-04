@@ -111,7 +111,7 @@ class OracleConnector:
         so the row cap is a ROWNUM filter on the outer query instead."""
         eng = self._engine()
         try:
-            base = f"SELECT * FROM ({self.query})"
+            base = f"SELECT * FROM ({self.query})"  # nosec B608
             if cursor_value is not None:
                 inner = f"SELECT * FROM ({base}) WHERE {cursor_column} > :cursor_value ORDER BY {cursor_column}"  # nosec B608
                 wrapped = f"SELECT * FROM ({inner}) WHERE ROWNUM <= {max_rows}"  # nosec B608

@@ -120,9 +120,9 @@ class SqlServerConnector:
             base = f"SELECT * FROM ({self.query}) AS _src"  # nosec B608 - self.query is admin-configured, same trust note as preview()
             if cursor_value is not None:
                 wrapped = (
-                    f"SELECT TOP {max_rows} * FROM ({base}) AS _cursor "
+                    f"SELECT TOP {max_rows} * FROM ({base}) AS _cursor "  # nosec B608 - cursor_column is admin-picked from preview() output, not request-time user input
                     f"WHERE {cursor_column} > :cursor_value ORDER BY {cursor_column}"
-                )  # nosec B608 - cursor_column is admin-picked from preview() output, not request-time user input
+                )
                 params: dict[str, Any] = {"cursor_value": cursor_value}
             else:
                 wrapped = f"SELECT TOP {max_rows} * FROM ({base}) AS _cursor ORDER BY {cursor_column}"  # nosec B608

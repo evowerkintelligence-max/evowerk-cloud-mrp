@@ -296,28 +296,44 @@ def _eval_production_target(rule: AlertRule, dataset: Dataset, con, rel: str) ->
     )
 
 
-def _eval_stream_metric_snap(rule: AlertRule, snap: dict | None) -> AlertTrigger:
-    """Pure half of eval_stream_metric: evaluates one rule against an
-    already-fetched snapshot dict (or None when the stream is missing or has
-    never produced a sample). Split out so stream_alerts_bulk can prefetch
-    snapshots once per stream instead of once per rule."""
+async def eval_stream_metric(db: AsyncSession, rule: AlertRule) -> AlertTrigger:
+    """Targets a scheduled sync's latest computed metrics instead of a
+    dataset - same threshold/offender shape as the dataset evaluators above.
+    Reads the most recent SyncTick for the schedule (app.services.sync_scheduler
+    writes one per successful sync) instead of the old realtime_cache snapshot.
+
+    Metric values here reflect only the batch synced in that one tick, not a
+    cumulative session total - same caveat app.services.metrics_calc carries
+    forward from the pre-Redpanda StreamRunner days: thresholds on
+    absolute-sum metrics like throughput may need re-tuning per your sync
+    interval."""
+    from app.models.sync_tick import SyncTick
+
     cfg = rule.config
-    stream_id = cfg.get("stream_id", "")
+    schedule_id = cfg.get("schedule_id", "")
     metric_name = cfg.get("metric_name", "")
     comparison = cfg.get("comparison", "gt")  # "gt" | "lt"
     threshold = float(cfg.get("threshold", 0))
 
-    if snap is None:
+    tick = None
+    if schedule_id:
+        tick = (
+            await db.execute(
+                select(SyncTick).where(SyncTick.schedule_id == uuid.UUID(schedule_id))
+                .order_by(SyncTick.ts.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+    if tick is None:
         return AlertTrigger(
             str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
-            "Stream not running — nothing to evaluate.",
+            "Schedule has not synced yet — nothing to evaluate.",
         )
 
-    metrics = snap.get("metrics", {})
+    metrics = tick.metrics or {}
     if metric_name not in metrics:
         return AlertTrigger(
             str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, threshold,
-            f"Metric '{metric_name}' not available on this stream yet.",
+            f"Metric '{metric_name}' not available on this schedule yet.",
         )
 
     value = float(metrics.get(metric_name) or 0.0)
@@ -329,35 +345,8 @@ def _eval_stream_metric_snap(rule: AlertRule, snap: dict | None) -> AlertTrigger
     )
     return AlertTrigger(
         str(rule.id), rule.name, rule.type, rule.severity, triggered, round(value, 4), threshold,
-        message, [snap.get("name", stream_id)] if triggered else [],
+        message, [schedule_id] if triggered else [],
     )
-
-
-async def eval_stream_metric(db: AsyncSession, org_id: uuid.UUID, rule: AlertRule) -> AlertTrigger:
-    """Targets a live realtime stream instead of a dataset - same
-    threshold/offender shape as the dataset evaluators, reading the stream's
-    latest persisted RealtimeSample (metrics are per poll window over new
-    rows only; thresholds tuned against the old cumulative scale need
-    re-tuning)."""
-    from app.models.realtime import RealtimeStream
-    from app.services import realtime as realtime_service
-
-    stream_id = rule.config.get("stream_id", "")
-    stream = None
-    if stream_id:
-        stream = (
-            await db.execute(
-                select(RealtimeStream).where(
-                    RealtimeStream.id == uuid.UUID(stream_id), RealtimeStream.org_id == org_id
-                )
-            )
-        ).scalar_one_or_none()
-    if stream is None:
-        return _eval_stream_metric_snap(rule, None)
-    snap = await realtime_service.latest_snapshot(db, stream)
-    if snap.get("ts") is None and not snap.get("metrics"):
-        return _eval_stream_metric_snap(rule, None)  # no sample and no external metric yet
-    return _eval_stream_metric_snap(rule, snap)
 
 
 async def _eval_automl_risk(
@@ -594,7 +583,7 @@ async def evaluate_rule(
     *, dataset: Dataset | None = None, con=None, rel: str | None = None,
 ) -> AlertTrigger:
     if rule.type == "stream_metric":
-        return await eval_stream_metric(db, org_id, rule)
+        return await eval_stream_metric(db, rule)
     if rule.type == "automl_risk":
         if rule.dataset_id is None:
             return AlertTrigger(str(rule.id), rule.name, rule.type, rule.severity, False, 0.0, 0.0, "No dataset configured.")
@@ -687,71 +676,37 @@ async def scan_all(db: AsyncSession, org_id: uuid.UUID) -> list[AlertTrigger]:
     return results
 
 
-async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, stream_id: uuid.UUID) -> list[AlertTrigger]:
-    """Enabled stream_metric rules targeting this stream, evaluated live - used
-    by realtime.py's snapshot route to attach alarm state to each snapshot."""
+async def stream_alerts(db: AsyncSession, org_id: uuid.UUID, schedule_id: uuid.UUID) -> list[AlertTrigger]:
+    """Enabled stream_metric rules targeting this schedule, evaluated live -
+    used by sync_schedules.py's list/snapshot endpoints to attach alarm state."""
     result = await db.execute(
         select(AlertRule).where(
             AlertRule.org_id == org_id,
             AlertRule.enabled.is_(True),
             AlertRule.type == "stream_metric",
-            AlertRule.config["stream_id"].as_string() == str(stream_id),
+            AlertRule.config["schedule_id"].as_string() == str(schedule_id),
         )
     )
-    rules = result.scalars().all()
-    if not rules:
-        return []
-    from app.models.realtime import RealtimeStream
-    from app.services import realtime as realtime_service
-
-    stream = (
-        await db.execute(
-            select(RealtimeStream).where(RealtimeStream.id == stream_id, RealtimeStream.org_id == org_id)
-        )
-    ).scalar_one_or_none()
-    snap = await realtime_service.latest_snapshot(db, stream) if stream is not None else None
-    if snap is not None and snap.get("ts") is None and not snap.get("metrics"):
-        snap = None
-    return [_eval_stream_metric_snap(r, snap) for r in rules]
+    return [await eval_stream_metric(db, r) for r in result.scalars().all()]
 
 
 async def stream_alerts_bulk(
-    db: AsyncSession, org_id: uuid.UUID, stream_ids: list[uuid.UUID],
+    db: AsyncSession, org_id: uuid.UUID, schedule_ids: list[uuid.UUID],
 ) -> dict[str, list[AlertTrigger]]:
-    """stream_alerts for N streams in one query - used by realtime.py's
-    list_streams so listing streams isn't a query per stream."""
-    if not stream_ids:
+    """stream_alerts for N schedules in one query - used by sync_schedules.py's
+    list_schedules so listing schedules isn't a query per schedule."""
+    if not schedule_ids:
         return {}
-    sids = [str(s) for s in stream_ids]
+    sids = [str(s) for s in schedule_ids]
     result = await db.execute(
         select(AlertRule).where(
             AlertRule.org_id == org_id,
             AlertRule.enabled.is_(True),
             AlertRule.type == "stream_metric",
-            AlertRule.config["stream_id"].as_string().in_(sids),
+            AlertRule.config["schedule_id"].as_string().in_(sids),
         )
     )
-    rules = result.scalars().all()
-    if not rules:
-        return {}
-    from app.models.realtime import RealtimeStream
-    from app.services import realtime as realtime_service
-
-    rule_sids = {rule.config.get("stream_id") for rule in rules if rule.config.get("stream_id")}
-    streams = (
-        await db.execute(
-            select(RealtimeStream).where(
-                RealtimeStream.org_id == org_id,
-                RealtimeStream.id.in_([uuid.UUID(s) for s in rule_sids]),
-            )
-        )
-    ).scalars().all()
-    snaps = await realtime_service.latest_snapshots_bulk(db, streams)
-    by_stream: dict[str, list[AlertTrigger]] = {}
-    for rule in rules:
-        sid = rule.config.get("stream_id")
-        snap = snaps.get(sid)
-        if snap is not None and snap.get("ts") is None and not snap.get("metrics"):
-            snap = None
-        by_stream.setdefault(sid, []).append(_eval_stream_metric_snap(rule, snap))
-    return by_stream
+    by_schedule: dict[str, list[AlertTrigger]] = {}
+    for rule in result.scalars().all():
+        by_schedule.setdefault(rule.config.get("schedule_id"), []).append(await eval_stream_metric(db, rule))
+    return by_schedule

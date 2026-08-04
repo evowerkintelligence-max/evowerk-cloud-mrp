@@ -15,9 +15,9 @@ import { useDatasets } from "@/pages/analytics/shared";
 import { cn } from "@/lib/utils";
 
 // Ported from the desktop app's renderer/js/alerts.js + routes/alerts.py:
-// threshold rules scanned on demand against a Dataset or a live realtime
-// stream, instead of a background job - the user clicks Scan (or opens this
-// page) to evaluate every enabled rule right now.
+// threshold rules scanned on demand against a Dataset or a scheduled sync's
+// latest metrics, instead of a background job - the user clicks Scan (or
+// opens this page) to evaluate every enabled rule right now.
 
 type AlertType = "machine_downtime" | "quality" | "scrap" | "inventory" | "production_target" | "stream_metric";
 type Severity = "critical" | "warning" | "info";
@@ -51,8 +51,8 @@ interface ScanResponse {
   evaluated_count: number;
 }
 
-interface RealtimeStream {
-  stream_id: string;
+interface ScheduleOption {
+  schedule_id: string;
   name: string;
 }
 
@@ -77,10 +77,10 @@ const SEV_VARIANT: Record<Severity, "danger" | "warning" | "info"> = {
   info: "info",
 };
 
-function useRealtimeStreams() {
-  return useQuery<RealtimeStream[]>({
-    queryKey: ["realtime-streams"],
-    queryFn: async () => (await j<{ streams: RealtimeStream[] }>(apiFetch("/realtime/streams"))).streams,
+function useSyncSchedules() {
+  return useQuery<ScheduleOption[]>({
+    queryKey: ["sync-schedules"],
+    queryFn: async () => (await j<{ schedules: ScheduleOption[] }>(apiFetch("/sync-schedules"))).schedules,
   });
 }
 
@@ -97,7 +97,7 @@ function RuleForm({
 }) {
   const qc = useQueryClient();
   const datasets = useDatasets();
-  const streams = useRealtimeStreams();
+  const schedules = useSyncSchedules();
 
   const [name, setName] = useState(editing?.name ?? "");
   const [type, setType] = useState<AlertType | "">(editing?.type ?? "");
@@ -195,11 +195,11 @@ function RuleForm({
             </Field>
           )}
           {type === "stream_metric" && (
-            <Field label="Stream">
-              <Select value={form.stream_id ?? ""} onChange={set("stream_id")}>
-                <option value="">Select stream…</option>
-                {(streams.data ?? []).map((s) => (
-                  <option key={s.stream_id} value={s.stream_id}>
+            <Field label="Scheduled sync">
+              <Select value={form.schedule_id ?? ""} onChange={set("schedule_id")}>
+                <option value="">Select schedule…</option>
+                {(schedules.data ?? []).map((s) => (
+                  <option key={s.schedule_id} value={s.schedule_id}>
                     {s.name}
                   </option>
                 ))}
@@ -327,7 +327,7 @@ function buildConfig(type: AlertType, form: FormState): Record<string, unknown> 
       };
     case "stream_metric":
       return {
-        stream_id: form.stream_id ?? "", metric_name: form.metric_name ?? "",
+        schedule_id: form.schedule_id ?? "", metric_name: form.metric_name ?? "",
         comparison: form.comparison || "gt", threshold: num("threshold") ?? 0, ...webhook,
       };
     default:
@@ -426,7 +426,7 @@ export function Alerts() {
     <div className="space-y-6">
       <PageHeader
         title="Alerts"
-        description="Define threshold rules and scan datasets or live streams for breaches."
+        description="Define threshold rules and scan datasets or scheduled syncs for breaches."
         actions={
           <div className="flex gap-2">
             <Button variant="secondary" loading={scanAll.isPending} onClick={() => scanAll.mutate()}>

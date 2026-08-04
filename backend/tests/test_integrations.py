@@ -150,13 +150,13 @@ async def test_invalid_type_rejected(client):
     assert res.status_code == 400
 
 
-async def test_integration_types_endpoint_lists_all_nine_connectors(client):
+async def test_integration_types_endpoint_lists_all_eleven_connectors(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
     res = await client.get("/integrations/types", headers=headers)
     assert res.status_code == 200
     ids = {t["id"] for t in res.json()["types"]}
     assert ids == {
-        "csv", "excel", "sqlserver", "oracle", "sap_odata", "erp_rest", "mes_rest",
+        "csv", "excel", "sqlserver", "oracle", "postgres", "mysql", "sap_odata", "erp_rest", "mes_rest",
         "opcua", "mqtt", "opcda", "pi_webapi",
     }

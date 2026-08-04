@@ -26,11 +26,11 @@ class AutoMLRun(Base):
         Uuid(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     template_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    # Set when this run was trained (or re-trained) off a materialized RealtimeStream
-    # snapshot rather than a one-off upload - see app.services.automl_realtime. None
+    # Set when this run was trained (or re-trained) off a materialized SyncSchedule
+    # buffer rather than a one-off upload - see app.services.automl_realtime. None
     # for every ordinary run, including template runs trained from a static Dataset.
     source_stream_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("realtime_streams.id", ondelete="SET NULL"), nullable=True
+        Uuid(as_uuid=True), ForeignKey("sync_schedules.id", ondelete="SET NULL"), nullable=True
     )
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
 

@@ -5,6 +5,7 @@ pydantic-settings>=2.2.0
 sqlalchemy>=2.0.29
 asyncpg>=0.29.0
 alembic>=1.13.1
+apscheduler>=3.10.4
 passlib[argon2]>=1.7.4
 pyjwt>=2.13.0
 fastapi-users[sqlalchemy]>=15.0.2,<16.0.0
@@ -63,5 +64,7 @@ google-genai>=1.0.0
 pyodbc>=5.1.0       # SQL Server - also needs the Microsoft ODBC driver installed
                     # in the runtime image (see Dockerfile); pip alone isn't enough.
 oracledb>=2.0.0     # Oracle - thin mode, no Oracle Instant Client needed
+psycopg2-binary>=2.9.9  # Postgres (Azure Database for PostgreSQL / AWS RDS/Aurora Postgres)
+pymysql>=1.1.0      # MySQL (Azure Database for MySQL / AWS RDS/Aurora MySQL)
 paho-mqtt>=1.6.1,<2 # MQTT
 asyncua>=1.1.0      # OPC-UA

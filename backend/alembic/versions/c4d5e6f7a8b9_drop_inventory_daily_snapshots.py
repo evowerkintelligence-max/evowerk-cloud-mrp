@@ -1,7 +1,7 @@
 """drop inventory_daily_snapshots (inventory analytics removal)
 
 Revision ID: c4d5e6f7a8b9
-Revises: a3e9c1f52d84
+Revises: d5b0c4f936e2
 Create Date: 2026-07-31
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "c4d5e6f7a8b9"  # pragma: allowlist secret
-down_revision = "a3e9c1f52d84"  # pragma: allowlist secret
+down_revision = "d5b0c4f936e2"  # pragma: allowlist secret
 branch_labels = None
 depends_on = None
 

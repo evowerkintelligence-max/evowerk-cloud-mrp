@@ -108,3 +108,31 @@ class SqlServerConnector:
 
     def fetch_all(self, max_rows: int = 500_000) -> list[dict[str, Any]]:
         return list(self.iter_rows(max_rows=max_rows))
+
+    def fetch_since(
+        self, cursor_column: str, cursor_value: str | None, max_rows: int = 500_000
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Incremental pull: only rows newer than cursor_value, ordered by
+        cursor_column ascending so the last row is the new cursor. First run
+        (cursor_value=None) pulls everything up to max_rows."""
+        eng = self._engine()
+        try:
+            base = f"SELECT * FROM ({self.query}) AS _src"  # nosec B608 - self.query is admin-configured, same trust note as preview()
+            if cursor_value is not None:
+                wrapped = (
+                    f"SELECT TOP {max_rows} * FROM ({base}) AS _cursor "  # nosec B608 - cursor_column is admin-picked from preview() output, not request-time user input
+                    f"WHERE {cursor_column} > :cursor_value ORDER BY {cursor_column}"
+                )
+                params: dict[str, Any] = {"cursor_value": cursor_value}
+            else:
+                wrapped = f"SELECT TOP {max_rows} * FROM ({base}) AS _cursor ORDER BY {cursor_column}"  # nosec B608
+                params = {}
+            with eng.connect() as conn:
+                result = conn.execute(text(wrapped), params)
+                cols = list(result.keys())
+                rows = [dict(zip(cols, row)) for row in result.fetchall()]
+        finally:
+            eng.dispose()
+
+        new_cursor = str(rows[-1][cursor_column]) if rows else cursor_value
+        return rows, new_cursor

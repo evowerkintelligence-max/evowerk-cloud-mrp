@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.spc_calc import MIN_BASELINE
-from app.models.realtime import RealtimeStream
 from app.models.sensor import SensorAnomaly, SensorBaseline, SensorReading
+from app.models.sync_schedule import SyncSchedule
 from app.services.rul import days_since_last_breakdown, failure_probability_30d, get_or_refit
 
 _READINGS_PER_SENSOR = 200
@@ -38,21 +38,21 @@ async def _failure_probability(db: AsyncSession, org_id: uuid.UUID, machine: str
 
 
 async def fleet_dashboard(db: AsyncSession, org_id: uuid.UUID) -> list[dict]:
-    streams = (
+    schedules = (
         await db.execute(
-            select(RealtimeStream).where(RealtimeStream.org_id == org_id, RealtimeStream.machine.is_not(None))
+            select(SyncSchedule).where(SyncSchedule.org_id == org_id, SyncSchedule.machine.is_not(None))
         )
     ).scalars().all()
 
     out = []
-    for stream in streams:
-        machine = stream.machine
+    for schedule in schedules:
+        machine = schedule.machine
 
-        if not stream.sensor_map:
+        if not schedule.sensor_map:
             out.append({
                 "machine": machine, "status": "unmapped", "risk_level": "unknown",
                 "failure_probability_30d": None, "active_anomalies": 0,
-                "last_reading_at": None, "stream_id": str(stream.id),
+                "last_reading_at": None, "schedule_id": str(schedule.id),
             })
             continue
 
@@ -92,7 +92,7 @@ async def fleet_dashboard(db: AsyncSession, org_id: uuid.UUID) -> list[dict]:
             "machine": machine, "status": status, "risk_level": _risk_level(prob),
             "failure_probability_30d": prob, "active_anomalies": len(active_anomalies),
             "last_reading_at": last_reading.ts.isoformat() if last_reading else None,
-            "stream_id": str(stream.id),
+            "schedule_id": str(schedule.id),
         })
 
     out.sort(key=lambda m: {"high": 0, "medium": 1, "low": 2, "unknown": 3}.get(m["risk_level"], 4))

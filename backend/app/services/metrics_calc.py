@@ -1,9 +1,8 @@
-"""Pure window-metric formulas (throughput/scrap/OEE/downtime), ported
-unchanged from the old StreamRunner.snapshot(). Called once per collector
-poll window by app.services.realtime.StreamCollector over that window's NEW
-rows only (post-dedup), so absolute-sum fields report per-window activity.
-Ratio fields (scrap_rate_pct, fpy_pct, oee_pct and friends) are normalized
-and unaffected by window size."""
+"""Pure metric-computation formulas for scheduled-sync batches. Relocated
+unchanged from backend/streaming/metrics.py (the old Flink job's shared
+formula module) - see docs/superpowers/specs/2026-08-04-scheduled-cloud-sync-design.md.
+No behavior change: same formulas, now called once per scheduled sync batch
+(app.services.sync_scheduler) instead of once per Flink 5s tumbling window."""
 from __future__ import annotations
 
 from typing import Any

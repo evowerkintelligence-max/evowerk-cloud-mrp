@@ -100,6 +100,8 @@ async def list_integration_types(current: CurrentUser = Depends(get_current_user
             {"id": "excel", "label": "Excel", "category": "File", "icon": "table"},
             {"id": "sqlserver", "label": "SQL Server", "category": "Database", "icon": "database"},
             {"id": "oracle", "label": "Oracle", "category": "Database", "icon": "database"},
+            {"id": "postgres", "label": "Postgres", "category": "Database", "icon": "database"},
+            {"id": "mysql", "label": "MySQL", "category": "Database", "icon": "database"},
             {"id": "sap_odata", "label": "SAP (OData)", "category": "Enterprise", "icon": "building"},
             {"id": "erp_rest", "label": "ERP (REST API)", "category": "Enterprise", "icon": "building"},
             {"id": "mes_rest", "label": "MES (REST API)", "category": "Enterprise", "icon": "cpu"},

@@ -1,6 +1,7 @@
+# backend/tests/test_metrics_calc.py
 from __future__ import annotations
 
-from app.services.stream_metrics import compute_window_metrics
+from app.services.metrics_calc import compute_window_metrics
 
 
 def test_throughput_and_scrap_rate():

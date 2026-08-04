@@ -46,6 +46,8 @@ export interface NavItem {
 export interface NavSection {
   label: string;
   items: NavItem[];
+  /** Explore hub route for this section (see pages/CategoryHub.tsx). Absent = no hub, so the topbar breadcrumb renders the section as plain text. */
+  hubTo?: string;
 }
 
 /** Single source of truth for the sidebar, command palette, and topbar breadcrumb. */
@@ -56,6 +58,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     label: "Operations",
+    hubTo: "/explore/operations",
     items: [
       { to: "/boms", label: "Bills of Materials", icon: Layers, keywords: ["bom", "recipe", "components"], featureKey: "boms", description: "Component structures and versions" },
       { to: "/procurement", label: "Procurement", icon: ShoppingCart, keywords: ["suppliers", "purchase orders", "po", "vendors"], featureKey: "procurement", description: "Suppliers and purchase orders" },
@@ -68,6 +71,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     label: "Data & Reports",
+    hubTo: "/explore/data-reports",
     items: [
       { to: "/datasets", label: "Datasets", icon: Database, keywords: ["upload", "csv", "data", "query", "sql"], description: "Upload, clean, and query production data" },
       { to: "/bi", label: "BI Dashboards", icon: LayoutGrid, keywords: ["charts", "business intelligence"], description: "Build charts and save them to dashboards" },
@@ -77,6 +81,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     label: "Plant Analytics",
+    hubTo: "/explore/analytics",
     items: [
       { to: "/analytics/plant-summary", label: "Plant Summary", icon: Factory, keywords: ["overview", "rollup"], featureKey: "plant_summary", description: "Rolled-up view across every line" },
       { to: "/analytics/oee", label: "OEE", icon: Gauge, keywords: ["overall equipment effectiveness", "availability", "performance"], featureKey: "oee", description: "Availability, performance, and quality" },
@@ -101,6 +106,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     label: "System",
+    hubTo: "/explore/system",
     items: [
       { to: "/integrations", label: "Integrations", icon: Plug, keywords: ["erp", "api", "webhook"], description: "Connect ERPs, APIs, and webhooks" },
       { to: "/realtime", label: "Realtime", icon: Radio, keywords: ["live", "streaming"], description: "Live streaming data sources" },
@@ -110,7 +116,7 @@ export const NAV_SECTIONS: NavSection[] = [
 ];
 
 export const ALL_NAV_ITEMS = NAV_SECTIONS.flatMap((s) =>
-  s.items.map((item) => ({ ...item, section: s.label })),
+  s.items.map((item) => ({ ...item, section: s.label, sectionHubTo: s.hubTo })),
 );
 
 /** Single filter every nav surface (sidebar, mobile topbar, command palette)
@@ -125,7 +131,7 @@ export function isNavItemVisible(
 
 /** Best (longest-prefix) nav match for a pathname, for the topbar breadcrumb. */
 export function findNavMatch(pathname: string) {
-  let best: (NavItem & { section: string }) | undefined;
+  let best: (typeof ALL_NAV_ITEMS)[number] | undefined;
   for (const item of ALL_NAV_ITEMS) {
     const matches =
       item.to === "/" ? pathname === "/" : pathname === item.to || pathname.startsWith(item.to + "/");

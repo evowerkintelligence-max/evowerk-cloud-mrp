@@ -33,12 +33,6 @@
 # which needs no entry here at all - only auth/pre-login-style pages with
 # nothing backing them do), and missing one only breaks that one page for
 # non-browser-header clients, not a whole feature area for everyone.
-#
-# proxy_buffering off + a long proxy_read_timeout apply here too: harmless for
-# ordinary JSON responses, but required for /realtime/streams/{id}/events
-# (Server-Sent Events) - nginx buffers responses by default, which would
-# delay every tick until the buffer filled, and its 60s default read timeout
-# would silently cut a stream whose interval_seconds is set above that.
 map $http_accept $spa_fallback {
     default "";
     "~*text/html" "/index.html";
@@ -111,7 +105,10 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
+        # nginx's 60s default read timeout would cut off the ordinary slow
+        # POSTs this app makes: a report render, a large CSV export, a
+        # simulation or AutoML run. Nothing streams a response anymore, so
+        # buffering is left at nginx's default (on).
         proxy_read_timeout 3600s;
     }
 }

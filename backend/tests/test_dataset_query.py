@@ -52,8 +52,8 @@ async def _create_supplier(client, token, name="Acme Metals"):
 
 async def _receive(client, token, item, supplier, qty, *, lot_number=None):
     """Submit + receive a PO so the item's on-hand (InventoryBalance or Lot,
-    depending on is_lot_tracked) is non-zero - exercises the same on_hand path
-    the dataset-query join reuses from inventory_analytics._on_hand_by_item."""
+    depending on is_lot_tracked) is non-zero - exercises dataset_query's
+    _on_hand_by_item join."""
     headers = {"Authorization": f"Bearer {token}"}
     po = (await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)).json()
     lines = await client.patch(

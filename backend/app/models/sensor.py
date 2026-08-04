@@ -1,5 +1,5 @@
-"""CBM sensor telemetry - written by app.services.sensor_consumer as it drains
-realtime.ticks for streams with a sensor_map configured, scored by
+"""CBM sensor telemetry - written by app.services.sensor_sync as each
+scheduled sync with a sensor_map configured lands new rows, scored by
 app.services.anomaly (which reuses app.analytics.spc_calc's existing
 Individuals/Moving-Range control chart), and read by app.services.cbm."""
 from __future__ import annotations

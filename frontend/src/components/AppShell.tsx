@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, ChevronDown, ChevronRight, LogOut, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { Bell, ChevronDown, ChevronRight, LogOut, PanelLeftClose, PanelLeftOpen, Search, Settings } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
 import { useCurrentUser } from "@/lib/currentUser";
@@ -316,6 +316,16 @@ export function AppShell() {
               variant="ghost"
               size="icon"
               className="size-8"
+              onClick={() => navigate("/account")}
+              aria-label="Account settings"
+              title="Account settings"
+            >
+              <Settings />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
               onClick={logout}
               aria-label="Log out"
               title="Log out"
@@ -340,7 +350,16 @@ export function AppShell() {
               </Button>
               {match ? (
                 <>
-                  <span className="hidden text-muted-foreground sm:inline">{match.section}</span>
+                  {match.sectionHubTo ? (
+                    <Link
+                      to={match.sectionHubTo}
+                      className="hidden rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:inline"
+                    >
+                      {match.section}
+                    </Link>
+                  ) : (
+                    <span className="hidden text-muted-foreground sm:inline">{match.section}</span>
+                  )}
                   <FlowConnector />
                   <span className="truncate font-medium text-foreground">{match.label}</span>
                 </>

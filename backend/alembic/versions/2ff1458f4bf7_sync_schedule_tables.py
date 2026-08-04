@@ -1,7 +1,7 @@
 """sync_schedule_tables
 
 Revision ID: 2ff1458f4bf7
-Revises: d5b0c4f936e2
+Revises: c4d5e6f7a8b9
 Create Date: 2026-08-04
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "2ff1458f4bf7"
-down_revision = "d5b0c4f936e2"
+down_revision = "c4d5e6f7a8b9"
 branch_labels = None
 depends_on = None
 

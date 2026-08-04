@@ -60,7 +60,10 @@ export function ComputerVision() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Computer Vision" description="Upload a shop-floor image for defect detection, PPE compliance, or object counting." />
+      <PageHeader
+        title="Computer Vision"
+        description="Upload a shop-floor image for defect detection, PPE compliance, or object counting. Findings are AI-generated (Google Gemini) — verify before acting on them."
+      />
 
       <Card>
         <CardHeader>
@@ -82,7 +85,6 @@ export function ComputerVision() {
                 type="file"
                 accept="image/jpeg,image/png,image/webp,image/gif"
                 onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-                className="file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-foreground"
               />
             </Field>
           </div>

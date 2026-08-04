@@ -99,9 +99,7 @@ def bucket_weekly(points: list[ForecastPoint], bucket_days: int = 7) -> list[For
 
 def _series_for_item(daily: dict[date, Decimal], lookback_days: int, as_of: date) -> list[float]:
     """Oldest -> newest daily demand over the trailing lookback window,
-    zero-filled for days with no recorded consumption - same convention as
-    inventory_analytics._demand_stats, so the two features never disagree on
-    what "average daily demand" means for the same item."""
+    zero-filled for days with no recorded consumption."""
     return [
         float(daily.get(as_of - timedelta(days=offset), Decimal(0)))
         for offset in range(lookback_days - 1, -1, -1)

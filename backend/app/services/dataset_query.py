@@ -9,18 +9,20 @@ boundary for this feature. There is no free-text SQL entry anywhere.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Literal
 
 import duckdb
 from fastapi import HTTPException, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bom import Item
 from app.models.dataset import Dataset
+from app.models.inventory import InventoryBalance
+from app.models.lot import Lot
 from app.services import datasets as ds_service
-from app.services.inventory_analytics import _on_hand_by_item
 
 AggFn = Literal["sum", "avg", "min", "max", "count"]
 FilterOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"]
@@ -115,12 +117,37 @@ def _sql_literal(value: object, cast: str) -> str:
     return f"CAST({value} AS {cast})"
 
 
+async def _on_hand_by_item(
+    db: AsyncSession, org_id: uuid.UUID, item_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, Decimal]:
+    """Same two-disjoint-source-sum pattern as services.mrp.compute_mrp_plan:
+    active Lot.quantity_remaining for lot-tracked items, InventoryBalance for
+    everything else, summed across all locations."""
+    on_hand: dict[uuid.UUID, Decimal] = {}
+    lot_rows = await db.execute(
+        select(Lot.item_id, func.sum(Lot.quantity_remaining))
+        .where(Lot.org_id == org_id, Lot.status == "active", Lot.item_id.in_(item_ids))
+        .group_by(Lot.item_id)
+    )
+    for item_id, total in lot_rows.all():
+        on_hand[item_id] = total or Decimal(0)
+
+    balance_rows = await db.execute(
+        select(InventoryBalance.item_id, func.sum(InventoryBalance.quantity_on_hand))
+        .where(InventoryBalance.org_id == org_id, InventoryBalance.item_id.in_(item_ids))
+        .group_by(InventoryBalance.item_id)
+    )
+    for item_id, total in balance_rows.all():
+        on_hand[item_id] = on_hand.get(item_id, Decimal(0)) + (total or Decimal(0))
+    return on_hand
+
+
 async def _items_relation_sql(db: AsyncSession, con: duckdb.DuckDBPyConnection, org_id: uuid.UUID) -> None:
     """Materialize the org's Items as a temp view joinable into the dataset's
     DuckDB connection, built as a plain SQL VALUES list (stdlib string
     formatting - no pandas needed just to hand DuckDB a handful of rows).
-    on_hand reuses the existing lot-tracked/non-lot-tracked split (see
-    inventory_analytics._on_hand_by_item) instead of re-deriving it."""
+    on_hand reuses the lot-tracked/non-lot-tracked split (see
+    _on_hand_by_item above) instead of re-deriving it."""
     items = (await db.execute(select(Item).where(Item.org_id == org_id))).scalars().all()
     item_ids = {i.id for i in items}
     on_hand = await _on_hand_by_item(db, org_id, item_ids) if item_ids else {}

@@ -62,8 +62,7 @@ class Item(Base):
     preferred_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    # Supplier lead time in days, for reorder-point calculation (see
-    # app.services.inventory_analytics) and for MRP order-date offsetting (see
+    # Supplier lead time in days, for MRP order-date offsetting (see
     # app.services.mrp). Nullable and NOT defaulted to 0 - no lead time
     # recorded is a real "insufficient data" state, not a same-day lead time,
     # and a 0 would silently understate the reorder point / order date.

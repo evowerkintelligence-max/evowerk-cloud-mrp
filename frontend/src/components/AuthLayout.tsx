@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { Boxes, Gauge, TrendingUp } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
 
@@ -91,6 +92,11 @@ export function AuthLayout({
           </div>
           <div className="glow-card rounded-xl p-6 sm:p-8">{children}</div>
           {footer && <div className="mt-6 text-center text-sm text-muted-foreground">{footer}</div>}
+          <div className="mt-4 text-center text-xs text-muted-foreground">
+            <Link to="/privacy" className="hover:underline">
+              Privacy Policy
+            </Link>
+          </div>
         </div>
       </div>
     </div>

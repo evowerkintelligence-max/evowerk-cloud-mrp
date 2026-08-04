@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Link } from "react-router-dom";
 import { Factory } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
@@ -261,7 +262,12 @@ function JobRow({
       <TD className="font-medium">WO-{job.wo_number}</TD>
       <TD>
         {job.item_name}
-        <span className="block text-xs text-muted-foreground">{job.item_sku}</span>
+        <span className="block text-xs text-muted-foreground">
+          {job.item_sku}{" "}
+          <Link to={`/warehouse?item=${job.item_id}`} className="underline">
+            View in Inventory
+          </Link>
+        </span>
       </TD>
       <TD>{trimQty(job.quantity_planned)}</TD>
       <TD className="text-muted-foreground">{job.scheduled_start ?? "Not scheduled"}</TD>
@@ -374,7 +380,7 @@ function RaiseDialog({
             id="raise-qty"
             type="number"
             min="0"
-            step="0.0001"
+            step="any"
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             required
@@ -479,7 +485,7 @@ function EditDialog({
                 id="edit-qty"
                 type="number"
                 min="0"
-                step="0.0001"
+                step="any"
                 value={quantity}
                 onChange={(e) => setQuantity(e.target.value)}
                 required
@@ -594,7 +600,7 @@ function FinishDialog({
             id="finish-good"
             type="number"
             min="0"
-            step="0.0001"
+            step="any"
             value={good}
             onChange={(e) => setGood(e.target.value)}
             required
@@ -605,7 +611,7 @@ function FinishDialog({
             id="finish-scrapped"
             type="number"
             min="0"
-            step="0.0001"
+            step="any"
             value={scrapped}
             onChange={(e) => setScrapped(e.target.value)}
           />

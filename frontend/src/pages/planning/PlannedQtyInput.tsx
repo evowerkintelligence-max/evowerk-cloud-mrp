@@ -220,7 +220,7 @@ export function PlannedQtyInput({
       <Input
         type="number"
         min="0"
-        step="0.0001"
+        step="any"
         className="w-24 text-right"
         aria-label={`Planned quantity for ${product.item_sku}`}
         value={qty}

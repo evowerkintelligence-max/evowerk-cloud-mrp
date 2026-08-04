@@ -11,16 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { humanize } from "@/lib/status";
+import { approvalStatusVariant, humanize } from "@/lib/status";
 import type { OrgMeResponse } from "./Warehouse";
-
-// pending is amber (needs attention), approved green, rejected red — same
-// success/warning/danger semantics the rest of the app uses for statuses.
-function approvalStatusVariant(status: string) {
-  if (status === "approved") return "success" as const;
-  if (status === "rejected") return "danger" as const;
-  return "warning" as const;
-}
 
 interface AdjustmentRequest {
   id: string;
@@ -153,7 +145,7 @@ export function ApprovalsPanel({ org }: { org: OrgMeResponse }) {
                 <Input
                   id="threshold"
                   type="number"
-                  step="0.0001"
+                  step="any"
                   min="0"
                   value={threshold}
                   onChange={(e) => setThreshold(e.target.value)}

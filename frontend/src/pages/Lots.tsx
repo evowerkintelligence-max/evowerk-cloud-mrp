@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-import { humanize } from "@/lib/status";
+import { humanize, lotStatusVariant } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 25;
@@ -66,12 +66,6 @@ interface FefoConsumeLine {
   quantity_consumed: string;
   quantity_remaining: string;
   expiry_date: string | null;
-}
-
-function lotStatusVariant(status: string) {
-  if (status === "on_hold") return "warning" as const;
-  if (status === "depleted") return "neutral" as const;
-  return "success" as const;
 }
 
 function daysUntil(dateStr: string): number {
@@ -343,7 +337,7 @@ export function Lots() {
               <Input
                 id="fefo-qty"
                 type="number"
-                step="0.0001"
+                step="any"
                 min="0.0001"
                 value={fefoQuantity}
                 onChange={(e) => setFefoQuantity(e.target.value)}
@@ -526,7 +520,7 @@ export function Lots() {
                     <Input
                       id="consume-qty"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0.0001"
                       value={consumeQuantity}
                       onChange={(e) => setConsumeQuantity(e.target.value)}
@@ -551,7 +545,7 @@ export function Lots() {
                     <Input
                       id="transfer-qty"
                       type="number"
-                      step="0.0001"
+                      step="any"
                       min="0.0001"
                       value={transferQuantity}
                       onChange={(e) => setTransferQuantity(e.target.value)}

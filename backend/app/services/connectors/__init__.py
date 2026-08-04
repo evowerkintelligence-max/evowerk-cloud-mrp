@@ -10,7 +10,7 @@ from typing import Any
 
 VALID_TYPES = {
     "csv", "excel",
-    "sqlserver", "oracle", "postgres",
+    "sqlserver", "oracle", "postgres", "mysql",
     "sap_odata", "erp_rest", "mes_rest",
     "opcua", "mqtt",
     "opcda", "pi_webapi",
@@ -36,6 +36,9 @@ def get_connector(conn_type: str, config: dict[str, Any]):
     if t == "postgres":
         from app.services.connectors.postgres_connector import PostgresConnector
         return PostgresConnector(config)
+    if t == "mysql":
+        from app.services.connectors.mysql_connector import MysqlConnector
+        return MysqlConnector(config)
     if t in ("sap_odata", "erp_rest", "mes_rest"):
         from app.services.connectors.rest_connector import RestConnector
         return RestConnector(config)

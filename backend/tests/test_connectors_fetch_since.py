@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from app.services.connectors.sqlserver_connector import SqlServerConnector
 from app.services.connectors.oracle_connector import OracleConnector
 from app.services.connectors.postgres_connector import PostgresConnector
+from app.services.connectors.mysql_connector import MysqlConnector
 
 
 def _fake_engine(rows: list[dict]):
@@ -111,3 +112,21 @@ def test_postgres_connector_requires_database_and_query():
     import pytest
     with pytest.raises(ValueError):
         PostgresConnector({"host": "h"})
+
+
+def test_mysql_fetch_since_subsequent_run_filters_by_cursor():
+    connector = MysqlConnector({
+        "host": "h", "database": "d", "username": "u", "password": "p",
+        "query": "SELECT * FROM ticks",
+    })
+    engine, conn = _fake_engine([{"ts": "2026-08-01T00:05:00", "units": 3}])
+    with patch.object(connector, "_engine", return_value=engine), \
+         patch.object(connector, "_check_deps"):
+        rows, new_cursor = connector.fetch_since("ts", "2026-08-01T00:00:00", max_rows=100)
+
+    sql_text = str(conn.execute.call_args[0][0])
+    params = conn.execute.call_args[0][1]
+    assert "WHERE ts > :cursor_value" in sql_text
+    assert "LIMIT 100" in sql_text
+    assert params == {"cursor_value": "2026-08-01T00:00:00"}
+    assert new_cursor == "2026-08-01T00:05:00"

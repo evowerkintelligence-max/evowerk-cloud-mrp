@@ -1,19 +1,8 @@
-# backend/streaming/metrics.py
-"""Pure metric-computation formulas, ported unchanged from the old
-StreamRunner.snapshot() (app.services.realtime, pre-Redpanda). Kept as a
-standalone pure function - no Flink imports - so it's unit-testable without
-a cluster and reusable by the Flink job's window function.
-
-Semantic note: the formulas are unchanged, but what `rows` covers is not.
-StreamRunner accumulated up to 10,000 rows across a stream's whole session
-(when accumulate=True, the default), so absolute-sum fields like
-`throughput`/`total_downtime_min` grew over time. The Flink job (see
-realtime_metrics_job.py) calls this once per fixed 5-second tumbling
-window, so those same fields now report only that window's activity - a
-much smaller number for the same stream. Ratio fields (scrap_rate_pct,
-fpy_pct, oee_pct and friends) are unaffected since they're already
-normalized. Any stream_metric alert rule tuned against the old cumulative
-values needs re-tuning against the new per-window scale."""
+"""Pure metric-computation formulas for scheduled-sync batches. Relocated
+unchanged from backend/streaming/metrics.py (the old Flink job's shared
+formula module) - see docs/superpowers/specs/2026-08-04-scheduled-cloud-sync-design.md.
+No behavior change: same formulas, now called once per scheduled sync batch
+(app.services.sync_scheduler) instead of once per Flink 5s tumbling window."""
 from __future__ import annotations
 
 from typing import Any

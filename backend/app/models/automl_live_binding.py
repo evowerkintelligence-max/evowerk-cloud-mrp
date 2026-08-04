@@ -10,12 +10,13 @@ from app.db.base import Base
 
 
 class AutoMLLiveBinding(Base):
-    """Binds a successful AutoMLRun to a live RealtimeStream: app.services.
-    automl_realtime polls the stream's collector on an interval, scores its
-    recent buffer against the run's persisted pipeline, and publishes the
-    result into the stream's metrics under `metric_name` so the existing
-    stream_metric alerting (app.services.alerts.eval_stream_metric) can fire
-    on it - no new alerting subsystem needed for the live case.
+    """Binds a successful AutoMLRun to a SyncSchedule: app.services.
+    automl_realtime scores the schedule's recently-synced rows against the
+    run's persisted pipeline (once per scheduled sync, riding along inside
+    app.services.sync_scheduler) and merges the result into that sync's
+    SyncTick.metrics under `metric_name` so the existing stream_metric
+    alerting (app.services.alerts.eval_stream_metric) can fire on it - no new
+    alerting subsystem needed for the live case.
 
     Also owns periodic drift-checking against the run's training baseline
     (explain_X/explain_y) and, if `auto_retrain_on_drift`, kicks off a new
@@ -32,8 +33,8 @@ class AutoMLLiveBinding(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("automl_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    stream_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("realtime_streams.id", ondelete="CASCADE"), nullable=False, index=True
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sync_schedules.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     metric_name: Mapped[str] = mapped_column(String(64), nullable=False, default="automl_risk_score")

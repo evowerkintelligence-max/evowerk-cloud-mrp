@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import select
 
 from app.db import session as db_session
-from app.models.realtime import RealtimeStream
 from app.models.sensor import SensorAnomaly, SensorBaseline, SensorReading
+from app.models.sync_schedule import SyncSchedule
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,17 +27,37 @@ def _h(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_fleet_dashboard_shows_stream_status_per_machine(client):
+async def _create_postgres_integration(client, headers):
+    res = await client.post(
+        "/integrations", headers=headers,
+        json={
+            "name": "Cloud DB", "type": "postgres",
+            "config": {"host": "db.example.com", "database": "prod", "username": "u", "password": "p", "query": "SELECT * FROM ticks"},
+        },
+    )
+    assert res.status_code == 201, res.text
+    return res.json()["id"]
+
+
+async def _create_sync_schedule(client, headers, *, machine: str, sensor_map: dict, monkeypatch):
+    from app.services import sync_scheduler
+    monkeypatch.setattr(sync_scheduler, "add_job", lambda *a, **kw: None)
+
+    integration_id = await _create_postgres_integration(client, headers)
+    res = await client.post(
+        "/sync-schedules", headers=headers,
+        json={
+            "integration_id": integration_id, "name": "Line 1", "interval_seconds": 300,
+            "cursor_column": "ts", "machine": machine, "sensor_map": sensor_map,
+        },
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+async def test_fleet_dashboard_shows_stream_status_per_machine(client, monkeypatch):
     token = await _register_and_login(client)
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    stream = await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {"vib_x": "v"}},
-    )
-    assert stream.status_code == 200, stream.text
+    await _create_sync_schedule(client, _h(token), machine="M1", sensor_map={"vib_x": "v"}, monkeypatch=monkeypatch)
 
     res = await client.get("/cbm/fleet", headers=_h(token))
     assert res.status_code == 200, res.text
@@ -46,17 +66,9 @@ async def test_fleet_dashboard_shows_stream_status_per_machine(client):
     assert machines["M1"]["status"] == "learning"  # no readings yet -> learning, not "active"
 
 
-async def test_fleet_dashboard_flags_unmapped_stream(client):
+async def test_fleet_dashboard_flags_unmapped_stream(client, monkeypatch):
     token = await _register_and_login(client)
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    stream = await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {}},
-    )
-    assert stream.status_code == 200, stream.text
+    schedule = await _create_sync_schedule(client, _h(token), machine="M1", sensor_map={}, monkeypatch=monkeypatch)
 
     res = await client.get("/cbm/fleet", headers=_h(token))
     assert res.status_code == 200, res.text
@@ -66,23 +78,16 @@ async def test_fleet_dashboard_flags_unmapped_stream(client):
     assert machines["M1"]["failure_probability_30d"] is None
     assert machines["M1"]["active_anomalies"] == 0
     assert machines["M1"]["last_reading_at"] is None
-    assert machines["M1"]["stream_id"] == stream.json()["stream_id"]
+    assert machines["M1"]["schedule_id"] == schedule["schedule_id"]
 
 
-async def test_machine_detail_returns_readings_and_anomalies(client):
+async def test_machine_detail_returns_readings_and_anomalies(client, monkeypatch):
     token = await _register_and_login(client)
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {"vib_x": "v"}},
-    )
+    await _create_sync_schedule(client, _h(token), machine="M1", sensor_map={"vib_x": "v"}, monkeypatch=monkeypatch)
 
     async with db_session.async_session_factory() as db:
         org_id = (
-            await db.execute(select(RealtimeStream.org_id).where(RealtimeStream.machine == "M1"))
+            await db.execute(select(SyncSchedule.org_id).where(SyncSchedule.machine == "M1"))
         ).scalar_one()
         now = datetime.now(timezone.utc)
         reading = SensorReading(org_id=org_id, machine="M1", sensor="vib_x", value=50.0, ts=now)
@@ -99,38 +104,24 @@ async def test_machine_detail_returns_readings_and_anomalies(client):
     assert len(body["sensors"]["vib_x"]["anomalies"]) == 1
 
 
-async def test_cbm_tenant_isolation(client):
+async def test_cbm_tenant_isolation(client, monkeypatch):
     token_a = await _register_and_login(client, email="a@example.com", org_name="OrgA")
     token_b = await _register_and_login(client, email="b@example.com", org_name="OrgB")
 
-    integ = await client.post(
-        "/integrations", headers=_h(token_a),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    await client.post(
-        "/realtime/streams", headers=_h(token_a),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {"vib_x": "v"}},
-    )
+    await _create_sync_schedule(client, _h(token_a), machine="M1", sensor_map={"vib_x": "v"}, monkeypatch=monkeypatch)
 
     res_b = await client.get("/cbm/fleet", headers=_h(token_b))
     assert res_b.status_code == 200
     assert res_b.json()["machines"] == []
 
 
-async def test_acknowledge_anomaly(client):
+async def test_acknowledge_anomaly(client, monkeypatch):
     token = await _register_and_login(client)
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {"vib_x": "v"}},
-    )
+    await _create_sync_schedule(client, _h(token), machine="M1", sensor_map={"vib_x": "v"}, monkeypatch=monkeypatch)
 
     async with db_session.async_session_factory() as db:
         org_id = (
-            await db.execute(select(RealtimeStream.org_id).where(RealtimeStream.machine == "M1"))
+            await db.execute(select(SyncSchedule.org_id).where(SyncSchedule.machine == "M1"))
         ).scalar_one()
         reading = SensorReading(org_id=org_id, machine="M1", sensor="vib_x", value=50.0, ts=datetime.now(timezone.utc))
         db.add(reading)

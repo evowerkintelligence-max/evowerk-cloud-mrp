@@ -62,6 +62,15 @@ async def _upload(client, token, data=PT_CSV):
     return res.json()["id"]
 
 
+async def _org_id(client, token) -> uuid.UUID:
+    """eval_cbm_anomaly/eval_cbm_rul only need an org_id + machine string
+    (see app.services.alerts) - no SyncSchedule/RealtimeStream involved, so
+    tests just need a valid org_id, not a real sensor-mapped schedule."""
+    res = await client.get("/orgs/me", headers=_h(token))
+    assert res.status_code == 200, res.text
+    return uuid.UUID(res.json()["id"])
+
+
 async def test_scan_all_fires_webhook_with_live_triggered_state(client, webhook_server):
     server, handler = webhook_server
     url = f"http://127.0.0.1:{server.server_port}/andon"
@@ -138,25 +147,10 @@ async def test_cbm_anomaly_rule_fires_webhook(client, webhook_server):
     url = f"http://127.0.0.1:{server.server_port}/andon"
 
     token = await _register_and_login(client)
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    stream = await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M1", "sensor_map": {"vib_x": "v"}},
-    )
-    assert stream.status_code == 200, stream.text
-    stream_id = stream.json()["stream_id"]
+    org_id = await _org_id(client, token)
 
     async with db_session.async_session_factory() as db:
-        from app.models.realtime import RealtimeStream
         from app.models.sensor import SensorAnomaly, SensorReading
-        from sqlalchemy import select
-
-        org_id = (
-            await db.execute(select(RealtimeStream.org_id).where(RealtimeStream.id == uuid.UUID(stream_id)))
-        ).scalar_one()
 
         for _ in range(24):
             db.add(SensorReading(org_id=org_id, machine="M1", sensor="vib_x", value=10.0, ts=datetime.now(timezone.utc)))
@@ -188,15 +182,7 @@ async def test_cbm_rul_rule_reports_insufficient_data_without_breakdown_history(
     url = f"http://127.0.0.1:{server.server_port}/andon"
 
     token = await _register_and_login(client)
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    stream = await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": "M9", "sensor_map": {"vib_x": "v"}},
-    )
-    assert stream.status_code == 200, stream.text
+    await _org_id(client, token)  # ensures the org exists; the rule below just needs a machine string
 
     rule = await client.post(
         "/alerts/rules",
@@ -236,32 +222,12 @@ async def _seed_breakdowns(org_id: uuid.UUID, machine: str) -> None:
         await db.commit()
 
 
-async def _stream_org_id(client, token, machine) -> uuid.UUID:
-    integ = await client.post(
-        "/integrations", headers=_h(token),
-        json={"name": "Line 1 MQTT", "type": "mqtt", "config": {"broker": "test", "topic": "sensors/#"}},
-    )
-    stream = await client.post(
-        "/realtime/streams", headers=_h(token),
-        json={"integration_id": integ.json()["id"], "name": "Line 1", "machine": machine, "sensor_map": {"vib_x": "v"}},
-    )
-    assert stream.status_code == 200, stream.text
-
-    async with db_session.async_session_factory() as db:
-        from app.models.realtime import RealtimeStream
-        from sqlalchemy import select
-
-        return (
-            await db.execute(select(RealtimeStream.org_id).where(RealtimeStream.id == uuid.UUID(stream.json()["stream_id"])))
-        ).scalar_one()
-
-
 async def test_cbm_rul_rule_fires_when_probability_exceeds_threshold(client, webhook_server):
     server, handler = webhook_server
     url = f"http://127.0.0.1:{server.server_port}/andon"
 
     token = await _register_and_login(client)
-    org_id = await _stream_org_id(client, token, "M7")
+    org_id = await _org_id(client, token)
     await _seed_breakdowns(org_id, "M7")
 
     # threshold=0.01: rather than pin the test to the exact probability this
@@ -293,7 +259,7 @@ async def test_cbm_rul_rule_does_not_fire_below_threshold(client, webhook_server
     url = f"http://127.0.0.1:{server.server_port}/andon"
 
     token = await _register_and_login(client)
-    org_id = await _stream_org_id(client, token, "M8")
+    org_id = await _org_id(client, token)
     await _seed_breakdowns(org_id, "M8")
 
     rule = await client.post(

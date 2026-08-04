@@ -46,7 +46,6 @@ from app.api.routes import (
     purchase_orders,
     quality,
     rca_cases,
-    realtime,
     reports,
     routings,
     sales_orders,
@@ -56,6 +55,7 @@ from app.api.routes import (
     spc,
     staff_auth,
     suppliers,
+    sync_schedules,
     throughput,
     work_centers,
     work_orders,
@@ -63,31 +63,22 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.middleware.telemetry import TelemetryMiddleware
-from app.services import automl_realtime as automl_realtime_service
-from app.services import realtime as realtime_service
-from app.services import realtime_cache
-from app.services import sensor_consumer
+from app.services import sync_scheduler
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Re-adopt any realtime stream that was running before this process
-    # started (redeploy/restart/crash) - see app.services.realtime.
-    await realtime_service.resume_all_streams()
-    # Start this replica's realtime_cache consumer - see its module
-    # docstring for why every replica needs its own consumer group.
-    await realtime_cache.start_cache_consumer()
-    # Same re-adoption for live AutoML scoring/drift bindings - see
-    # app.services.automl_realtime.
-    await automl_realtime_service.resume_all_bindings()
-    await sensor_consumer.start_sensor_consumer()
+    # Re-adopt any sync schedule that was running before this process
+    # started (redeploy/restart/crash), and start the process-wide
+    # scheduler - see app.services.sync_scheduler. CBM sensor scoring and
+    # AutoML live scoring/drift-check both ride along inside each scheduled
+    # sync's own job body now, so they have no separate startup/shutdown
+    # step of their own.
+    await sync_scheduler.start_scheduler()
     yield
-    automl_realtime_service.stop_all_binding_schedulers()
-    await sensor_consumer.stop_sensor_consumer()
-    await realtime_cache.stop_cache_consumer()
-    realtime_service.stop_all_runners()
+    await sync_scheduler.stop_scheduler()
 
 
 app = FastAPI(
@@ -153,7 +144,7 @@ app.include_router(automl.router, dependencies=[Depends(require_feature("automl"
 app.include_router(kpis.router, dependencies=[Depends(require_feature("kpis"))])
 app.include_router(kpi_dashboards.router, dependencies=[Depends(require_feature("kpi_dashboards"))])
 app.include_router(integrations.router)
-app.include_router(realtime.router)
+app.include_router(sync_schedules.router)
 app.include_router(rca_cases.router, dependencies=[Depends(require_feature("rca_cases"))])
 app.include_router(predictive.router, dependencies=[Depends(require_feature("predictive"))])
 app.include_router(mfg_forecast.router, dependencies=[Depends(require_feature("mfg_forecast"))])

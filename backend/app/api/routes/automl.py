@@ -19,10 +19,9 @@ from app.db.session import get_db
 from app.middleware.audit import log_event
 from app.models.automl_live_binding import AutoMLLiveBinding
 from app.models.automl_run import AutoMLRun
-from app.models.realtime import RealtimeStream
+from app.models.sync_schedule import SyncSchedule
 from app.services import (
     automl_engine,
-    automl_realtime,
     automl_runner,
     automl_storage,
     automl_templates,
@@ -103,7 +102,7 @@ class RowExplainRequest(BaseModel):
 
 
 class LiveBindRequest(BaseModel):
-    stream_id: uuid.UUID
+    schedule_id: uuid.UUID
     metric_name: str = "automl_risk_score"
     drift_severity_trigger: str = "moderate"
     drift_check_interval_minutes: int = 1440
@@ -113,7 +112,7 @@ class LiveBindRequest(BaseModel):
 class LiveBindingResponse(BaseModel):
     id: str
     run_id: str
-    stream_id: str
+    schedule_id: str
     metric_name: str
     drift_severity_trigger: str
     drift_check_interval_minutes: int
@@ -128,7 +127,7 @@ def _binding_response(b: AutoMLLiveBinding) -> LiveBindingResponse:
     return LiveBindingResponse(
         id=str(b.id),
         run_id=str(b.run_id),
-        stream_id=str(b.stream_id),
+        schedule_id=str(b.schedule_id),
         metric_name=b.metric_name,
         drift_severity_trigger=b.drift_severity_trigger,
         drift_check_interval_minutes=b.drift_check_interval_minutes,
@@ -392,27 +391,29 @@ async def create_live_binding(
 ):
     run = await get_or_404(db, AutoMLRun, current.org_id, run_id, "Run not found")
     _require_success(run)
-    stream = await get_or_404(db, RealtimeStream, current.org_id, req.stream_id, "Stream not found")
+    schedule = await get_or_404(db, SyncSchedule, current.org_id, req.schedule_id, "Schedule not found")
 
     binding = AutoMLLiveBinding(
         org_id=current.org_id,
         run_id=run.id,
-        stream_id=stream.id,
+        schedule_id=schedule.id,
         metric_name=req.metric_name,
         drift_severity_trigger=req.drift_severity_trigger,
         drift_check_interval_minutes=req.drift_check_interval_minutes,
         auto_retrain_on_drift=req.auto_retrain_on_drift,
     )
-    run.source_stream_id = stream.id
+    run.source_stream_id = schedule.id
     db.add(binding)
     await log_event(
         db, action="automl.live_bind", org_id=current.org_id, actor_user_id=current.id,
-        metadata={"run_id": str(run.id), "stream_id": str(stream.id), "metric_name": req.metric_name},
+        metadata={"run_id": str(run.id), "schedule_id": str(schedule.id), "metric_name": req.metric_name},
     )
     await db.commit()
     await db.refresh(binding)
 
-    automl_realtime.start_binding_scheduler(binding.id, current.org_id)
+    # No separate scheduler registry to add this to - app.services.sync_scheduler
+    # looks up the enabled binding for a schedule on every one of that
+    # schedule's sync ticks, so this binding starts scoring on the next one.
     return _binding_response(binding)
 
 
@@ -421,7 +422,6 @@ async def delete_live_binding(
     binding_id: uuid.UUID, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     binding = await get_or_404(db, AutoMLLiveBinding, current.org_id, binding_id, "Live binding not found")
-    automl_realtime.stop_binding_scheduler(binding.id)
     await db.delete(binding)
     await log_event(db, action="automl.live_binding_deleted", org_id=current.org_id, actor_user_id=current.id, target=str(binding_id))
     await db.commit()

@@ -1,9 +1,11 @@
+# trivy:ignore:AVD-AWS-0053 This ALB is the deployment's single public entry point (frontend only; backend stays private).
 resource "aws_lb" "main" {
-  name               = "${local.name_prefix}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+  name                       = "${local.name_prefix}-alb"
+  internal                   = false
+  drop_invalid_header_fields = true
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = aws_subnet.public[*].id
 }
 
 resource "aws_lb_target_group" "frontend" {
@@ -94,6 +96,7 @@ resource "aws_lb_listener" "http_redirect" {
 # No-domain mode: no ACM cert to attach, so port 80 forwards straight to the
 # frontend instead of redirecting to HTTPS. Fine for test deploys; switch to
 # a real domain_name (see variables.tf) before this is a real deployment.
+# trivy:ignore:AVD-AWS-0054 No-domain test mode only; with domain_name set, port 80 redirects to HTTPS (above).
 resource "aws_lb_listener" "http_forward" {
   count             = var.domain_name == "" ? 1 : 0
   load_balancer_arn = aws_lb.main.arn

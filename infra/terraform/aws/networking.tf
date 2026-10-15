@@ -12,6 +12,7 @@ resource "aws_internet_gateway" "main" {
   tags = { Name = "${local.name_prefix}-igw" }
 }
 
+# trivy:ignore:AVD-AWS-0164 Public subnets hold only the ALB and NAT gateway; ECS tasks run in the private subnets.
 resource "aws_subnet" "public" {
   count                   = length(local.azs)
   vpc_id                  = aws_vpc.main.id

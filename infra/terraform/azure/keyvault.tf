@@ -1,6 +1,7 @@
 # Key Vault names must be 3-24 chars - truncate rather than fail on a long
 # project_name/environment combination. Global uniqueness collisions are rare
 # and Azure will just error asking for a different name if it happens.
+# trivy:ignore:AVD-AZU-0013 No private endpoint for Key Vault yet, so Container Apps reaches it publicly; access is RBAC-only.
 resource "azurerm_key_vault" "main" {
   name                = substr(replace("${local.name_prefix}-kv", "_", "-"), 0, 24)
   resource_group_name = azurerm_resource_group.main.name

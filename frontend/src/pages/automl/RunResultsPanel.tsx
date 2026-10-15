@@ -45,9 +45,10 @@ function confusionMatrixOption(labels: string[], matrix: number[][]): echarts.EC
       backgroundColor: "#1e293b",
       borderColor: "#334155",
       textStyle: { color: "#e2e8f0", fontSize: 12 },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' formatter param type
-      // (CallbackDataParams) doesn't narrow per series type; heatmap always calls this with
-      // `data: [number, number, number]` (see the `data.push([j, i, v])` above).
+      // echarts' formatter param type (CallbackDataParams) doesn't narrow per series
+      // type; heatmap always calls this with `data: [number, number, number]` (see
+      // the `data.push([j, i, v])` above).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       formatter: (p: any) => {
         const d = (p.data ?? [0, 0, 0]) as [number, number, number];
         return `actual ${labels[d[1]]} → predicted ${labels[d[0]]}: ${d[2]}`;

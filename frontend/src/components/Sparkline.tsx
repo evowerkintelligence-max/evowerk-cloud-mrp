@@ -1,12 +1,12 @@
 import { useId } from "react";
 
 export function Sparkline({ values, width = 96, height = 28 }: { values: number[]; width?: number; height?: number }) {
+  const gradientId = useId();
   if (values.length < 2) return null;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
   const step = width / (values.length - 1);
-  const gradientId = useId();
   const points = values
     .map((v, i) => `${(i * step).toFixed(1)},${(height - ((v - min) / range) * height).toFixed(1)}`)
     .join(" ");

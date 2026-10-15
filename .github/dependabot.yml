@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # Bumps the ranges in backend/requirements*.txt; run `make lock` on the PR
+  # branch afterwards (CI's lockfile check fails until you do).
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    groups:
+      python-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directories: [/backend, /frontend]
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
+    directories: [/infra/terraform/aws, /infra/terraform/azure]
+    schedule:
+      interval: weekly

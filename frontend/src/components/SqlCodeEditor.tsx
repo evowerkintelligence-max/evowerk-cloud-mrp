@@ -50,9 +50,10 @@ export function SqlCodeEditor({
       autocompletion({ override: [keywordCompletionSource(PostgreSQL), columnCompletionSource(columns)] }),
       ...sqlEditorExtensions,
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- columnsKey is a stable
-    // stand-in for columns (both call sites build a fresh array every render); keying
-    // on the array reference directly would defeat this memo on every keystroke.
+    // columnsKey is a stable stand-in for columns (both call sites build a fresh
+    // array every render); keying on the array reference directly would defeat
+    // this memo on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [columnsKey],
   );
 

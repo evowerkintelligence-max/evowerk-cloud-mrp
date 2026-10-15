@@ -3,10 +3,13 @@ development, so registering by hand isn't required every time the db_data
 volume is reset.
 
 Run: docker compose exec backend python scripts/seed_dev_user.py
+Password comes from DEV_PASSWORD, or is generated and printed once on creation.
 """
 from __future__ import annotations
 
 import asyncio
+import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -23,14 +26,14 @@ from app.models.tenant import Org  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 DEV_EMAIL = "dev@evowerk.dev"
-DEV_PASSWORD = "DevPassword123"  # pragma: allowlist secret
+DEV_PASSWORD = os.environ.get("DEV_PASSWORD") or secrets.token_urlsafe(12)
 
 
 async def main() -> None:
     async with async_session_factory() as db:
         existing = await db.scalar(select(User).where(User.email == DEV_EMAIL))
         if existing:
-            print(f"Dev user already exists: {DEV_EMAIL} / {DEV_PASSWORD}")
+            print(f"Dev user already exists: {DEV_EMAIL} (password unchanged)")
             return
 
         org = Org(name="Dev Org")

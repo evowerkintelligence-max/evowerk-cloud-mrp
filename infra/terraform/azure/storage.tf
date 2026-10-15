@@ -7,6 +7,7 @@
 #
 # Storage account names must be globally unique, lowercase alphanumeric, and
 # <= 24 chars - hence the replace(), same as acr.tf.
+# trivy:ignore:AVD-AZU-0012 No private endpoint for the file share yet, so Container Apps mounts it publicly; no public blob access.
 resource "azurerm_storage_account" "data" {
   name                            = replace("${local.name_prefix}data", "-", "")
   resource_group_name             = azurerm_resource_group.main.name

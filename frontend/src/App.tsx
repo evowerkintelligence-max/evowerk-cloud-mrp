@@ -23,6 +23,7 @@ import { MfaChallenge } from "./pages/MfaChallenge";
 // React.lazy needs a default export - this adapts a named one without
 // repeating `.then((m) => ({ default: m.X }))` at every call site below.
 function lazyPage(loader: () => Promise<Record<string, unknown>>, name: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- each page has its own props
   return lazy(async () => ({ default: (await loader())[name] as ComponentType<any> }));
 }
 

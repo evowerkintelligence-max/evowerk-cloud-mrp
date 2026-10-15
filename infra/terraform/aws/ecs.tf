@@ -69,8 +69,9 @@ resource "aws_ecs_task_definition" "backend" {
   volume {
     name = "data"
     efs_volume_configuration {
-      file_system_id = aws_efs_file_system.data.id
-      root_directory = "/"
+      file_system_id     = aws_efs_file_system.data.id
+      root_directory     = "/"
+      transit_encryption = "ENABLED"
     }
   }
 

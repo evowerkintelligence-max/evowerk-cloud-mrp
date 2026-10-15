@@ -27,6 +27,7 @@ resource "aws_security_group" "efs" {
     security_groups = [aws_security_group.backend.id]
   }
 
+  # trivy:ignore:AVD-AWS-0104 Tasks need outbound HTTPS (ECR pulls, Secrets Manager, SES, Gemini); SGs are stateful.
   egress {
     from_port   = 0
     to_port     = 0

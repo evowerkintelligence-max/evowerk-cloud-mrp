@@ -24,6 +24,7 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # trivy:ignore:AVD-AWS-0104 Tasks need outbound HTTPS (ECR pulls, Secrets Manager, SES, Gemini); SGs are stateful.
   egress {
     from_port   = 0
     to_port     = 0
@@ -46,6 +47,7 @@ resource "aws_security_group" "frontend" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  # trivy:ignore:AVD-AWS-0104 Tasks need outbound HTTPS (ECR pulls, Secrets Manager, SES, Gemini); SGs are stateful.
   egress {
     from_port   = 0
     to_port     = 0
@@ -68,6 +70,7 @@ resource "aws_security_group" "backend" {
     security_groups = [aws_security_group.frontend.id]
   }
 
+  # trivy:ignore:AVD-AWS-0104 Tasks need outbound HTTPS (ECR pulls, Secrets Manager, SES, Gemini); SGs are stateful.
   egress {
     from_port   = 0
     to_port     = 0
@@ -90,6 +93,7 @@ resource "aws_security_group" "redis" {
     security_groups = [aws_security_group.backend.id]
   }
 
+  # trivy:ignore:AVD-AWS-0104 Tasks need outbound HTTPS (ECR pulls, Secrets Manager, SES, Gemini); SGs are stateful.
   egress {
     from_port   = 0
     to_port     = 0
@@ -112,6 +116,7 @@ resource "aws_security_group" "rds" {
     security_groups = [aws_security_group.backend.id]
   }
 
+  # trivy:ignore:AVD-AWS-0104 Tasks need outbound HTTPS (ECR pulls, Secrets Manager, SES, Gemini); SGs are stateful.
   egress {
     from_port   = 0
     to_port     = 0

@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     env: str = "dev"
+    log_level: str = "INFO"
+    # Customer-owned Sentry DSN; empty disables error tracking (app/core/logging.py).
+    sentry_dsn: str = ""
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp"
     # SQLAlchemy's own defaults (pool_size=5, max_overflow=10 -> 15 total) are

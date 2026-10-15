@@ -62,10 +62,14 @@ from app.api.routes import (
     workflows,
 )
 from app.core.config import get_settings
+from app.core.logging import configure_logging, init_error_tracking
+from app.middleware.request_context import RequestContextMiddleware
 from app.middleware.telemetry import TelemetryMiddleware
 from app.services import sync_scheduler
 
 settings = get_settings()
+configure_logging(settings.log_level)
+init_error_tracking(settings.sentry_dsn, settings.env)
 
 
 @asynccontextmanager
@@ -89,6 +93,8 @@ app = FastAPI(
 )
 
 app.add_middleware(TelemetryMiddleware)
+# Added after (so wraps) TelemetryMiddleware: request_id is set for its logs too.
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

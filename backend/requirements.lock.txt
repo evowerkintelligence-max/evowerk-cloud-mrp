@@ -193,7 +193,7 @@ packaging==26.3
     #   optuna
     #   pytest
     #   shap
-paho-mqtt==1.6.1
+paho-mqtt==2.1.0
     # via -r requirements.txt
 pandas==2.3.3
     # via

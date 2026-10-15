@@ -3,7 +3,7 @@
 # see frontend/Dockerfile for the local-dev image (used by docker-compose),
 # which intentionally stays separate since it needs the dev server + HMR.
 
-FROM node:20-alpine AS build
+FROM node:25-alpine AS build
 
 RUN apk update && apk upgrade --no-cache
 

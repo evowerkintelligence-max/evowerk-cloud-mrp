@@ -9,6 +9,23 @@ No code is shared beyond common pip packages for core math (data cleaning,
 OEE calc, forecasting) — see the desktop repo's `project_product_separation`
 notes for why.
 
+## Quickstart (fresh clone)
+
+Needs Python 3.12, Node 20 and Docker. From the repo root:
+
+```bash
+make install   # backend deps from the pinned lockfile + `npm ci`
+make test      # backend pytest (in-memory SQLite + fake Redis) + frontend vitest
+make lint      # ruff + eslint
+make build     # production frontend build + docker images
+cp .env.example .env   # fill in the three values, then:
+make up        # Postgres, Redis, migrations, backend :8000, frontend :5173
+```
+
+No `make` (plain Windows)? Each target is two or three commands; run the
+lines from the [`Makefile`](Makefile) by hand. CI runs these same commands on
+every push and pull request.
+
 ## Current state
 
 Security foundation: auth (OAuth2 password grant + JWT + TOTP MFA),
@@ -42,8 +59,8 @@ on top of that, a full manufacturing feature set:
   target).
 - **Process mining**: discovers actual process flow from event logs.
 
-53 backend test modules cover this surface in addition to the auth suite
-described under Testing below.
+Over 100 backend test modules and 18 frontend test files cover this surface,
+in addition to the auth suite described under Testing below.
 
 ### Audit log: append-only at the database level
 
@@ -58,7 +75,8 @@ then asserts both UPDATE and DELETE raise).
 
 ### CI/CD security gates
 
-Every push/PR runs, in addition to lint + tests:
+Every push/PR runs lint (ruff, eslint), the backend and frontend test suites
+(backend with a coverage floor), a production frontend build, and:
 - **SAST**: `bandit` over `app/` (backend).
 - **Dependency scanning**: `pip-audit` (backend) and `npm audit
   --audit-level=high` (frontend).
@@ -73,6 +91,14 @@ Every push/PR runs, in addition to lint + tests:
   Postgres service container (the test suite itself runs against SQLite, so
   this is the only place migrations are validated against the database
   engine they're actually written for) and verifies audit-log immutability.
+- **IaC checks**: `terraform fmt -check`, `terraform validate` and a Trivy
+  config scan (HIGH/CRITICAL) for both `infra/terraform/aws` and
+  `infra/terraform/azure`. Accepted findings are suppressed inline with a
+  `# trivy:ignore:<ID> <reason>` comment on the resource.
+- **Lockfile check**: fails if `backend/requirements*.txt` changed without
+  regenerating the pinned `requirements*.lock.txt` (`make lock`, needs `uv`).
+  Dependabot opens weekly update PRs for pip, npm, Actions, Docker and
+  Terraform.
 
 Locally, install the pre-commit hooks so the same secret-scan/lint checks run
 before you commit, not just in CI:
@@ -115,14 +141,14 @@ once this runs behind a load balancer, not just on one box.
 ## Local development
 
 ```bash
-docker-compose up --build
+cp .env.example .env    # set POSTGRES_PASSWORD, JWT_SECRET_KEY, MFA_ENCRYPTION_KEY
+docker compose up --build
 ```
 
 This starts Postgres + Redis, runs Alembic migrations, and starts the backend
-(`:8000`) and frontend (`:5173`). Before the first run, replace the
-`MFA_ENCRYPTION_KEY` placeholder in `docker-compose.yml` with a real generated
-key (see the comment next to it) — the backend fails fast on startup if it
-isn't a valid Fernet key, by design.
+(`:8000`) and frontend (`:5173`). Compose refuses to start while any of the
+three values in `.env` is empty, and the backend fails fast on startup if
+`MFA_ENCRYPTION_KEY` isn't a valid Fernet key, by design.
 
 Or run each piece manually:
 
@@ -131,16 +157,26 @@ Or run each piece manually:
 cd backend
 python -m venv .venv
 .venv/Scripts/activate  # or `source .venv/bin/activate` on macOS/Linux
-pip install -r requirements.txt
+pip install -r requirements-dev.lock.txt
 cp .env.example .env    # edit JWT_SECRET_KEY, MFA_ENCRYPTION_KEY, and DATABASE_URL
 alembic upgrade head
 uvicorn app.main:app --reload
 
 # Frontend
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
+
+### Logging and error tracking
+
+The backend logs one JSON object per line to stdout, each tagged with the
+request's `request_id` (taken from an incoming `X-Request-ID` header or
+generated, and echoed back on the response) and the caller's `org_id`, so
+your log pipeline can filter one request or one tenant. `LOG_LEVEL` sets the
+level. Setting `SENTRY_DSN` turns on Sentry error tracking; it is off by
+default and should point at your own Sentry (self-hosted or your account),
+since EvoWerk never receives customer data. PII sending stays disabled.
 
 ## Production frontend image
 
@@ -179,9 +215,13 @@ proxy/load balancer in any real deployment.
 ## Testing
 
 ```bash
-cd backend
-pytest -q
+cd backend && pytest -q                  # ~1000 tests; add --cov=app for coverage
+cd frontend && npm test                  # vitest
+cd frontend && npm run test:coverage     # vitest with v8 coverage
 ```
+
+`backend/tests/conftest.py` supplies test-only defaults for every required
+secret, so no `.env` is needed to run the suite.
 
 Tests run against an in-memory SQLite database (via `aiosqlite`) and an
 in-memory fake Redis (via `fakeredis`), not real Postgres/Redis, so no

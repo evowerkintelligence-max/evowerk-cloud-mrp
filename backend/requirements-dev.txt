@@ -1,4 +1,5 @@
 -r requirements.txt
+pytest-cov>=5.0.0
 
 # Security tooling (Phase 1: CI/CD security gates)
 bandit>=1.7.9

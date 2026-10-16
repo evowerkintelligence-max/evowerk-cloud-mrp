@@ -15,6 +15,7 @@ from app.services.demand import combine_demand, load_committed_demand, load_dema
 from app.services.demand_forecasting import DEFAULT_LOOKBACK_DAYS, compute_weekly_suggestions
 from app.services.demand_history import daily_consumption_by_item
 from app.services.mrp import MrpPlanLine, compute_mrp_plan, load_bom_children, load_on_hand
+from app.services.planning_grid_helpers import _reachable_components, _reserved_against_a_new_job
 from app.services.planning_loads import (  # noqa: F401 - re-exported, see below
     GRID_HORIZON_DAYS,
     load_production_supply,
@@ -142,46 +143,6 @@ class PlanningGrid:
     horizon_end: date
     products: list[GridProduct]
     to_buy: list[GridToBuy]
-
-
-def _reachable_components(
-    root: uuid.UUID, children: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]]
-) -> set[uuid.UUID]:
-    """Every component below root in the active-BOM graph, at any depth."""
-    seen: set[uuid.UUID] = set()
-    stack = [child for child, _ in children.get(root, [])]
-    while stack:
-        node = stack.pop()
-        if node in seen:
-            continue
-        seen.add(node)
-        stack.extend(child for child, _ in children.get(node, []))
-    return seen
-
-
-async def _reserved_against_a_new_job(db: AsyncSession, org_id: uuid.UUID, reserved_for) -> dict:
-    """What existing scheduled jobs hold ahead of the job a Make press would
-    raise: undated, at the default location, numbered next.
-
-    Asking the real reservation rule about that hypothetical job is what keeps
-    the button and the start endpoint agreeing. Reproducing the ranking here
-    instead is how the grid would come to offer Make on a job that 409s.
-    """
-    from app.models.work_order import WorkOrder
-    from app.services.locations import get_default_location_id
-
-    next_number = (
-        await db.scalar(select(func.max(WorkOrder.wo_number)).where(WorkOrder.org_id == org_id))
-        or 0
-    ) + 1
-    prospective = WorkOrder(
-        id=uuid.uuid4(),
-        org_id=org_id,
-        location_id=await get_default_location_id(db, org_id),
-        scheduled_start=None,
-        wo_number=next_number,
-    )
-    return await reserved_for(db, org_id, prospective)
 
 
 async def compute_planning_grid(

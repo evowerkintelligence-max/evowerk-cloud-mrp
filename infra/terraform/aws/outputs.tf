@@ -20,16 +20,19 @@ output "app_url" {
 }
 
 output "ecr_backend_repository_url" {
-  value = aws_ecr_repository.backend.repository_url
+  description = "ECR repository to push the backend image to"
+  value       = aws_ecr_repository.backend.repository_url
 }
 
 output "ecr_frontend_repository_url" {
-  value = aws_ecr_repository.frontend.repository_url
+  description = "ECR repository to push the frontend image to"
+  value       = aws_ecr_repository.frontend.repository_url
 }
 
 output "rds_endpoint" {
-  value     = aws_db_instance.postgres.endpoint
-  sensitive = true
+  description = "RDS Postgres endpoint (host:port), reachable only from inside the VPC"
+  value       = aws_db_instance.postgres.endpoint
+  sensitive   = true
 }
 
 output "db_password" {

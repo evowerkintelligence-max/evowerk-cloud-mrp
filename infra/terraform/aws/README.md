@@ -134,6 +134,36 @@ safe at `desired_count = 1`. If you ever scale the backend service beyond a
 single task, move the migration to a separate one-off deploy step first, so
 multiple tasks don't race to migrate at once.
 
+## Testing and linting
+
+CI (`terraform-lint` in `.github/workflows/ci.yml`) runs these on every
+change under `infra/terraform/`, with no cloud credentials. To run them
+locally from this directory:
+
+```bash
+terraform fmt -check -recursive   # formatting
+terraform init -backend=false
+terraform validate                # syntax + provider schema
+terraform test                    # tests/*.tftest.hcl, see below
+tflint --init && tflint --format compact
+checkov -d . --framework terraform --compact --baseline .checkov.baseline
+trivy config --severity HIGH,CRITICAL .
+```
+
+- **`terraform test`** plans the whole config against a mocked AWS
+  provider (`mock_provider`, Terraform >= 1.7) and asserts security
+  invariants: RDS encrypted, private, deletion-protected; EFS encrypted at
+  rest and in transit; only the ALB accepts internet traffic (80/443) and
+  ECS tasks get no public IP; ECR tags immutable and scanned; HTTPS with a
+  TLS 1.2/1.3 policy and an HTTP redirect once `domain_name` is set; and
+  variable validation rejecting bad input.
+- **TFLint** uses the `terraform` ruleset's `recommended` preset plus the
+  `aws` ruleset, both configured and version-pinned in
+  [`.tflint.hcl`](.tflint.hcl).
+- **Checkov** fails on any finding not already accepted in
+  [`.checkov.baseline`](.checkov.baseline); **Trivy** accepted findings are
+  suppressed inline with a `# trivy:ignore:<ID>` reason.
+
 <!-- BEGIN_TF_DOCS -->
 ## Inputs
 
@@ -150,8 +180,8 @@ multiple tasks don't race to migrate at once.
 | `db_allocated_storage` | RDS allocated storage in GB | `number` | `20` | no |
 | `db_deletion_protection` | Block accidental RDS deletion via the AWS API/console. Leave true for a real deployment; set false only for a throwaway test env you intend to destroy/recreate on demand. | `bool` | `true` | no |
 | `db_backup_retention_period` | RDS automated backup retention in days. AWS free-tier accounts cap this at 1 - raise it once off free tier. | `number` | `7` | no |
-| `db_name` |  | `string` | `"evowerk_cloud_mrp"` | no |
-| `db_username` |  | `string` | `"evowerk"` | no |
+| `db_name` | Name of the application database created on the RDS instance | `string` | `"evowerk_cloud_mrp"` | no |
+| `db_username` | RDS master username (the password is generated and stored in Secrets Manager) | `string` | `"evowerk"` | no |
 | `domain_name` | Domain the app will be served on (e.g. mrp.customer.com) - used for the ACM cert and CORS_ORIGINS. Leave empty to skip HTTPS/ACM entirely and serve plain HTTP on the ALB's own DNS name instead (e.g. for a quick test deploy with no domain). | `string` | `""` | no |
 | `route53_zone_id` | Optional Route53 hosted zone ID for domain_name. If set, ACM DNS validation and the app's DNS record are created automatically in one apply. If left empty, the ACM validation CNAME records are printed as an output for you to add manually at whatever DNS provider you use, and you'll need a second `terraform apply` once the cert finishes validating - see README.md. | `string` | `""` | no |
 | `ses_from_email` | Sender address for password-reset/verification emails (e.g. no-reply@mrp.customer.com) - must be on a domain you can add DNS records for, since SES requires domain verification. | `string` | `""` | no |
@@ -167,10 +197,10 @@ multiple tasks don't race to migrate at once.
 | `rate_limit_mfa_verify_per_5min` | MFA verification attempts allowed per IP per 5 minutes - matches the app's own default. | `number` | `30` | no |
 | `backend_cpu` | Fargate task CPU units for the backend service (256 = 0.25 vCPU) | `number` | `1024` | no |
 | `backend_memory` | Fargate task memory (MB) for the backend service - the Fargate minimum (512) OOM-kills under real traffic: this app loads xgboost/lightgbm/shap/scipy/pandas/duckdb, which don't leave enough headroom once a few requests overlap. | `number` | `2048` | no |
-| `frontend_cpu` |  | `number` | `256` | no |
-| `frontend_memory` |  | `number` | `512` | no |
-| `redis_cpu` |  | `number` | `256` | no |
-| `redis_memory` |  | `number` | `512` | no |
+| `frontend_cpu` | Fargate task CPU units for the frontend (nginx) service | `number` | `256` | no |
+| `frontend_memory` | Fargate task memory (MB) for the frontend (nginx) service | `number` | `512` | no |
+| `redis_cpu` | Fargate task CPU units for the redis service | `number` | `256` | no |
+| `redis_memory` | Fargate task memory (MB) for the redis service | `number` | `512` | no |
 
 ## Outputs
 
@@ -179,8 +209,8 @@ multiple tasks don't race to migrate at once.
 | `alb_dns_name` | Point your DNS at this (CNAME) if route53_zone_id wasn't set | no |
 | `acm_certificate_validation_records` | Only populated if domain_name was set and route53_zone_id was left empty - add these as CNAME records at your DNS provider, wait for validation, then re-apply. | no |
 | `app_url` | Where to reach the app - the ALB DNS name over plain HTTP if domain_name was left empty, otherwise your domain over HTTPS. | no |
-| `ecr_backend_repository_url` |  | no |
-| `ecr_frontend_repository_url` |  | no |
-| `rds_endpoint` |  | yes |
+| `ecr_backend_repository_url` | ECR repository to push the backend image to | no |
+| `ecr_frontend_repository_url` | ECR repository to push the frontend image to | no |
+| `rds_endpoint` | RDS Postgres endpoint (host:port), reachable only from inside the VPC | yes |
 | `db_password` | Only needed if you need to connect manually - the app itself reads DATABASE_URL from Secrets Manager | yes |
 <!-- END_TF_DOCS -->

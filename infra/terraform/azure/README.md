@@ -45,6 +45,8 @@ ingress doesn't behave the way this assumes.
 - Terraform >= 1.5
 - Azure CLI (`az`), logged in (`az login`) to the subscription you want to
   deploy into
+- `ARM_SUBSCRIPTION_ID` exported (azurerm >= 4 no longer infers the
+  subscription from the CLI): `export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)`
 - Docker, to build and push `backend/Dockerfile` and
   `frontend/Dockerfile.prod` images
 

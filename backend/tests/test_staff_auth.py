@@ -1,5 +1,5 @@
 from __future__ import annotations
-from tests._test_secrets import TEST_PASSWORD
+from tests._test_secrets import TEST_PASSWORD, WRONG_PASSWORD
 
 import pytest
 
@@ -27,12 +27,12 @@ async def test_staff_login_succeeds_with_correct_credentials(client):
 
 async def test_staff_login_401s_on_wrong_password(client):
     await _seed_staff()
-    res = await client.post("/staff/auth/login", json={"employee_id": "zeeshan", "password": "wrong-password-here"})
+    res = await client.post("/staff/auth/login", json={"employee_id": "zeeshan", "password": WRONG_PASSWORD})
     assert res.status_code == 401
 
 
 async def test_staff_login_401s_on_unknown_employee_id(client):
-    res = await client.post("/staff/auth/login", json={"employee_id": "nobody", "password": "whatever12345"})
+    res = await client.post("/staff/auth/login", json={"employee_id": "nobody", "password": WRONG_PASSWORD})
     assert res.status_code == 401
 
 

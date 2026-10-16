@@ -11,13 +11,14 @@ from app.models.sync_schedule import SyncSchedule
 from app.models.tenant import Org
 from app.models.user import User
 from app.services import sensor_sync
+from tests._test_secrets import WRONG_PASSWORD
 
 
 async def _make_schedule(db_session, *, sensor_map: dict, machine: str = "M1") -> SyncSchedule:
     org = Org(name="Acme")
     db_session.add(org)
     await db_session.flush()
-    user = User(org_id=org.id, email=f"{uuid.uuid4()}@example.com", hashed_password="x")
+    user = User(org_id=org.id, email=f"{uuid.uuid4()}@example.com", hashed_password=WRONG_PASSWORD)
     db_session.add(user)
     await db_session.flush()
     integration = Integration(org_id=org.id, name="Cloud DB", type="postgres", config={}, created_by=user.id)

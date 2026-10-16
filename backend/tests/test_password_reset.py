@@ -1,5 +1,5 @@
 from __future__ import annotations
-from tests._test_secrets import TEST_PASSWORD
+from tests._test_secrets import TEST_PASSWORD, WRONG_PASSWORD
 
 from unittest.mock import patch
 
@@ -33,7 +33,7 @@ async def test_forgot_password_then_reset_changes_password(client):
     reset_link_body = mock_send.await_args.args[2]
     token = reset_link_body.split("token=")[1].split()[0].strip()
 
-    new_password = "a-brand-new-password-1"  # pragma: allowlist secret
+    new_password = WRONG_PASSWORD
     reset_res = await client.post(
         "/auth/reset-password", json={"token": token, "password": new_password}
     )

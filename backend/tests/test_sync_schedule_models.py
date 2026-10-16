@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.models.sync_schedule import SyncSchedule
 from app.models.sync_tick import SyncRow, SyncTick
+from tests._test_secrets import WRONG_PASSWORD
 
 
 @pytest.mark.asyncio
@@ -16,7 +17,7 @@ async def test_sync_schedule_round_trips_cursor_fields(db_session):
     org = Org(name="Acme")
     db_session.add(org)
     await db_session.flush()
-    user = User(org_id=org.id, email="a@example.com", hashed_password="x")
+    user = User(org_id=org.id, email="a@example.com", hashed_password=WRONG_PASSWORD)
     db_session.add(user)
     await db_session.flush()
     integration = Integration(
@@ -49,7 +50,7 @@ async def test_sync_tick_and_sync_row_link_to_schedule(db_session):
     org = Org(name="Acme")
     db_session.add(org)
     await db_session.flush()
-    user = User(org_id=org.id, email="b@example.com", hashed_password="x")
+    user = User(org_id=org.id, email="b@example.com", hashed_password=WRONG_PASSWORD)
     db_session.add(user)
     await db_session.flush()
     integration = Integration(org_id=org.id, name="Cloud DB", type="postgres", config={}, created_by=user.id)

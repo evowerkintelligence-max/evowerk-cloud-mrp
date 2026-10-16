@@ -1,5 +1,5 @@
 from __future__ import annotations
-from tests._test_secrets import TEST_PASSWORD
+from tests._test_secrets import TEST_PASSWORD, WRONG_PASSWORD
 
 import uuid
 
@@ -25,7 +25,7 @@ async def _create_postgres_integration(client, headers):
         "/integrations", headers=headers,
         json={
             "name": "Cloud DB", "type": "postgres",
-            "config": {"host": "db.example.com", "database": "prod", "username": "u", "password": "p", "query": "SELECT * FROM ticks"},
+            "config": {"host": "db.example.com", "database": "prod", "username": "u", "password": WRONG_PASSWORD, "query": "SELECT * FROM ticks"},
         },
     )
     assert res.status_code == 201, res.text

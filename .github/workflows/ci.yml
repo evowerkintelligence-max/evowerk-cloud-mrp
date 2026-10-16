@@ -100,6 +100,8 @@ jobs:
       - run: npm ci
       - name: Lint (eslint, rules in frontend/eslint.config.js)
         run: npm run lint
+      - name: Typecheck (tsc)
+        run: npm run typecheck
       - name: Tests (vitest, coverage floor in frontend/vite.config.ts)
         run: npm test -- --coverage
       - name: Build (tsc -b && vite build)

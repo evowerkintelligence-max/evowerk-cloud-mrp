@@ -92,7 +92,7 @@ export function Integrations() {
 
   const create = useMutation({
     mutationFn: async () => {
-      let config: Record<string, unknown> = {};
+      let config: Record<string, unknown>;
       try {
         config = JSON.parse(form.configText || "{}");
       } catch {

@@ -4,7 +4,7 @@
 PYTHON ?= python3
 UV_COMPILE = uv pip compile --python-platform x86_64-manylinux_2_28 --python-version 3.12 -q --custom-compile-command "make lock"
 
-.PHONY: install test lint build up lock
+.PHONY: install test lint typecheck build up lock
 
 install:
 	cd backend && $(PYTHON) -m pip install -r requirements-dev.lock.txt
@@ -17,6 +17,9 @@ test:
 lint:
 	cd backend && $(PYTHON) -m ruff check .
 	cd frontend && npm run lint
+
+typecheck:
+	cd frontend && npm run typecheck
 
 build:
 	cd frontend && npm run build

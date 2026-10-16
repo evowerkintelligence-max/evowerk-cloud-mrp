@@ -1,6 +1,7 @@
 {
   "name": "evowerk-cloud-mrp",
   "private": true,
+  "license": "UNLICENSED",
   "description": "Root task runner, same commands as the Makefile, works without make (plain Windows). No dependencies of its own.",
   "scripts": {
     "setup": "cd backend && uv sync --frozen && cd ../frontend && npm ci",

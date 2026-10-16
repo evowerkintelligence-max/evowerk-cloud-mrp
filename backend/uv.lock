@@ -1112,7 +1112,7 @@ requires-dist = [
     { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.72.0" },
     { name = "shap", specifier = ">=0.45.0" },
     { name = "sqlalchemy", specifier = ">=2.0.29" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.29.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
     { name = "xgboost", specifier = ">=2.0.0" },
 ]
 

@@ -9,6 +9,10 @@ FROM ghcr.io/astral-sh/uv:0.13.1 AS uv
 # for the backend, so one image holds both toolchains.
 FROM node:22-bookworm-slim
 
+# libgomp1: OpenMP runtime that lightgbm's bundled shared library loads.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_PYTHON=3.12 UV_LINK_MODE=copy UV_NO_CACHE=1 CI=true
 

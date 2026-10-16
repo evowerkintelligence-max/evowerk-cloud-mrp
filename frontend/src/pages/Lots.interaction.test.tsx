@@ -300,15 +300,18 @@ describe("daysUntil", () => {
   it("reads the date as a local day west of UTC", () => {
     // Node re-reads TZ when it is assigned at runtime. A bare "YYYY-MM-DD"
     // parses as UTC midnight, which is the previous evening here.
-    const tz = process.env.TZ;
-    process.env.TZ = "America/Los_Angeles";
+    // Typed locally: the app's tsconfig has no Node types, and CI's clean
+    // install doesn't pull them in.
+    const env = (globalThis as unknown as { process: { env: Record<string, string | undefined> } }).process.env;
+    const tz = env.TZ;
+    env.TZ = "America/Los_Angeles";
     try {
       expect(new Date().getTimezoneOffset()).toBeGreaterThan(0);
       expect(daysUntil(localIso(0))).toBe(0);
       expect(daysUntil(localIso(1))).toBe(1);
     } finally {
-      if (tz === undefined) delete process.env.TZ;
-      else process.env.TZ = tz;
+      if (tz === undefined) delete env.TZ;
+      else env.TZ = tz;
     }
   });
 });

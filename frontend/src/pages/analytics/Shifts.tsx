@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,7 +26,7 @@ import { ShiftForecastCard } from "./shifts/ShiftForecastCard";
 import { FIELDS, type ShiftRow, type ShiftsResult, type TrendPoint } from "./shifts/types";
 
 // Table columns rendered only when at least one shift has a value for them.
-const COLS: { key: keyof ShiftRow; label: string; render?: (v: number) => JSX.Element | string }[] = [
+const COLS: { key: keyof ShiftRow; label: string; render?: (v: number) => ReactElement | string }[] = [
   { key: "oee_pct", label: "OEE", render: (v) => <span style={{ color: oeeColor(v) }}>{v}%</span> },
   { key: "availability_pct", label: "Availability", render: (v) => `${v}%` },
   { key: "quality_pct", label: "Quality", render: (v) => `${v}%` },

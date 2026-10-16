@@ -13,7 +13,7 @@ export function EChart({
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const chart = useRef<echarts.ECharts>();
+  const chart = useRef<echarts.ECharts | undefined>(undefined);
 
   useEffect(() => {
     if (!ref.current) return;

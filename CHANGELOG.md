@@ -6,6 +6,11 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 
 ### Added
+- Frontend interaction tests (jsdom + Testing Library, `*.interaction.test.tsx`)
+  for every page and shared component, using a shared fetch-stub harness in
+  `frontend/src/test/renderPage.tsx`: 708 frontend tests, line coverage from
+  16.7% to 98.8%. Coverage floor raised to lines 95 / functions 90 /
+  branches 88.
 - Explicit `typecheck` script (`npm run typecheck`, `make typecheck`) and a
   named Typecheck step in the frontend CI job.
 - `infra/terraform/{aws,azure}/backend.tf.example`: encrypted remote state

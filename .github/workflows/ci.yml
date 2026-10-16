@@ -14,42 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Path filters only skip jobs on PRs; every push to master runs everything.
-  changes:
-    runs-on: ubuntu-latest
-    # dorny/paths-filter falls back to the GitHub API to list the PR's
-    # changed files (actions/checkout's default shallow clone doesn't have
-    # enough history for a local git diff) - that API call needs
-    # pull-requests: read, which the default token doesn't grant without
-    # this explicit permissions block.
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      docker: ${{ steps.filter.outputs.docker }}
-      terraform: ${{ steps.filter.outputs.terraform }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            backend:
-              - 'backend/**'
-              - '.github/workflows/ci.yml'
-            frontend:
-              - 'frontend/**'
-              - '.github/workflows/ci.yml'
-            docker:
-              - 'backend/**'
-              - 'frontend/**'
-              - '.github/workflows/ci.yml'
-            terraform:
-              - 'infra/terraform/**'
-              - '.github/workflows/ci.yml'
-
   backend:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
@@ -306,3 +270,39 @@ jobs:
           scan-ref: infra/terraform/${{ matrix.cloud }}
           severity: HIGH,CRITICAL
           exit-code: "1"
+
+  # Path filters only skip jobs on PRs; every push to master runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    # dorny/paths-filter falls back to the GitHub API to list the PR's
+    # changed files (actions/checkout's default shallow clone doesn't have
+    # enough history for a local git diff) - that API call needs
+    # pull-requests: read, which the default token doesn't grant without
+    # this explicit permissions block.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docker: ${{ steps.filter.outputs.docker }}
+      terraform: ${{ steps.filter.outputs.terraform }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            docker:
+              - 'backend/**'
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            terraform:
+              - 'infra/terraform/**'
+              - '.github/workflows/ci.yml'

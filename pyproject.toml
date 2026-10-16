@@ -11,3 +11,10 @@ extend-exclude = ["frontend"]
 [tool.ruff.lint]
 # pyflakes + the pycodestyle error subset - ruff's classic defaults.
 select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+# Lets `pytest` run the backend suite from the repo root (`make test` and CI
+# run it from backend/, which uses backend/pytest.ini instead).
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+asyncio_mode = "auto"

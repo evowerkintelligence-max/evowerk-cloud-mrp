@@ -25,7 +25,7 @@ from app.services.work_orders import component_requirements, reserved_by_higher_
 # GRID_HORIZON_DAYS and resolve_grid_window live in planning_loads.py now (a
 # leaf module mrp.py and work_orders.py also import from) but are re-exported
 # here unchanged: this was their original home, and every other caller -
-# api/routes/planning_grid.py, tests/test_planning_grid.py - still does
+# api/routes/planning_grid.py, tests/test_planning_grid_*.py - still does
 # `from app.services.planning_grid import resolve_grid_window`.
 
 # How far back a consumed item counts as something the user still plans. Reuses

@@ -27,6 +27,8 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
   `@vitest/coverage-v8` (`npm run test:coverage`).
 
 ### Changed
+- Split `test_planning_grid.py` and `test_work_orders.py` into per-feature
+  test files with shared helper modules (same 123 tests).
 - Ruff config moved from `backend/ruff.toml` to the root `pyproject.toml`
   (same rules), so it applies from anywhere in the repo.
 - CI path filters now only skip jobs on pull requests; pushes to `master`

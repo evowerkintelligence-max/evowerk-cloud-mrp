@@ -176,7 +176,7 @@ describe("Kpis", () => {
       breakdown_agg: "avg",
       breakdown_value_col: "cycle_s",
     });
-  });
+  }, 15_000); // long typing sequence; slow under a loaded parallel run
 
   it("sends nulls for blank optional fields and can be cancelled", async () => {
     const api = mockApi({ "/kpis": [], "/datasets": DATASETS, "POST /kpis": { id: "k9" } });
@@ -198,5 +198,69 @@ describe("Kpis", () => {
       name: "Rows", description: null, dataset_id: "d1", sql: "SELECT COUNT(*) FROM {table}", unit: null,
       direction: "neutral", tags: [], breakdown_group_col: null, breakdown_agg: null, breakdown_value_col: null,
     });
+  }, 15_000); // long typing sequence; slow under a loaded parallel run
+
+  it("does not send a breakdown value column once the group column is cleared", async () => {
+    const api = mockApi({ "/kpis": [], "/datasets": DATASETS, "POST /kpis": { id: "k9" } });
+    render();
+    await screen.findByText("No KPIs yet");
+    await userEvent.click(screen.getByRole("button", { name: "New KPI" }));
+    await userEvent.type(field("Name"), "Avg cycle");
+    await userEvent.selectOptions(field("Dataset"), "d1");
+    const [group, agg, value] = Array.from(
+      screen.getByText("Breakdown (optional)", { selector: "label" }).parentElement!.querySelectorAll("select"),
+    );
+    await userEvent.selectOptions(group, "machine");
+    await userEvent.selectOptions(agg, "avg");
+    await userEvent.selectOptions(value, "cycle_s");
+    await userEvent.selectOptions(group, "");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(api.calls.some((c) => c.method === "POST")).toBe(true));
+    expect(api.calls.find((c) => c.method === "POST")!.body).toMatchObject({
+      breakdown_group_col: null, breakdown_agg: null, breakdown_value_col: null,
+    });
+  });
+
+  const fail = (detail: string) => new Response(JSON.stringify({ detail }), { status: 400 });
+
+  it("shows the server's detail when creating a KPI fails, keeping the dialog open", async () => {
+    mockApi({ "/kpis": [], "/datasets": DATASETS, "POST /kpis": fail("SQL must include {table}") });
+    render();
+    await screen.findByText("No KPIs yet");
+    await userEvent.click(screen.getByRole("button", { name: "New KPI" }));
+    await userEvent.type(field("Name"), "Bad");
+    await userEvent.selectOptions(field("Dataset"), "d1");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText("SQL must include {table}")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+  });
+
+  it("shows the server's detail when deleting a KPI fails", async () => {
+    mockApi({ "/kpis": KPIS, "/datasets": DATASETS, "DELETE /kpis/k2": new Response(JSON.stringify({ detail: "KPI is on a dashboard" }), { status: 409 }) });
+    render();
+    await screen.findByText("Legacy yield");
+    await userEvent.click(within(row("Legacy yield")).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText("KPI is on a dashboard")).toBeTruthy();
+  });
+
+  it("shows the server's detail when computing a KPI fails", async () => {
+    mockApi({ "/kpis": KPIS, "/datasets": DATASETS, "POST /kpis/compute": new Response(JSON.stringify({ detail: "Dataset missing" }), { status: 500 }) });
+    render();
+    await screen.findByText("Avg cycle time");
+    await userEvent.click(within(row("Avg cycle time")).getByRole("button", { name: "Compute" }));
+    expect(await screen.findByText("Dataset missing")).toBeTruthy();
+  });
+
+  it("shows the server's detail when seeding fails", async () => {
+    mockApi({ "/kpis": [], "/datasets": DATASETS, "POST /kpis/seed/manufacturing": fail("Templates already seeded") });
+    render();
+    await screen.findByText("No KPIs yet");
+    const picker = screen.getByRole("option", { name: "Seed templates for…" }).closest("select")!;
+    await waitFor(() => expect(within(picker).getByRole("option", { name: "Line 1 output" })).toBeTruthy());
+    await userEvent.selectOptions(picker, "d1");
+    await userEvent.click(screen.getByRole("button", { name: "Seed manufacturing KPIs" }));
+    expect(await screen.findByText("Templates already seeded")).toBeTruthy();
   });
 });

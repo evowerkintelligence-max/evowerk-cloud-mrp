@@ -7,8 +7,10 @@ export const EXPIRY_WARNING_DAYS = 14;
 export function daysUntil(dateStr: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const target = new Date(dateStr);
-  target.setHours(0, 0, 0, 0);
+  // Parse as a local calendar day: new Date("YYYY-MM-DD") is UTC midnight,
+  // which is the previous local day west of UTC.
+  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  const target = new Date(y, m - 1, d);
   return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 

@@ -218,6 +218,31 @@ describe("ReportBuilder", () => {
     ]);
   });
 
+  it("drops the narrative when switching to another report or a new one", async () => {
+    base({
+      "/reports/custom": [REPORT, { ...REPORT, id: "r2", name: "Daily ops" }],
+      "POST /reports/custom/r1/narrate": { executive_summary: "Output rose 4%.", sections: [] },
+    });
+    renderPage(<ReportBuilder />);
+    await userEvent.click(await screen.findByRole("button", { name: "Weekly ops" }));
+    await userEvent.click(screen.getByRole("button", { name: "Narrate" }));
+    expect(await screen.findByText("Output rose 4%.")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back to list" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Daily ops" }));
+    expect(screen.getByRole("heading", { name: "Daily ops" })).toBeTruthy();
+    expect(screen.queryByText("Output rose 4%.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use as Exec Summary section" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back to list" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Weekly ops" }));
+    await userEvent.click(screen.getByRole("button", { name: "Narrate" }));
+    expect(await screen.findByText("Output rose 4%.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Back to list" }));
+    await userEvent.click(await screen.findByRole("button", { name: "New report" }));
+    expect(screen.queryByText("Output rose 4%.")).toBeNull();
+  });
+
   it("shows the narration error", async () => {
     base({ "POST /reports/custom/r1/narrate": new Response(JSON.stringify({ detail: "No data" }), { status: 400 }) });
     renderPage(<ReportBuilder />);

@@ -45,4 +45,22 @@ describe("MfaChallenge", () => {
     expect(await screen.findByText("Confirm your password")).toBeTruthy();
     expect(screen.getByLabelText("Password")).toBeTruthy();
   });
+
+  it("re-enrolls only after the full password is submitted", async () => {
+    const api = mockApi({
+      "POST /auth/mfa/enroll": ({ body }: { body: unknown }) =>
+        (body as { password?: string }).password ? ENROLL : new Response("{}", { status: 403 }),
+    });
+    renderPage(<MfaChallenge />);
+    const enrolls = () => api.calls.filter((c) => c.path === "/auth/mfa/enroll");
+    await userEvent.type(await screen.findByLabelText("Password"), "hunter22"); // pragma: allowlist secret
+    // typing fires nothing and keeps the password screen up
+    expect(enrolls()).toHaveLength(1);
+    expect(screen.getByText("Confirm your password")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText(ENROLL.secret)).toBeTruthy();
+    expect(enrolls().map((c) => c.body)).toEqual([{}, { password: "hunter22" }]); // pragma: allowlist secret
+    expect(screen.getByLabelText("6-digit code")).toBeTruthy();
+  });
 });

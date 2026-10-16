@@ -61,6 +61,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // jsdom interaction tests type into forms; 5s (vitest's default) is too
+    // tight on a loaded CI runner.
+    testTimeout: 15_000,
     coverage: {
       // The shared test harness is test code, not app code.
       exclude: [...coverageConfigDefaults.exclude, "src/test/**"],

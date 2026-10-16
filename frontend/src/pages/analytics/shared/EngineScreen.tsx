@@ -96,9 +96,10 @@ export function EngineScreen<T>({
   const lastComputeBody = useRef<Record<string, unknown> | null>(null);
 
   const compute = useMutation({
-    mutationFn: async () => {
-      const body: Record<string, unknown> = { dataset_id: datasetId };
-      for (const f of fields) {
+    // `rerun` is the auto-refresh path: re-post that exact body instead of rebuilding from the form.
+    mutationFn: async (rerun: Record<string, unknown> | void) => {
+      const body: Record<string, unknown> = rerun ?? { dataset_id: datasetId };
+      if (!rerun) for (const f of fields) {
         const v = form[f.key];
         if (f.kind === "num") body[f.key] = v ? Number(v) : null;
         else if (f.kind === "select") body[f.key] = v || f.options?.[0];
@@ -140,7 +141,7 @@ export function EngineScreen<T>({
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(() => {
-      if (lastComputeBody.current) compute.mutate();
+      if (lastComputeBody.current) compute.mutate(lastComputeBody.current);
     }, TV_REFRESH_MS);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockApi, renderPage } from "@/test/renderPage";
 import { TransformPanel } from "./TransformPanel";
@@ -85,5 +85,61 @@ describe("TransformPanel", () => {
 
     expect(await screen.findByText("Duplicate readings")).toBeTruthy();
     expect(api.calls[0].body).toMatchObject({ direction: "tall_to_wide", tag_col: "temp", value_col: "pressure" });
+  });
+
+  it("sends the tag/value columns the tall-to-wide selects show when the dataset has no tag/value columns", async () => {
+    const api = mockApi({ "POST /datasets/d1/transform/pivot": { ...D, id: "d4", name: "Wide" } });
+    renderPage(<TransformPanel d={D} onCreated={() => {}} />);
+
+    await userEvent.click(screen.getByLabelText("Tall → Wide"));
+    const shownTag = (field("Tag column") as unknown as HTMLSelectElement).value;
+    const shownValue = (field("Value column") as unknown as HTMLSelectElement).value;
+    expect(D.columns.map((c) => c.name)).toContain(shownTag);
+    expect(D.columns.map((c) => c.name)).toContain(shownValue);
+    await userEvent.click(screen.getByRole("button", { name: "Run transform" }));
+
+    await screen.findByText(/Created "Wide"/);
+    expect(api.calls[0].body).toMatchObject({ tag_col: shownTag, value_col: shownValue });
+  });
+
+  it("defaults tall-to-wide to a text tag column and a numeric value column", async () => {
+    const tall = {
+      ...D,
+      columns: [
+        { name: "ts", dtype: "TIMESTAMP" },
+        { name: "machine", dtype: "VARCHAR" },
+        { name: "reading", dtype: "DOUBLE" },
+      ],
+    };
+    const api = mockApi({ "POST /datasets/d1/transform/pivot": { ...D, id: "d4", name: "Wide" } });
+    renderPage(<TransformPanel d={tall} onCreated={() => {}} />);
+
+    await userEvent.click(screen.getByLabelText("Tall → Wide"));
+    expect((field("Tag column") as unknown as HTMLSelectElement).value).toBe("machine");
+    expect((field("Value column") as unknown as HTMLSelectElement).value).toBe("reading");
+    await userEvent.click(screen.getByRole("button", { name: "Run transform" }));
+
+    await screen.findByText(/Created "Wide"/);
+    expect(api.calls[0].body).toMatchObject({ tag_col: "machine", value_col: "reading" });
+  });
+
+  it("names the pivot output after the chosen direction but keeps a typed name", async () => {
+    const api = mockApi({ "POST /datasets/d1/transform/pivot": new Response(JSON.stringify({ detail: "x" }), { status: 400 }) });
+    renderPage(<TransformPanel d={D} onCreated={() => {}} />);
+    const run = () => userEvent.click(screen.getByRole("button", { name: "Run transform" }));
+
+    await userEvent.click(screen.getByLabelText("Tall → Wide"));
+    expect(field("Output name", 1).value).toBe("Historian (tall_to_wide)");
+    await run();
+    await screen.findByText("x");
+    expect((api.calls[0].body as { output_name: string }).output_name).toMatch(/\(tall_to_wide\)$/);
+
+    await userEvent.clear(field("Output name", 1));
+    await userEvent.type(field("Output name", 1), "Mine");
+    await userEvent.click(screen.getByLabelText("Wide → Tall"));
+    expect(field("Output name", 1).value).toBe("Mine");
+    await run();
+    await waitFor(() => expect(api.calls).toHaveLength(2));
+    expect(api.calls[1].body).toMatchObject({ direction: "wide_to_tall", output_name: "Mine" });
   });
 });

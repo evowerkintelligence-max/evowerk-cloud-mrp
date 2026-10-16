@@ -151,4 +151,44 @@ describe("Realtime", () => {
     await userEvent.click(within(d).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("heading", { name: "New scheduled sync" })).toBeNull();
   });
+
+  it("shows the API's error when stop or start fails", async () => {
+    api({
+      "POST /sync-schedules/s1/stop": new Response(JSON.stringify({ detail: "Worker offline" }), { status: 503 }),
+      "POST /sync-schedules/s2/start": new Response("<html>oops</html>", { status: 500 }),
+    });
+    renderPage(<Realtime />);
+    await screen.findByText("Line 1 MES");
+    await userEvent.click(within(row("Line 1 MES")).getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Worker offline")).toBeTruthy();
+    expect(within(row("Line 1 MES")).getByText("running")).toBeTruthy();
+    await userEvent.click(within(row("Line 2 MES")).getByRole("button", { name: "Start" }));
+    expect(await screen.findByText("Request failed")).toBeTruthy();
+  });
+
+  it("shows the delete error and keeps the row", async () => {
+    api({ "DELETE /sync-schedules/s1": new Response(JSON.stringify({ detail: "Schedule is locked" }), { status: 409 }) });
+    renderPage(<Realtime />);
+    await screen.findByText("Line 1 MES");
+    await userEvent.click(within(row("Line 1 MES")).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText("Schedule is locked")).toBeTruthy();
+    expect(screen.getByText("Line 1 MES")).toBeTruthy();
+  });
+
+  it("falls back to a readable create error when the body isn't JSON, and trims column map values", async () => {
+    const { calls } = api({ "POST /sync-schedules": new Response("<html>oops</html>", { status: 500 }) });
+    renderPage(<Realtime />);
+    await userEvent.click(screen.getByRole("button", { name: "New schedule" }));
+    const d = dialog("New scheduled sync");
+    await within(d).findByRole("option", { name: "MES Postgres" });
+    await userEvent.selectOptions(control(d, "Integration", "select"), "i1");
+    await userEvent.type(control(d, "Cursor column"), "id");
+    await userEvent.type(within(d).getByPlaceholderText("Scrap column"), " scrap ");
+    await userEvent.type(within(d).getByPlaceholderText("Units column"), "   ");
+    await userEvent.click(within(d).getByRole("button", { name: "Create" }));
+    expect(await within(d).findByText("Failed to create schedule")).toBeTruthy();
+    expect((calls.find((c) => c.method === "POST" && c.path === "/sync-schedules")!.body as { column_map: unknown }).column_map).toEqual({
+      scrap_col: "scrap",
+    });
+  });
 });

@@ -4,6 +4,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockApi, renderPage } from "@/test/renderPage";
 import { Lots } from "./Lots";
+import { daysUntil } from "./lots/ExpiryCell";
 
 /** YYYY-MM-DD `days` from today. Offsets stay well clear of the 3d/14d
  * thresholds so a timezone-induced one-day shift can't flip a badge. */
@@ -279,5 +280,38 @@ describe("Lots", () => {
     await openLot();
     await userEvent.click(screen.getByRole("button", { name: "Hold" }));
     expect(await screen.findByText("Failed to hold lot")).toBeTruthy();
+  });
+});
+
+describe("daysUntil", () => {
+  /** YYYY-MM-DD for the local calendar day `days` from today. */
+  function localIso(days: number) {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  it("counts whole local days", () => {
+    expect(daysUntil(localIso(0))).toBe(0);
+    expect(daysUntil(localIso(1))).toBe(1);
+    expect(daysUntil(localIso(-1))).toBe(-1);
+  });
+
+  it("reads the date as a local day west of UTC", () => {
+    // Node re-reads TZ when it is assigned at runtime. A bare "YYYY-MM-DD"
+    // parses as UTC midnight, which is the previous evening here.
+    // Typed locally: the app's tsconfig has no Node types, and CI's clean
+    // install doesn't pull them in.
+    const env = (globalThis as unknown as { process: { env: Record<string, string | undefined> } }).process.env;
+    const tz = env.TZ;
+    env.TZ = "America/Los_Angeles";
+    try {
+      expect(new Date().getTimezoneOffset()).toBeGreaterThan(0);
+      expect(daysUntil(localIso(0))).toBe(0);
+      expect(daysUntil(localIso(1))).toBe(1);
+    } finally {
+      if (tz === undefined) delete env.TZ;
+      else env.TZ = tz;
+    }
   });
 });

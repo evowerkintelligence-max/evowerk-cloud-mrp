@@ -62,6 +62,23 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
   smaller modules with no behavior change.
 
 ### Fixed
+- Report builder: one report's AI narrative no longer carries over to the next
+  report opened.
+- MFA re-enrollment: the password prompt now waits for the full password
+  instead of firing on the first keystroke.
+- AutoML run page rendered its results twice, and the "earlier run" link
+  pointed at a route that doesn't exist.
+- Lot expiry was a day early for users west of UTC (date-only strings were
+  parsed as UTC midnight).
+- Dataset tall-to-wide pivot sent different columns than the form showed, and
+  its default output name ignored the direction.
+- KPIs, Integrations, Realtime and Alerts now show the server's error when an
+  action fails instead of failing silently, and non-JSON error bodies show a
+  readable message.
+- Smaller: TV auto-refresh re-posts the last-run body; KPI breakdown no longer
+  sends a stale value column; Realtime trims column names; Items history row
+  spans every column; ItemSelect shows its own validation message; the to-buy
+  panel's "POs created" result no longer sticks.
 - `backend/dev_server.py` no longer imports the removed
   `inventory_snapshot` model.
 - `Sparkline` called `useId` after an early return (React rules-of-hooks).

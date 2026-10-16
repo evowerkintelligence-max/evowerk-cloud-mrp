@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, type ComponentType, type ErrorInfo, type ReactNode } from "react";
+import { Component, lazy, Suspense, type ComponentType, type ErrorInfo, type ReactElement, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuthHydrated, useAuthStore } from "./store/authStore";
 import { useStaffAuthHydrated, useStaffAuthStore } from "@/store/staffAuthStore";
@@ -107,7 +107,7 @@ ${info.componentStack ?? ""}` });
   }
 }
 
-function RequireAuth({ children }: { children: JSX.Element }) {
+function RequireAuth({ children }: { children: ReactElement }) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const hydrated = useAuthHydrated();
   if (!hydrated) return null;
@@ -115,7 +115,7 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
-function RequireFeature({ feature, children }: { feature: string; children: JSX.Element }) {
+function RequireFeature({ feature, children }: { feature: string; children: ReactElement }) {
   const org = useCurrentUser();
   if (org.isLoading) return null;
   if (!org.data?.enabled_features.includes(feature)) {
@@ -128,7 +128,7 @@ function RequireFeature({ feature, children }: { feature: string; children: JSX.
   return children;
 }
 
-function RequireStaffSession({ children }: { children: JSX.Element }) {
+function RequireStaffSession({ children }: { children: ReactElement }) {
   const accessToken = useStaffAuthStore((s) => s.accessToken);
   const hydrated = useStaffAuthHydrated();
   if (!hydrated) return null;

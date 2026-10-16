@@ -26,9 +26,6 @@ mock_provider "aws" {
 }
 
 variables {
-  # The defaults ("evowerk-mrp-production") push the target group name past
-  # AWS's 32-char limit, so tests use a short environment name.
-  environment = "test"
   # Shape-valid dummy Fernet key, not a real secret.
   mfa_encryption_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 }
@@ -148,6 +145,16 @@ run "rejects_invalid_vpc_cidr" {
   }
 
   expect_failures = [var.vpc_cidr]
+}
+
+run "rejects_names_past_aws_length_limit" {
+  command = plan
+
+  variables {
+    environment = "production-eu-west"
+  }
+
+  expect_failures = [var.environment]
 }
 
 run "rejects_uppercase_environment" {

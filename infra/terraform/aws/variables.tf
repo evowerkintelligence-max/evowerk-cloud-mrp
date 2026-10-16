@@ -31,6 +31,13 @@ variable "environment" {
     condition     = can(regex("^[a-z][a-z0-9-]*$", var.environment))
     error_message = "environment must start with a lowercase letter and contain only lowercase letters, digits and hyphens."
   }
+
+  validation {
+    # "<project_name>-<environment>" prefixes the ALB and target group, whose
+    # names AWS caps at 32 chars ("-fe-tg" is the longest suffix).
+    condition     = length("${var.project_name}-${var.environment}") <= 26
+    error_message = "project_name and environment together must be at most 25 characters (AWS ALB/target group name limit)."
+  }
 }
 
 variable "vpc_cidr" {

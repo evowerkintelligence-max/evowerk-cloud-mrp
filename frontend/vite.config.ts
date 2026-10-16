@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { coverageConfigDefaults, defineConfig } from "vitest/config";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 
@@ -62,6 +62,8 @@ export default defineConfig({
   test: {
     environment: "node",
     coverage: {
+      // The shared test harness is test code, not app code.
+      exclude: [...coverageConfigDefaults.exclude, "src/test/**"],
       // Floor just under the current numbers (16.7% lines over all of src,
       // untested pages included; splitting an untested file adds counted
       // branches, so file splits can nudge these). Ratchet up as coverage

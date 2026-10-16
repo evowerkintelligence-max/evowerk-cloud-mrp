@@ -14,7 +14,7 @@ class DemandForecast(Base):
     """One forecasted demand bucket for an item. The bucket's calendar length
     (weekly, monthly, ...) is the caller's choice, not ours - we only store the
     bucket's start date and treat the quantity as demand landing at
-    period_start. MRP netting (see app.api.routes.forecasts.run_mrp_plan) just
+    period_start. MRP netting (see app.api.routes.forecasts_mrp.run_mrp_plan) just
     sums whichever buckets fall inside the requested horizon, so a customer can
     import weekly buckets and another monthly without any schema change.
 

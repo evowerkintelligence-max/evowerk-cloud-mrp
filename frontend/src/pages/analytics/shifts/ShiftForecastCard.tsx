@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../../../api/client";
 import { Button } from "@/components/ui/button";
@@ -45,11 +45,9 @@ function useShiftForecastSource(shift: string, requestBody: Record<string, unkno
 export function ShiftForecastCard({ shift, requestBody }: { shift: string; requestBody: Record<string, unknown> | null }) {
   const source = useShiftForecastSource(shift, requestBody);
   const runs = useAutoMLRuns();
-  const [runId, setRunId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setRunId(null);
-  }, [shift]);
+  // A run started here belongs to the shift it was started for; switching shift drops it.
+  const [startedRun, setStartedRun] = useState<{ shift: string; id: string } | null>(null);
+  const runId = startedRun?.shift === shift ? startedRun.id : null;
 
   const existingRun = source.data
     ? [...(runs.data ?? [])]
@@ -81,7 +79,7 @@ export function ShiftForecastCard({ shift, requestBody }: { shift: string; reque
         search_method: "random",
         auto_retrain: false,
       },
-      { onSuccess: (r) => setRunId(r.id) },
+      { onSuccess: (r) => setStartedRun({ shift, id: r.id }) },
     );
   }
 

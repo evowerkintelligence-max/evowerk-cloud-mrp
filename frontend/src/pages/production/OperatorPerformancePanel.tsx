@@ -47,9 +47,10 @@ export function OperatorPerformancePanel() {
   const rowsForShift = stats.filter((s) => s.shift === activeShift).sort((a, b) => b.totalMinutes - a.totalMinutes);
   const hasUnassigned = stats.some((s) => s.shift === UNASSIGNED_SHIFT);
 
+  // "On the floor" as of the last fetch: Date.now() during render is impure.
   const onFloor = new Map<string, string>();
   for (const e of eventRows)
-    if (e.ended_at === null && Date.now() - asUtcMs(e.started_at) < STALE_OPEN_EVENT_MS) {
+    if (e.ended_at === null && events.dataUpdatedAt - asUtcMs(e.started_at) < STALE_OPEN_EVENT_MS) {
       onFloor.set(e.operator_id, e.machine_name);
     }
 

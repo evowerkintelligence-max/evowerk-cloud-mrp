@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pandas as pd
 import pytest
@@ -191,7 +192,7 @@ def test_preprocess_rejects_missing_columns():
         pm.preprocess(df, config)
 
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):

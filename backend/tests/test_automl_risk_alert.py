@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -129,7 +130,7 @@ async def test_eval_automl_risk_reports_run_not_found():
     assert "not found" in trigger.message.lower()
 
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 @pytest.mark.asyncio

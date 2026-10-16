@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../../api/client";
@@ -398,12 +398,10 @@ export function Downtime() {
   // "track" (the common case) and only bump off it once loading has actually
   // settled and the org turns out not to have the feature.
   const hasTracking = (org.data?.enabled_features ?? []).includes("downtime_tracking");
-  const [tab, setTab] = useState<Tab>("track");
+  const [pickedTab, setTab] = useState<Tab>("track");
   const [, setSearchParams] = useSearchParams();
 
-  useEffect(() => {
-    if (!org.isLoading && !hasTracking && tab === "track") setTab("analyze");
-  }, [org.isLoading, hasTracking, tab]);
+  const tab: Tab = !org.isLoading && !hasTracking && pickedTab === "track" ? "analyze" : pickedTab;
 
   return (
     <div className="space-y-8">

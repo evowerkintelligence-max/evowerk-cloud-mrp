@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../../../api/client";
 import { Field } from "@/components/Field";
@@ -99,14 +99,16 @@ export function useQueryBuilder(datasetId: string, names: string[]) {
   // The `fields` useState initializer above only runs once, but a caller like
   // ChartBuilder mounts this hook with datasetId="" (before any dataset is
   // picked) - without this reset, the first field stays permanently stuck on
-  // the empty column that was current at mount time.
-  useEffect(() => {
+  // the empty column that was current at mount time. Adjusted during render
+  // (not in an effect) so the stale selection never paints.
+  const [fieldsFor, setFieldsFor] = useState(datasetId);
+  if (fieldsFor !== datasetId) {
+    setFieldsFor(datasetId);
     setFields([{ column: names[0] ?? "", agg: "", alias: "" }]);
     setGroupBy(new Set());
     setFilters([]);
     setJoinItemsOn("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetId]);
+  }
 
   function updateField(i: number, patch: Partial<SelectFieldRow>) {
     setFields((prev) => prev.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));

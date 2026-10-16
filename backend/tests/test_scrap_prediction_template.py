@@ -1,11 +1,12 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pandas as pd
 import pytest
 
 from app.services.automl_templates import scrap_prediction as sp
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 def _fixture_df() -> pd.DataFrame:

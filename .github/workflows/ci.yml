@@ -32,8 +32,6 @@ jobs:
       terraform: ${{ steps.filter.outputs.terraform }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
-      - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -61,29 +59,31 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - name: Generate throwaway app keys
+        # Fresh per run, so no key material lives in the repo.
+        run: |
+          echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "MFA_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements-dev.lock.txt
-      - run: pip install -r requirements-dev.lock.txt
-      - name: Lockfiles match requirements
-        # uv reuses the committed lock as its version preference, so this only
-        # diffs when requirements*.txt changed without `make lock`.
-        run: |
-          pip install uv
-          make -C .. lock
-          git diff --exit-code -- requirements.lock.txt requirements-dev.lock.txt
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Lockfile matches pyproject
+        # Fails when backend/pyproject.toml changed without `uv lock`.
+        run: uv lock --check
+      - run: uv sync --frozen
       - name: Lint (ruff, rules in root pyproject.toml)
-        run: ruff check .
+        run: uv run --frozen ruff check .
       - name: Tests
-        run: pytest -q --cov=app --cov-report=term --cov-fail-under=68
-        env:
-          JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
+        run: uv run --frozen pytest -q --cov=app --cov-report=term --cov-fail-under=68
       - name: SAST (bandit)
-        run: bandit -r app scripts -ll
+        run: uv run --frozen bandit -r app scripts -ll
       - name: Dependency scan (pip-audit)
-        run: pip-audit -r requirements.lock.txt
+        # Audits the locked runtime deps only, same scope as the image.
+        run: |
+          uv export --frozen --no-dev --no-hashes -o "$RUNNER_TEMP/requirements.txt"
+          uv run --frozen pip-audit --disable-pip --no-deps -r "$RUNNER_TEMP/requirements.txt"
 
   frontend:
     needs: changes
@@ -94,9 +94,9 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -118,7 +118,7 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -179,8 +179,6 @@ jobs:
         working-directory: backend
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp
-      JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
-      MFA_ENCRYPTION_KEY: "nH7PbBN1oDWzZ8t0w9di2vDvxTFeOY1SOfYfnkIeXJo="
     services:
       postgres:
         image: postgres:16-alpine
@@ -197,18 +195,23 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - name: Generate throwaway app keys
+        # Fresh per run, so no key material lives in the repo.
+        run: |
+          echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "MFA_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements.lock.txt
-      - run: pip install -r requirements.lock.txt
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen --no-dev
       - name: Run migrations against real Postgres
-        run: alembic upgrade head
+        run: uv run --frozen --no-dev alembic upgrade head
       - name: Verify audit_logs is append-only
-        run: python scripts/verify_audit_log_immutable.py
+        run: uv run --frozen --no-dev python scripts/verify_audit_log_immutable.py
       - name: Verify auth_hardening downgrade handles real mfa_secret ciphertext
-        run: python scripts/verify_mfa_secret_downgrade.py
+        run: uv run --frozen --no-dev python scripts/verify_mfa_secret_downgrade.py
 
   concurrency:
     # The main `backend` job runs on single-connection in-memory SQLite, which
@@ -223,8 +226,6 @@ jobs:
         working-directory: backend
     env:
       CONCURRENCY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/evowerk_cloud_mrp
-      JWT_SECRET_KEY: ci-test-secret-key-not-for-production-use
-      MFA_ENCRYPTION_KEY: "nH7PbBN1oDWzZ8t0w9di2vDvxTFeOY1SOfYfnkIeXJo="
     services:
       postgres:
         image: postgres:16-alpine
@@ -241,14 +242,19 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - name: Generate throwaway app keys
+        # Fresh per run, so no key material lives in the repo.
+        run: |
+          echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "MFA_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements-dev.lock.txt
-      - run: pip install -r requirements-dev.lock.txt
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen
       - name: Run concurrency tests against real Postgres
-        run: pytest tests/test_concurrency.py -q
+        run: uv run --frozen pytest tests/test_concurrency.py -q
 
   terraform-lint:
     needs: changes
@@ -272,8 +278,25 @@ jobs:
       # types, etc.) - see infra/terraform/<cloud>/README.md.
       - run: terraform init -backend=false
       - run: terraform validate
-      # No `terraform plan`: the providers' data sources need real cloud
-      # credentials, which CI deliberately doesn't hold.
+      # No real `terraform plan`: the providers' data sources need real cloud
+      # credentials, which CI deliberately doesn't hold. tests/*.tftest.hcl
+      # plan against mock_provider instead and assert security invariants.
+      - run: terraform test
+      - uses: terraform-linters/setup-tflint@v6.3.2
+        with:
+          tflint_version: v0.64.0
+      - name: TFLint
+        # Rulesets and their pinned versions live in .tflint.hcl.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init
+          tflint --format compact
+      - name: Policy-as-code (Checkov)
+        # Fails on any finding not already accepted in .checkov.baseline.
+        # Regenerate after deliberately accepting one:
+        #   checkov -d . --framework terraform --create-baseline
+        run: pipx run --spec checkov==3.3.29 checkov -d . --framework terraform --compact --quiet --baseline .checkov.baseline
       - name: IaC scan (Trivy config)
         # Accepted findings are suppressed inline with a reason
         # (`# trivy:ignore:<ID> ...`) next to the resource they apply to.

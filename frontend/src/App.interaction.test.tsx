@@ -98,11 +98,14 @@ describe("App routing and guards", () => {
     expect(await screen.findByRole("heading", { name: "Customers" })).toBeTruthy();
   });
 
-  it("contains a page that throws to that route instead of blanking the app", async () => {
-    mockApi({});
+  it("contains a page that throws to that route instead of blanking the app, and reports it", async () => {
+    const { calls } = mockApi({});
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     renderApp("/checkin/m1");
     expect(await screen.findByText("This page failed to load. Try refreshing.")).toBeTruthy();
+    const report = calls.find((c) => c.path === "/client-errors")?.body as Record<string, string>;
+    expect(report).toMatchObject({ kind: "render", message: "Error: chunk exploded", url: "/" });
+    expect(report.stack).toMatch(/chunk exploded[\s\S]*CheckIn/);
     consoleError.mockRestore();
   });
 });

@@ -1,5 +1,6 @@
 # backend/tests/test_operators.py
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ from app.services.operator_capture import open_capture_event
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 NOW = datetime.now(timezone.utc)
 

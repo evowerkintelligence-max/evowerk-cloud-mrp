@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -33,11 +33,8 @@ export const useAuthStore = create<AuthState>()(
 // guard that renders nothing until this reports true avoids RequireAuth
 // reading a still-null accessToken on the first render and redirecting to
 // /login before sessionStorage's saved session has actually loaded.
+const isHydrated = () => useAuthStore.persist.hasHydrated();
+const onHydrated = (onChange: () => void) => useAuthStore.persist.onFinishHydration(onChange);
 export function useAuthHydrated(): boolean {
-  const [hydrated, setHydrated] = useState(useAuthStore.persist.hasHydrated());
-  useEffect(() => {
-    setHydrated(useAuthStore.persist.hasHydrated());
-    return useAuthStore.persist.onFinishHydration(() => setHydrated(true));
-  }, []);
-  return hydrated;
+  return useSyncExternalStore(onHydrated, isHydrated, isHydrated);
 }

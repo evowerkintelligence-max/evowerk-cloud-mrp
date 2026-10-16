@@ -1,5 +1,6 @@
 # backend/tests/test_downtime_tracking.py
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import asyncio
 import uuid
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register(client, email: str = "dt@example.com", org_name: str = "DtOrg"):

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import json
 import threading
@@ -10,7 +11,7 @@ from app.services import alerts as alerts_service
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 PT_CSV_MISS = b"actual,target\n80,100\n"
 PT_CSV_MEET = b"actual,target\n100,100\n"
 

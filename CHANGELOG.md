@@ -6,6 +6,32 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 
 ### Added
+- Client error telemetry: the SPA reports render crashes, uncaught errors,
+  unhandled rejections and 5xx/network API failures to `POST /client-errors`
+  on the customer's own backend, which logs one structured line and forwards
+  to Sentry only when `SENTRY_DSN` is set. Deduped and capped per page load,
+  rate limited per IP, nothing stored.
+- Terraform: TFLint (recommended preset + aws/azurerm rulesets) and native
+  `terraform test` suites with mocked providers asserting security invariants
+  (private databases, encryption, ingress), both run in CI. Input validation
+  on key variables.
+- `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, PR template, `.editorconfig`,
+  and a CI check that PR titles follow Conventional Commits.
+
+### Changed
+- Backend dependencies moved to `backend/pyproject.toml` + `backend/uv.lock`
+  (uv project, same pins); `make lock` is now `uv lock`, CI checks it with
+  `uv lock --check`, Dependabot uses the `uv` ecosystem.
+- Test passwords and CI app keys are generated per run; no reusable
+  credential is committed.
+- `LICENSE`: proprietary, Evowerk Intelligence (Pvt) Ltd.
+
+### Fixed
+- AWS: the frontend target group name exceeded AWS's 32-char limit with the
+  default `project_name`/`environment`, so the defaults could not apply. Now
+  `<prefix>-fe-tg` (created before the old one is destroyed), and a variable
+  validation rejects prefixes long enough to break the ALB/target group names.
+- Terraform rejects the `REPLACE_ME` MFA key placeholder at plan time.
 - Frontend interaction tests (jsdom + Testing Library, `*.interaction.test.tsx`)
   for every page and shared component, using a shared fetch-stub harness in
   `frontend/src/test/renderPage.tsx`: 708 frontend tests, line coverage from

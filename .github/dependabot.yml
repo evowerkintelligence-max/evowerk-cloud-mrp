@@ -1,8 +1,8 @@
 version: 2
 updates:
-  # Bumps the ranges in backend/requirements*.txt; run `make lock` on the PR
-  # branch afterwards (CI's lockfile check fails until you do).
-  - package-ecosystem: pip
+  # Bumps backend/pyproject.toml and backend/uv.lock together (CI runs
+  # `uv lock --check`).
+  - package-ecosystem: uv
     directory: /backend
     schedule:
       interval: weekly

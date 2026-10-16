@@ -1,11 +1,12 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = TEST_PASSWORD
 
 # total=400, scrap=30 -> rate 7.5%, FPY 92.5%, 75 defects/1000.
 # reasons: Crack=15, Warp=15 (each 50%). machines: M2 rate 10%, M1 rate 6.67%.

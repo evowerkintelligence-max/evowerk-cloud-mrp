@@ -32,8 +32,6 @@ jobs:
       terraform: ${{ steps.filter.outputs.terraform }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
-      - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -61,7 +59,7 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -93,7 +91,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
@@ -118,7 +116,7 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -197,7 +195,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -241,7 +239,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -274,6 +272,11 @@ jobs:
       - run: terraform validate
       # No `terraform plan`: the providers' data sources need real cloud
       # credentials, which CI deliberately doesn't hold.
+      - name: Policy-as-code (Checkov)
+        # Fails on any finding not already accepted in .checkov.baseline.
+        # Regenerate after deliberately accepting one:
+        #   checkov -d . --framework terraform --create-baseline
+        run: pipx run --spec checkov==3.3.29 checkov -d . --framework terraform --compact --quiet --baseline .checkov.baseline
       - name: IaC scan (Trivy config)
         # Accepted findings are suppressed inline with a reason
         # (`# trivy:ignore:<ID> ...`) next to the resource they apply to.

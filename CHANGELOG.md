@@ -6,6 +6,11 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 
 ### Added
+- Frontend interaction tests (jsdom + Testing Library, `*.interaction.test.tsx`)
+  for every page and shared component, using a shared fetch-stub harness in
+  `frontend/src/test/renderPage.tsx`: 708 frontend tests, line coverage from
+  16.7% to 98.8%. Coverage floor raised to lines 95 / functions 90 /
+  branches 88.
 - Root `package.json` mirroring the Makefile targets (`npm run setup`,
   `npm test`, `npm run lint`, `npm run build`, `npm run up`) for machines
   without `make`.

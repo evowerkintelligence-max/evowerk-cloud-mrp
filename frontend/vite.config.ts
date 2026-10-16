@@ -64,11 +64,11 @@ export default defineConfig({
     coverage: {
       // The shared test harness is test code, not app code.
       exclude: [...coverageConfigDefaults.exclude, "src/test/**"],
-      // Floor just under the current numbers (16.7% lines over all of src,
-      // untested pages included; splitting an untested file adds counted
-      // branches, so file splits can nudge these). Ratchet up as coverage
-      // grows; CI fails below.
-      thresholds: { lines: 16, functions: 21, branches: 68 },
+      // Floor a few points under current (98.8% lines, 91.6% branches, 93.9%
+      // functions over all of src): pages are covered by jsdom interaction
+      // tests (*.interaction.test.tsx). Ratchet up as coverage grows; CI fails
+      // below.
+      thresholds: { lines: 95, functions: 90, branches: 88 },
     },
   },
 });

@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
+import { Component, lazy, Suspense, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuthHydrated, useAuthStore } from "./store/authStore";
 import { useStaffAuthHydrated, useStaffAuthStore } from "@/store/staffAuthStore";
@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { AppShell } from "./components/AppShell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
+import { reportClientError } from "@/lib/telemetry";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
@@ -89,6 +90,10 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Err
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) {
     return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    reportClientError("render", error, { stack: `${error.stack ?? ""}
+${info.componentStack ?? ""}` });
   }
   render() {
     if (this.state.error) {

@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     rate_limit_operator_capture_per_5min: int = 30
     rate_limit_checkin_read_per_5min: int = 60
     rate_limit_checkin_write_per_5min: int = 30
+    # Browser error reports (app.api.routes.client_errors) are unauthenticated;
+    # this caps how much log/Sentry volume one IP can push.
+    rate_limit_client_errors_per_5min: int = 60
     sql_query_timeout_seconds: float = 10.0
     # Caps per-connection RAM so a runaway query (e.g. a self cross-join) can't
     # balloon past this before the wall-clock timeout above gets a chance to fire.

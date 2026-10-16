@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Path filters only skip jobs on PRs; every push to master runs everything.
   changes:
     runs-on: ubuntu-latest
     # dorny/paths-filter falls back to the GitHub API to list the PR's
@@ -30,8 +31,10 @@ jobs:
       docker: ${{ steps.filter.outputs.docker }}
       terraform: ${{ steps.filter.outputs.terraform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -51,13 +54,13 @@ jobs:
 
   backend:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -71,7 +74,7 @@ jobs:
           pip install uv
           make -C .. lock
           git diff --exit-code -- requirements.lock.txt requirements-dev.lock.txt
-      - name: Lint (ruff, rules in backend/ruff.toml)
+      - name: Lint (ruff, rules in root pyproject.toml)
         run: ruff check .
       - name: Tests
         run: pytest -q --cov=app --cov-report=term --cov-fail-under=68
@@ -84,7 +87,7 @@ jobs:
 
   frontend:
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -99,8 +102,10 @@ jobs:
       - run: npm ci
       - name: Lint (eslint, rules in frontend/eslint.config.js)
         run: npm run lint
-      - name: Tests (vitest)
-        run: npm test
+      - name: Typecheck (tsc)
+        run: npm run typecheck
+      - name: Tests (vitest, coverage floor in frontend/vite.config.ts)
+        run: npm test -- --coverage
       - name: Build (tsc -b && vite build)
         run: npm run build
       - name: Dependency scan (npm audit)
@@ -114,17 +119,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: pre-commit/action@v3.0.1
 
   container-scan:
     needs: changes
-    if: needs.changes.outputs.docker == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build backend image
         run: docker build -t evowerk-cloud-mrp-backend:ci ./backend
       - name: Build frontend image
@@ -167,7 +172,7 @@ jobs:
 
   migration-check:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -191,7 +196,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -211,7 +216,7 @@ jobs:
     # non-negative guards, SAVEPOINT allocation/create retries) are only
     # exercised for real here, against a Postgres with an actual connection pool.
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -235,7 +240,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -247,7 +252,7 @@ jobs:
 
   terraform-lint:
     needs: changes
-    if: needs.changes.outputs.terraform == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.terraform == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -256,7 +261,7 @@ jobs:
       run:
         working-directory: infra/terraform/${{ matrix.cloud }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4.0.1
         with:
           terraform_version: "1.9.8"

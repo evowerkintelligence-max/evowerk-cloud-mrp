@@ -112,6 +112,7 @@ export function Realtime() {
   const [formError, setFormError] = useState<string | null>(null);
   const [liveFor, setLiveFor] = useState<ScheduleSnapshot | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const integrations = useQuery<IntegrationOption[]>({
     queryKey: ["integrations"],
@@ -135,7 +136,9 @@ export function Realtime() {
 
   const create = useMutation({
     mutationFn: async () => {
-      const column_map = Object.fromEntries(Object.entries(form.columnMap).filter(([, v]) => v.trim()));
+      const column_map = Object.fromEntries(
+        Object.entries(form.columnMap).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v),
+      );
       const sensor_map = Object.fromEntries(
         form.sensorMap.filter((s) => s.name.trim() && s.field.trim()).map((s) => [s.name.trim(), s.field.trim()]),
       );
@@ -151,7 +154,7 @@ export function Realtime() {
           sensor_map,
         }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create schedule");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to create schedule");
       return res.json();
     },
     onSuccess: () => {
@@ -167,10 +170,14 @@ export function Realtime() {
     mutationFn: async (schedule: ScheduleSnapshot) => {
       const action = schedule.status === "stopped" ? "start" : "stop";
       const res = await apiFetch(`/sync-schedules/${schedule.schedule_id}/${action}`, { method: "POST" });
-      if (!res.ok) throw new Error("Request failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Request failed");
       return res.json();
     },
-    onMutate: (schedule) => setBusyId(schedule.schedule_id),
+    onMutate: (schedule) => {
+      setBusyId(schedule.schedule_id);
+      setActionError(null);
+    },
+    onError: (e: Error) => setActionError(e.message),
     onSettled: () => {
       setBusyId(null);
       qc.invalidateQueries({ queryKey: ["sync-schedules"] });
@@ -180,8 +187,10 @@ export function Realtime() {
   const remove = useMutation({
     mutationFn: async (scheduleId: string) => {
       const res = await apiFetch(`/sync-schedules/${scheduleId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete schedule");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to delete schedule");
     },
+    onMutate: () => setActionError(null),
+    onError: (e: Error) => setActionError(e.message),
     onSettled: () => {
       setBusyId(null);
       qc.invalidateQueries({ queryKey: ["sync-schedules"] });
@@ -195,6 +204,8 @@ export function Realtime() {
         description="Pull new rows from a cloud database integration on an interval and roll up throughput/scrap/OEE metrics from each batch."
         actions={<Button onClick={() => setFormOpen(true)}>New schedule</Button>}
       />
+
+      {actionError && <p className="text-sm text-destructive">{actionError}</p>}
 
       {schedules.data && schedules.data.schedules.length === 0 ? (
         <EmptyState

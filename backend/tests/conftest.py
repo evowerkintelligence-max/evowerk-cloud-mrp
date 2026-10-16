@@ -70,6 +70,19 @@ from app.models import (  # noqa: F401 - register models
 )
 from app.models.tenant import Org
 
+# Shared test helpers live outside test_* files; keep pytest's detailed assert messages there.
+pytest.register_assert_rewrite(
+    "tests._bom_helpers",
+    "tests._inventory_helpers",
+    "tests._lot_tracking_helpers",
+    "tests._oee_helpers",
+    "tests._planning_grid_helpers",
+    "tests._procurement_helpers",
+    "tests._report_builder_helpers",
+    "tests._sales_orders_helpers",
+    "tests._work_orders_helpers",
+)
+
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 

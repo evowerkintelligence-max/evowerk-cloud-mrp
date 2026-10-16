@@ -17,13 +17,15 @@ Needs Python 3.12, Node 20 and Docker. From the repo root:
 make install   # backend deps from the pinned lockfile + `npm ci`
 make test      # backend pytest (in-memory SQLite + fake Redis) + frontend vitest
 make lint      # ruff + eslint
+make typecheck # tsc -b over the frontend
 make build     # production frontend build + docker images
 cp .env.example .env   # fill in the three values, then:
 make up        # Postgres, Redis, migrations, backend :8000, frontend :5173
 ```
 
-No `make` (plain Windows)? Each target is two or three commands; run the
-lines from the [`Makefile`](Makefile) by hand. CI runs these same commands on
+No `make` (plain Windows)? The root `package.json` has the same targets:
+`npm run setup`, `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`,
+`npm run up`. CI runs these same commands on
 every push and pull request.
 
 ## Current state

@@ -7,6 +7,7 @@ import { useDatasets } from "./analytics/shared";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -96,10 +97,10 @@ export function Kpis() {
           tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
           breakdown_group_col: form.breakdownGroupCol || null,
           breakdown_agg: form.breakdownGroupCol ? form.breakdownAgg : null,
-          breakdown_value_col: form.breakdownAgg !== "count" ? form.breakdownValueCol || null : null,
+          breakdown_value_col: form.breakdownGroupCol && form.breakdownAgg !== "count" ? form.breakdownValueCol || null : null,
         }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create KPI");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to create KPI");
       return res.json();
     },
     onSuccess: () => {
@@ -112,7 +113,7 @@ export function Kpis() {
   const remove = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiFetch(`/kpis/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete KPI");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to delete KPI");
     },
     onSettled: () => {
       setDeletingId(null);
@@ -126,7 +127,7 @@ export function Kpis() {
         method: "POST",
         body: JSON.stringify({ dataset_id: kpi.dataset_id, kpi_ids: [kpi.id], force: true, include_eval: true }),
       });
-      if (!res.ok) throw new Error("Failed to compute KPI");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to compute KPI");
       const items: KpiComputeItem[] = await res.json();
       return items[0];
     },
@@ -141,7 +142,7 @@ export function Kpis() {
         method: "POST",
         body: JSON.stringify({ dataset_id: datasetId }),
       });
-      if (!res.ok) throw new Error("Failed to seed manufacturing KPIs");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to seed manufacturing KPIs");
       return res.json();
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["kpis"] }),
@@ -179,6 +180,10 @@ export function Kpis() {
           </div>
         }
       />
+
+      {remove.isError && <Alert variant="destructive">{remove.error.message}</Alert>}
+      {compute.isError && <Alert variant="destructive">{compute.error.message}</Alert>}
+      {seed.isError && <Alert variant="destructive">{seed.error.message}</Alert>}
 
       {kpis.data && kpis.data.length === 0 ? (
         <EmptyState
@@ -346,6 +351,7 @@ export function Kpis() {
               </Select>
             </div>
           </Field>
+          {create.isError && <Alert variant="destructive">{create.error.message}</Alert>}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={() => setFormOpen(false)}>Cancel</Button>
             <Button type="submit" loading={create.isPending}>Create</Button>

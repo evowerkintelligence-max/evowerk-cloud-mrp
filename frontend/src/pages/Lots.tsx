@@ -1,96 +1,21 @@
 import { FormEvent, useState } from "react";
-import { Boxes } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { PageHeader } from "@/components/PageHeader";
 import { Field } from "@/components/Field";
-import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
-import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { humanize, lotStatusVariant } from "@/lib/status";
-import { cn } from "@/lib/utils";
+import { EXPIRY_WARNING_DAYS, daysUntil } from "./lots/ExpiryCell";
+import { LotTransactionsTable } from "./lots/LotTransactionsTable";
+import { LotsTable } from "./lots/LotsTable";
+import type { FefoConsumeLine, ItemResponse, LocationResponse, LotDetailResponse, LotResponse } from "./lots/types";
 
 const PAGE_SIZE = 25;
-// Mirrors LOT_EXPIRY_WARNING_DAYS in backend/app/services/morning_brief.py -
-// same "worth a look" threshold, so the badge here agrees with the brief.
-const EXPIRY_WARNING_DAYS = 14;
-
-interface ItemResponse {
-  id: string;
-  sku: string;
-  name: string;
-}
-
-interface LocationResponse {
-  id: string;
-  code: string;
-  name: string;
-  is_default: boolean;
-}
-
-interface LotResponse {
-  id: string;
-  item_id: string;
-  item_sku: string;
-  item_name: string;
-  location_id: string;
-  location_code: string;
-  lot_number: string;
-  quantity_received: string;
-  quantity_remaining: string;
-  status: string;
-  expiry_date: string | null;
-}
-
-interface LotTransactionResponse {
-  id: string;
-  transaction_type: string;
-  quantity: string;
-  reason: string | null;
-  created_by: string;
-  created_at: string;
-}
-
-interface LotDetailResponse extends LotResponse {
-  transactions: LotTransactionResponse[];
-}
-
-interface FefoConsumeLine {
-  lot_id: string;
-  lot_number: string;
-  quantity_consumed: string;
-  quantity_remaining: string;
-  expiry_date: string | null;
-}
-
-function daysUntil(dateStr: string): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(dateStr);
-  target.setHours(0, 0, 0, 0);
-  return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function ExpiryCell({ expiryDate }: { expiryDate: string | null }) {
-  if (!expiryDate) return <span className="text-muted-foreground">—</span>;
-  const days = daysUntil(expiryDate);
-  if (days < 0) {
-    return <Badge variant="danger">Expired {Math.abs(days)}d ago</Badge>;
-  }
-  if (days <= EXPIRY_WARNING_DAYS) {
-    return (
-      <Badge variant={days <= 3 ? "danger" : "warning"}>
-        {expiryDate} · {days}d left
-      </Badge>
-    );
-  }
-  return <span className="text-muted-foreground">{expiryDate}</span>;
-}
 
 export function Lots() {
   const queryClient = useQueryClient();
@@ -408,52 +333,7 @@ export function Lots() {
         </CardContent>
       </Card>
 
-      {visibleLots && visibleLots.length === 0 ? (
-        <EmptyState
-          icon={<Boxes />}
-          title="No lots found"
-          description="No lots match the current filters."
-        />
-      ) : (
-        <TableWrap className="mb-4">
-          <Table>
-            <THead>
-              <TR>
-                <TH>Item</TH>
-                <TH>Lot #</TH>
-                <TH>Location</TH>
-                <TH>Received</TH>
-                <TH>Remaining</TH>
-                <TH>Status</TH>
-                <TH>Expiry</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {visibleLots?.map((lot) => (
-                <TR
-                  key={lot.id}
-                  onClick={() => setSelectedLotId(lot.id)}
-                  className={cn("cursor-pointer", selectedLotId === lot.id && "bg-primary/5")}
-                >
-                  <TD className="font-medium">
-                    {lot.item_sku} - {lot.item_name}
-                  </TD>
-                  <TD className="font-mono text-xs">{lot.lot_number}</TD>
-                  <TD className="text-muted-foreground">{lot.location_code}</TD>
-                  <TD className="text-muted-foreground">{lot.quantity_received}</TD>
-                  <TD>{lot.quantity_remaining}</TD>
-                  <TD>
-                    <Badge variant={lotStatusVariant(lot.status)}>{humanize(lot.status)}</Badge>
-                  </TD>
-                  <TD className="text-muted-foreground">
-                    <ExpiryCell expiryDate={lot.expiry_date} />
-                  </TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        </TableWrap>
-      )}
+      <LotsTable visibleLots={visibleLots} selectedLotId={selectedLotId} setSelectedLotId={setSelectedLotId} />
 
       <div className="mb-8 flex items-center justify-between">
         <Button
@@ -575,30 +455,7 @@ export function Lots() {
               </div>
             )}
 
-            <TableWrap>
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Type</TH>
-                    <TH>Quantity</TH>
-                    <TH>Reason</TH>
-                    <TH>When</TH>
-                  </TR>
-                </THead>
-                <TBody>
-                  {lotDetail.data.transactions.map((tx) => (
-                    <TR key={tx.id}>
-                      <TD>{humanize(tx.transaction_type)}</TD>
-                      <TD>{tx.quantity}</TD>
-                      <TD className="text-muted-foreground">{tx.reason ?? "—"}</TD>
-                      <TD className="text-muted-foreground">
-                        {new Date(tx.created_at).toLocaleString()}
-                      </TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
-            </TableWrap>
+            <LotTransactionsTable transactions={lotDetail.data.transactions} />
           </CardContent>
         </Card>
       )}

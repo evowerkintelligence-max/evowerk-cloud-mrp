@@ -1,70 +1,28 @@
 import { FormEvent, useState } from "react";
-import { ShoppingCart } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
-import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
-import { Dialog } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { ItemSelect } from "@/components/ItemSelect";
 import { humanize, poStatusVariant } from "@/lib/status";
-import { cn } from "@/lib/utils";
-
-const PAGE_SIZE = 20;
-
-interface ItemResponse {
-  id: string;
-  sku: string;
-  name: string;
-}
-
-interface SupplierResponse {
-  id: string;
-  name: string;
-}
-
-interface PurchaseOrderResponse {
-  id: string;
-  supplier_id: string;
-  supplier_name: string;
-  po_number: number;
-  status: string;
-  expected_delivery_date: string | null;
-}
-
-interface PurchaseOrderLineResponse {
-  id: string;
-  item_id: string;
-  item_sku: string;
-  item_name: string;
-  item_is_lot_tracked: boolean;
-  quantity_ordered: string;
-  quantity_received: string;
-  unit_price: string;
-  sequence: number;
-}
-
-interface PurchaseOrderDetailResponse extends PurchaseOrderResponse {
-  lines: PurchaseOrderLineResponse[];
-}
-
-const CANCELLABLE_STATUSES = ["draft", "submitted"];
-const RECEIVABLE_STATUSES = ["submitted", "partially_received"];
-
-/** A submitted or partially-received PO whose expected delivery date has
- * passed. Same treatment JobsPanel gives an overdue work order - a draft PO
- * is excluded because it was never sent to the supplier in the first place. */
-function isLate(po: Pick<PurchaseOrderResponse, "status" | "expected_delivery_date">): boolean {
-  if (!RECEIVABLE_STATUSES.includes(po.status)) return false;
-  if (po.expected_delivery_date === null) return false;
-  return po.expected_delivery_date < new Date().toISOString().slice(0, 10);
-}
+import {
+  CANCELLABLE_STATUSES,
+  PAGE_SIZE,
+  RECEIVABLE_STATUSES,
+  isLate,
+  type ItemResponse,
+  type PurchaseOrderDetailResponse,
+  type PurchaseOrderResponse,
+  type SupplierResponse,
+} from "./purchase-orders/types";
+import { PoListTable } from "./purchase-orders/PoListTable";
+import { PoConfirmDialogs } from "./purchase-orders/PoConfirmDialogs";
 
 export function PurchaseOrdersPanel() {
   const queryClient = useQueryClient();
@@ -316,41 +274,7 @@ export function PurchaseOrdersPanel() {
         />
       </div>
 
-      {purchaseOrders.data && purchaseOrders.data.length === 0 ? (
-        <EmptyState icon={<ShoppingCart />} title="No purchase orders yet" />
-      ) : (
-        <TableWrap className="mb-4">
-          <Table>
-            <THead>
-              <TR>
-                <TH>PO #</TH>
-                <TH>Supplier</TH>
-                <TH>Expected</TH>
-                <TH>Status</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {purchaseOrders.data?.map((po) => (
-                <TR
-                  key={po.id}
-                  onClick={() => setSelectedPoId(po.id)}
-                  className={cn("cursor-pointer", selectedPoId === po.id && "bg-primary/5")}
-                >
-                  <TD className="font-medium">PO-{po.po_number}</TD>
-                  <TD>{po.supplier_name}</TD>
-                  <TD className="text-muted-foreground">{po.expected_delivery_date ?? "—"}</TD>
-                  <TD>
-                    <div className="flex flex-wrap items-center gap-1">
-                      <Badge variant={poStatusVariant(po.status)}>{humanize(po.status)}</Badge>
-                      {isLate(po) && <Badge variant="danger">Late</Badge>}
-                    </div>
-                  </TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        </TableWrap>
-      )}
+      <PoListTable purchaseOrders={purchaseOrders} selectedPoId={selectedPoId} setSelectedPoId={setSelectedPoId} />
 
       <div className="mb-8 flex items-center justify-between">
         <Button
@@ -548,49 +472,15 @@ export function PurchaseOrdersPanel() {
         </Card>
       )}
 
-      {poDetail.data && (
-        <Dialog open={confirmSubmit} onClose={() => setConfirmSubmit(false)} title="Submit purchase order?">
-          <p className="text-sm text-muted-foreground">
-            PO-{poDetail.data.po_number} will move to <strong>Submitted</strong> and its lines can no
-            longer be edited. If the supplier has an email on file, we'll send them the PO.
-          </p>
-          <div className="flex justify-end gap-2 pt-4">
-            <Button variant="secondary" onClick={() => setConfirmSubmit(false)}>
-              Never mind
-            </Button>
-            <Button
-              loading={submitPo.isPending}
-              onClick={() => {
-                submitPo.mutate(undefined, { onSuccess: () => setConfirmSubmit(false) });
-              }}
-            >
-              Submit
-            </Button>
-          </div>
-        </Dialog>
-      )}
-
-      {poDetail.data && (
-        <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} title="Cancel purchase order?">
-          <p className="text-sm text-muted-foreground">
-            PO-{poDetail.data.po_number} will be cancelled. This can't be undone.
-          </p>
-          <div className="flex justify-end gap-2 pt-4">
-            <Button variant="secondary" onClick={() => setConfirmCancel(false)}>
-              Never mind
-            </Button>
-            <Button
-              variant="destructive"
-              loading={cancelPo.isPending}
-              onClick={() => {
-                cancelPo.mutate(undefined, { onSuccess: () => setConfirmCancel(false) });
-              }}
-            >
-              Cancel PO
-            </Button>
-          </div>
-        </Dialog>
-      )}
+      <PoConfirmDialogs
+        poDetail={poDetail}
+        confirmSubmit={confirmSubmit}
+        setConfirmSubmit={setConfirmSubmit}
+        submitPo={submitPo}
+        confirmCancel={confirmCancel}
+        setConfirmCancel={setConfirmCancel}
+        cancelPo={cancelPo}
+      />
     </div>
   );
 }

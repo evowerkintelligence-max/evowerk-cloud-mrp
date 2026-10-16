@@ -1,0 +1,13 @@
+# Repo-wide tool config. Backend dependencies stay in backend/requirements*.txt
+# (pinned via `make lock`); this file only holds settings ruff reads from
+# anywhere in the repo (CI, pre-commit, editors).
+
+[tool.ruff]
+# Explicit so the rule set doesn't drift with ruff's own defaults between versions.
+target-version = "py312"
+line-length = 120
+extend-exclude = ["frontend"]
+
+[tool.ruff.lint]
+# pyflakes + the pycodestyle error subset - ruff's classic defaults.
+select = ["E4", "E7", "E9", "F"]

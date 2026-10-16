@@ -220,11 +220,31 @@ proxy/load balancer in any real deployment.
 
 ## Testing
 
+Two suites: backend pytest (~1000 tests in `backend/tests/`) and frontend
+vitest (`frontend/src/**/*.test.ts(x)`, including jsdom interaction tests).
+Any of these runs them from the repo root:
+
 ```bash
-cd backend && pytest -q                  # ~1000 tests; add --cov=app for coverage
-npm --workspace frontend test           # vitest
+uv run --project backend pytest  # backend suite; plain `pytest` also works with backend/.venv active
+npm test                         # both suites (also: npm run test:backend, npm run test:frontend)
+make test                        # both suites
 npm --workspace frontend run test:coverage  # vitest with v8 coverage
 ```
+
+Only Docker installed? One command builds a container with Python 3.12, uv
+and Node 22 and runs both suites, exiting non-zero if either fails (CI runs
+it too):
+
+```bash
+docker compose -f docker-compose.test.yml run --rm --build test
+# same as: make test-docker / npm run test:docker
+```
+
+Coverage floors, enforced in CI (`.github/workflows/ci.yml`): backend
+`--cov-fail-under=70` in the `backend` job; frontend lines 95%, functions
+90%, branches 88%, set in `frontend/vite.config.ts` and repeated on the
+vitest command line in the `frontend` job. Each run writes a coverage table
+to the job summary, and pushes to `master` refresh the coverage badges above.
 
 `backend/tests/conftest.py` supplies test-only defaults for every required
 secret, so no `.env` is needed to run the suite.

@@ -179,6 +179,17 @@ jobs:
             commit -q -m "chore: update coverage badges (backend ${BACKEND_PCT}%, frontend ${FRONTEND_PCT}%)"
           git push -q origin HEAD:badges
 
+  test-container:
+    # Builds Dockerfile.test and runs both suites in it, so the documented
+    # one-command container run stays working.
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Both test suites in the test container
+        run: docker compose -f docker-compose.test.yml run --rm --build test
+
   pre-commit:
     runs-on: ubuntu-latest
     steps:
@@ -408,6 +419,7 @@ jobs:
               - 'package.json'
               - 'package-lock.json'
               - '.dockerignore'
+              - 'Dockerfile.test'
               - 'docker-compose*.yml'
               - '.github/workflows/ci.yml'
             terraform:

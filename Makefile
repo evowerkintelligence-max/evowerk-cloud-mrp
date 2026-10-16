@@ -2,7 +2,7 @@
 # (.github/workflows/ci.yml). Windows without make: run the recipe lines
 # by hand from the same directories.
 
-.PHONY: install test lint typecheck build up lock
+.PHONY: install test test-docker lint typecheck build up lock
 
 install:
 	npm ci
@@ -11,6 +11,10 @@ install:
 test:
 	cd backend && uv run pytest -q
 	npm --workspace frontend test
+
+# Both suites in one container (no local Python/Node needed, only Docker).
+test-docker:
+	docker compose -f docker-compose.test.yml run --rm --build test
 
 lint:
 	cd backend && uv run ruff check .

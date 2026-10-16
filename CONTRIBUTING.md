@@ -13,7 +13,7 @@ Install the git hooks once with `pre-commit install`.
   (`feat:`, `fix:`, `chore:`, `docs:`, `ci:`, `build:`, `refactor:`, `test:`, `perf:`).
   CI checks the title, and it becomes the squash-merge commit message.
 - Add or update tests with every behavior change. CI enforces coverage floors
-  (backend in `.github/workflows/ci.yml`, frontend in `frontend/vite.config.ts`).
+  (backend in `.github/workflows/ci.yml`, frontend in `frontend/vite.config.ts`, repeated in `ci.yml`).
 - Note user-visible changes in `CHANGELOG.md` under "Unreleased".
 
 ## Releases

@@ -50,7 +50,7 @@ run "secrets_come_from_key_vault" {
   command = plan
 
   assert {
-    condition     = azurerm_key_vault.main.enable_rbac_authorization
+    condition     = azurerm_key_vault.main.rbac_authorization_enabled
     error_message = "Key Vault must use RBAC, not access policies."
   }
 

@@ -25,9 +25,9 @@ resource "azurerm_storage_account" "data" {
 }
 
 resource "azurerm_storage_share" "backend_data" {
-  name                 = "backend-data"
-  storage_account_name = azurerm_storage_account.data.name
-  quota                = var.dataset_storage_quota_gb
+  name               = "backend-data"
+  storage_account_id = azurerm_storage_account.data.id
+  quota              = var.dataset_storage_quota_gb
 }
 
 resource "azurerm_container_app_environment_storage" "backend_data" {

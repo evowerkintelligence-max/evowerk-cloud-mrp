@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -6,7 +7,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = TEST_PASSWORD
 
 # total units = 240, planned = 270 -> efficiency 88.9%.
 # periods: 2026-01-01 = 160 (peak), 2026-01-02 = 80. machines: M1=180 (75%), M2=60.

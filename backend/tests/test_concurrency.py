@@ -14,6 +14,7 @@ Run locally with e.g.:
 CI runs them in the dedicated `concurrency` job (see .github/workflows/ci.yml).
 """
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import asyncio
 import os
@@ -32,7 +33,7 @@ pytestmark = [
     ),
 ]
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit
+PASSWORD = TEST_PASSWORD
 
 
 @pytest_asyncio.fixture

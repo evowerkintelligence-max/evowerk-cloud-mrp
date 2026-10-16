@@ -1,4 +1,5 @@
 import { useAuthStore } from "../store/authStore";
+import { reportClientError } from "../lib/telemetry";
 
 // Shared across concurrent callers: if two requests 401 around the same time, they
 // must not both try to redeem the same single-use refresh token (the second one
@@ -39,7 +40,13 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   // FormData sets its own multipart boundary — don't override it.
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
 
-  let res = await fetch(path, { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetch(path, { ...init, headers });
+  } catch (err) {
+    reportClientError("api", err);
+    throw err;
+  }
 
   if (res.status === 401 && (await refreshTokens())) {
     const retryHeaders = new Headers(init.headers);
@@ -48,5 +55,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     res = await fetch(path, { ...init, headers: retryHeaders });
   }
 
+  // 4xx are expected (validation, auth, not found); only server faults are reported.
+  if (res.status >= 500) reportClientError("api", `${init.method ?? "GET"} ${path.split("?")[0]} -> ${res.status}`);
   return res;
 }

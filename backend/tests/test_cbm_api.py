@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD, WRONG_PASSWORD
 
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from app.models.sync_schedule import SyncSchedule
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
@@ -32,7 +33,7 @@ async def _create_postgres_integration(client, headers):
         "/integrations", headers=headers,
         json={
             "name": "Cloud DB", "type": "postgres",
-            "config": {"host": "db.example.com", "database": "prod", "username": "u", "password": "p", "query": "SELECT * FROM ticks"},
+            "config": {"host": "db.example.com", "database": "prod", "username": "u", "password": WRONG_PASSWORD, "query": "SELECT * FROM ticks"},
         },
     )
     assert res.status_code == 201, res.text

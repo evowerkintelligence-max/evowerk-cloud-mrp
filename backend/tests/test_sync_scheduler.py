@@ -13,6 +13,7 @@ from app.models.sync_tick import SyncRow, SyncTick
 from app.models.tenant import Org
 from app.models.user import User
 from app.services import sync_scheduler
+from tests._test_secrets import WRONG_PASSWORD
 
 
 class _FakeConnector:
@@ -49,7 +50,7 @@ async def _make_schedule(session_factory, *, cursor_value=None) -> uuid.UUID:
         org = Org(name="Acme")
         db.add(org)
         await db.flush()
-        user = User(org_id=org.id, email=f"{uuid.uuid4()}@example.com", hashed_password="x")
+        user = User(org_id=org.id, email=f"{uuid.uuid4()}@example.com", hashed_password=WRONG_PASSWORD)
         db.add(user)
         await db.flush()
         integration = Integration(org_id=org.id, name="Cloud DB", type="postgres", config={}, created_by=user.id)

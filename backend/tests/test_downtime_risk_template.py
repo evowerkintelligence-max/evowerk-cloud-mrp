@@ -1,11 +1,12 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pandas as pd
 import pytest
 
 from app.services.automl_templates import downtime_risk as dr
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 _REASONS = ["breakdown", "changeover", "material_shortage", "planned_maintenance", "quality_hold", "other"]
 _BASE_DURATION = {"breakdown": 90, "changeover": 20, "material_shortage": 45, "planned_maintenance": 60, "quality_hold": 15, "other": 30}

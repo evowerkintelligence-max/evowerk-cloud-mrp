@@ -6,6 +6,7 @@ from app.services.connectors.sqlserver_connector import SqlServerConnector
 from app.services.connectors.oracle_connector import OracleConnector
 from app.services.connectors.postgres_connector import PostgresConnector
 from app.services.connectors.mysql_connector import MysqlConnector
+from tests._test_secrets import WRONG_PASSWORD
 
 
 def _fake_engine(rows: list[dict]):
@@ -28,7 +29,7 @@ def _fake_engine(rows: list[dict]):
 
 def test_sqlserver_fetch_since_first_run_has_no_cursor_filter():
     connector = SqlServerConnector({
-        "host": "h", "database": "d", "username": "u", "password": "p",
+        "host": "h", "database": "d", "username": "u", "password": WRONG_PASSWORD,
         "query": "SELECT * FROM ticks",
     })
     engine, conn = _fake_engine([{"ts": "2026-08-01T00:00:00", "units": 5}])
@@ -45,7 +46,7 @@ def test_sqlserver_fetch_since_first_run_has_no_cursor_filter():
 
 def test_sqlserver_fetch_since_subsequent_run_filters_by_cursor():
     connector = SqlServerConnector({
-        "host": "h", "database": "d", "username": "u", "password": "p",
+        "host": "h", "database": "d", "username": "u", "password": WRONG_PASSWORD,
         "query": "SELECT * FROM ticks",
     })
     engine, conn = _fake_engine([{"ts": "2026-08-01T00:05:00", "units": 3}])
@@ -62,7 +63,7 @@ def test_sqlserver_fetch_since_subsequent_run_filters_by_cursor():
 
 def test_sqlserver_fetch_since_no_new_rows_keeps_old_cursor():
     connector = SqlServerConnector({
-        "host": "h", "database": "d", "username": "u", "password": "p",
+        "host": "h", "database": "d", "username": "u", "password": WRONG_PASSWORD,
         "query": "SELECT * FROM ticks",
     })
     engine, conn = _fake_engine([])
@@ -76,7 +77,7 @@ def test_sqlserver_fetch_since_no_new_rows_keeps_old_cursor():
 
 def test_oracle_fetch_since_subsequent_run_filters_by_cursor():
     connector = OracleConnector({
-        "host": "h", "service_name": "svc", "username": "u", "password": "p",
+        "host": "h", "service_name": "svc", "username": "u", "password": WRONG_PASSWORD,
         "query": "SELECT * FROM ticks",
     })
     engine, conn = _fake_engine([{"ts": "2026-08-01T00:05:00", "units": 3}])
@@ -92,7 +93,7 @@ def test_oracle_fetch_since_subsequent_run_filters_by_cursor():
 
 def test_postgres_fetch_since_subsequent_run_filters_by_cursor():
     connector = PostgresConnector({
-        "host": "h", "database": "d", "username": "u", "password": "p",
+        "host": "h", "database": "d", "username": "u", "password": WRONG_PASSWORD,
         "query": "SELECT * FROM ticks",
     })
     engine, conn = _fake_engine([{"ts": "2026-08-01T00:05:00", "units": 3}])
@@ -116,7 +117,7 @@ def test_postgres_connector_requires_database_and_query():
 
 def test_mysql_fetch_since_subsequent_run_filters_by_cursor():
     connector = MysqlConnector({
-        "host": "h", "database": "d", "username": "u", "password": "p",
+        "host": "h", "database": "d", "username": "u", "password": WRONG_PASSWORD,
         "query": "SELECT * FROM ticks",
     })
     engine, conn = _fake_engine([{"ts": "2026-08-01T00:05:00", "units": 3}])

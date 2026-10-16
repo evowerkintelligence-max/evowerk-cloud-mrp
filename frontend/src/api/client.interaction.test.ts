@@ -71,4 +71,21 @@ describe("apiFetch", () => {
     expect(calls.map((c) => c.path)).toEqual(["/items"]);
     expect(authHeader(fetchMock.mock.calls[0][1])).toBeNull();
   });
+
+  it("reports 5xx responses and network failures, but not 4xx", async () => {
+    const { calls, fetchMock } = mockApi({
+      "/boom": new Response("{}", { status: 503 }),
+      "/missing": new Response("{}", { status: 404 }),
+    });
+    await apiFetch("/boom?x=1");
+    await apiFetch("/missing");
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(apiFetch("/offline")).rejects.toThrow("Failed to fetch");
+
+    const reported = calls.filter((c) => c.path === "/client-errors").map((c) => c.body);
+    expect(reported).toEqual([
+      expect.objectContaining({ kind: "api", message: "GET /boom -> 503" }),
+      expect.objectContaining({ kind: "api", message: "TypeError: Failed to fetch" }),
+    ]);
+  });
 });

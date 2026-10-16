@@ -1,9 +1,10 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 from decimal import Decimal
 
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 def _dec(v) -> Decimal:

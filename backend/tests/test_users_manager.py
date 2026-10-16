@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 from sqlalchemy import select
@@ -20,7 +21,7 @@ async def test_user_manager_create_bootstraps_org_and_default_location(db_sessio
     manager = UserManager(user_db, PasswordHelper(_pwd_context))
 
     created = await manager.create(
-        UserCreate(org_name="Acme", email="alice@example.com", password="correct-horse-battery-staple1")  # pragma: allowlist secret
+        UserCreate(org_name="Acme", email="alice@example.com", password=TEST_PASSWORD)
     )
 
     assert created.is_verified is False
@@ -36,6 +37,6 @@ async def test_user_manager_create_bootstraps_org_and_default_location(db_sessio
     # password hash was produced through the same argon2 context, verifiable
     # via the manager's own password_helper (not a re-hash / different scheme)
     verified, _ = manager.password_helper.verify_and_update(
-        "correct-horse-battery-staple1", created.hashed_password
+        TEST_PASSWORD, created.hashed_password
     )
     assert verified is True

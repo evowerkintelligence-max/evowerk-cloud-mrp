@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 # M2 is consistently worse than M1 across all 3 days - should surface as an
 # RCA evidence candidate (negative delta_oee vs overall).

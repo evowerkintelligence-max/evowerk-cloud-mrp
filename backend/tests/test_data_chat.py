@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 CSV = b"machine,downtime_minutes,date\nM1,30,2026-01-01\nM2,45,2026-01-02\nM1,10,2026-01-03\n"
 

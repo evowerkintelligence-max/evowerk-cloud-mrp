@@ -133,3 +133,54 @@ command still runs `alembic upgrade head` on every start (see `ecs.tf`) -
 safe at `desired_count = 1`. If you ever scale the backend service beyond a
 single task, move the migration to a separate one-off deploy step first, so
 multiple tasks don't race to migrate at once.
+
+<!-- BEGIN_TF_DOCS -->
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|---|---|---|---|:---:|
+| `aws_region` | AWS region to deploy into | `string` | `"us-east-1"` | no |
+| `project_name` | Short name used as a prefix for every resource this module creates | `string` | `"evowerk-mrp"` | no |
+| `environment` | Deployment environment name (e.g. production, staging) - appended to resource names | `string` | `"production"` | no |
+| `vpc_cidr` | CIDR block for the VPC this module creates | `string` | `"10.20.0.0/16"` | no |
+| `availability_zones` | AZs to spread subnets across. Leave empty to auto-pick the first 2 available AZs in the region (2 is the minimum for RDS + the ALB). | `list(string)` | `[]` | no |
+| `image_tag` | Image tag to deploy for both the backend and frontend ECR repos this module creates - must already be pushed before applying the ECS resources. | `string` | `"latest"` | no |
+| `redis_image` | Redis image - pulled directly from Docker Hub (not mirrored into ECR), since it's an unmodified public image. | `string` | `"redis:7-alpine"` | no |
+| `db_instance_class` | RDS instance class | `string` | `"db.t4g.micro"` | no |
+| `db_allocated_storage` | RDS allocated storage in GB | `number` | `20` | no |
+| `db_deletion_protection` | Block accidental RDS deletion via the AWS API/console. Leave true for a real deployment; set false only for a throwaway test env you intend to destroy/recreate on demand. | `bool` | `true` | no |
+| `db_backup_retention_period` | RDS automated backup retention in days. AWS free-tier accounts cap this at 1 - raise it once off free tier. | `number` | `7` | no |
+| `db_name` |  | `string` | `"evowerk_cloud_mrp"` | no |
+| `db_username` |  | `string` | `"evowerk"` | no |
+| `domain_name` | Domain the app will be served on (e.g. mrp.customer.com) - used for the ACM cert and CORS_ORIGINS. Leave empty to skip HTTPS/ACM entirely and serve plain HTTP on the ALB's own DNS name instead (e.g. for a quick test deploy with no domain). | `string` | `""` | no |
+| `route53_zone_id` | Optional Route53 hosted zone ID for domain_name. If set, ACM DNS validation and the app's DNS record are created automatically in one apply. If left empty, the ACM validation CNAME records are printed as an output for you to add manually at whatever DNS provider you use, and you'll need a second `terraform apply` once the cert finishes validating - see README.md. | `string` | `""` | no |
+| `ses_from_email` | Sender address for password-reset/verification emails (e.g. no-reply@mrp.customer.com) - must be on a domain you can add DNS records for, since SES requires domain verification. | `string` | `""` | no |
+| `google_oauth_client_id` | Google OAuth 2.0 client ID (leave empty to disable Google login) | `string` | `""` | no |
+| `google_oauth_client_secret` | Google OAuth 2.0 client secret | `string` | `""` | no |
+| `microsoft_oauth_client_id` | Microsoft OAuth 2.0 (Azure AD app registration) client ID (leave empty to disable Microsoft login) | `string` | `""` | no |
+| `microsoft_oauth_client_secret` | Microsoft OAuth 2.0 client secret | `string` | `""` | no |
+| `jwt_secret_key` | JWT signing secret. Leave empty to auto-generate a random one (stored in Secrets Manager, never in state as anything other than the encrypted value Terraform already protects state values with). | `string` | `""` | no |
+| `mfa_encryption_key` | Fernet key encrypting TOTP secrets at rest. Must be supplied - unlike jwt_secret_key this can't be auto-generated here, since it has to be a valid Fernet key, not just random bytes. Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" | `string` | n/a | yes |
+| `rate_limit_login_per_5min` | Login attempts allowed per IP per 5 minutes - matches the app's own default (see backend/app/core/config.py); raise only for a test env with an automated tester hitting this a lot. | `number` | `60` | no |
+| `rate_limit_refresh_per_5min` | Token refresh calls allowed per IP per 5 minutes - matches the app's own default. | `number` | `120` | no |
+| `rate_limit_register_per_hour` | Registrations allowed per IP per hour - matches the app's own default. | `number` | `20` | no |
+| `rate_limit_mfa_verify_per_5min` | MFA verification attempts allowed per IP per 5 minutes - matches the app's own default. | `number` | `30` | no |
+| `backend_cpu` | Fargate task CPU units for the backend service (256 = 0.25 vCPU) | `number` | `1024` | no |
+| `backend_memory` | Fargate task memory (MB) for the backend service - the Fargate minimum (512) OOM-kills under real traffic: this app loads xgboost/lightgbm/shap/scipy/pandas/duckdb, which don't leave enough headroom once a few requests overlap. | `number` | `2048` | no |
+| `frontend_cpu` |  | `number` | `256` | no |
+| `frontend_memory` |  | `number` | `512` | no |
+| `redis_cpu` |  | `number` | `256` | no |
+| `redis_memory` |  | `number` | `512` | no |
+
+## Outputs
+
+| Name | Description | Sensitive |
+|---|---|:---:|
+| `alb_dns_name` | Point your DNS at this (CNAME) if route53_zone_id wasn't set | no |
+| `acm_certificate_validation_records` | Only populated if domain_name was set and route53_zone_id was left empty - add these as CNAME records at your DNS provider, wait for validation, then re-apply. | no |
+| `app_url` | Where to reach the app - the ALB DNS name over plain HTTP if domain_name was left empty, otherwise your domain over HTTPS. | no |
+| `ecr_backend_repository_url` |  | no |
+| `ecr_frontend_repository_url` |  | no |
+| `rds_endpoint` |  | yes |
+| `db_password` | Only needed if you need to connect manually - the app itself reads DATABASE_URL from Secrets Manager | yes |
+<!-- END_TF_DOCS -->

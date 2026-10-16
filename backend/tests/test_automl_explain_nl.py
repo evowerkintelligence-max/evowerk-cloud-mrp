@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pandas as pd
 import pytest
@@ -6,7 +7,7 @@ import pytest
 from app.services import automl_explain_nl
 from app.services import automl_templates as templates
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 def _fake_engine_result(feature_values: dict[str, list], target: list[float], task: str = "regression") -> dict:

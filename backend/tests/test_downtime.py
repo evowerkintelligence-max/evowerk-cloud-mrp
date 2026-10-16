@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -6,7 +7,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = TEST_PASSWORD
 
 # 3 real incidents (duration > 0): 30 + 20 + 50 = 100 min.
 #   Breakdown = 80 min (2 incidents), Changeover = 20 min (1). MTTR = 100/3 = 33.33.

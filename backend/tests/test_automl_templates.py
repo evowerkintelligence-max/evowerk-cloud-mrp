@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -14,7 +15,7 @@ from app.services import automl_templates as templates
 from app.services.automl_templates import predictive_maintenance as pm
 from app.services.automl_runner import execute_automl_run
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 def test_register_and_get_template():

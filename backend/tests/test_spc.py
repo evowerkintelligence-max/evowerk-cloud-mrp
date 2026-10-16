@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = TEST_PASSWORD
 
 # Seven 10s then a 50: mean=15, MR-bar=40/7, UCL~30.2 -> the 50 is out of control.
 SPC_CSV = b"value\n10\n10\n10\n10\n10\n10\n10\n50\n"

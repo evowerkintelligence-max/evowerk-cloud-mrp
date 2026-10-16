@@ -1,5 +1,6 @@
 # backend/tests/test_pace_tracking.py
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import asyncio
 
@@ -7,7 +8,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register_and_login(client, email: str, org_name: str = "PaceOrg") -> str:

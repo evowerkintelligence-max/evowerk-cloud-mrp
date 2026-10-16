@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 from unittest.mock import patch
 
@@ -9,7 +10,7 @@ from tests.conftest import drain_background_tasks
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def test_forgot_password_always_returns_202_even_for_unknown_email(client):

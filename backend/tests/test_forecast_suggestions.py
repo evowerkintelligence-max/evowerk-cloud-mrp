@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid as uuid_module
 from datetime import date, datetime, timedelta, timezone
@@ -12,7 +13,7 @@ from app.services.demand_forecasting import ForecastPoint, bucket_weekly
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 def _daily(n: int, yhat: float = 3.0, with_bounds: bool = True) -> list[ForecastPoint]:

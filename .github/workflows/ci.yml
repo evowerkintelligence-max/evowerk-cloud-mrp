@@ -18,6 +18,8 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.pct }}
     defaults:
       run:
         working-directory: backend
@@ -43,10 +45,13 @@ jobs:
         # Floor sits ~2 points under current total coverage; ratchet up as it grows.
         run: uv run --frozen pytest -q --cov=app --cov-report=term --cov-fail-under=70
       - name: Coverage summary
+        id: coverage
         if: ${{ !cancelled() && hashFiles('backend/.coverage') != '' }}
         run: |
+          pct=$(uv run --frozen coverage report --format=total --precision=1)
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
           {
-            echo "### Backend coverage (pytest-cov): $(uv run --frozen coverage report --format=total --precision=1)% (floor 70%)"
+            echo "### Backend coverage (pytest-cov): ${pct}% (floor 70%)"
             echo
             echo "<details><summary>Files below 100%, lowest first</summary>"
             echo
@@ -66,6 +71,8 @@ jobs:
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.pct }}
     defaults:
       run:
         working-directory: frontend
@@ -95,8 +102,10 @@ jobs:
           --coverage.reporter=text
           --coverage.reporter=json-summary
       - name: Coverage summary
+        id: coverage
         if: ${{ !cancelled() && hashFiles('frontend/coverage/coverage-summary.json') != '' }}
         run: |
+          echo "pct=$(node -p 'require("./coverage/coverage-summary.json").total.lines.pct')" >> "$GITHUB_OUTPUT"
           node -e '
           const t = require("./coverage/coverage-summary.json").total;
           const rows = ["lines", "statements", "functions", "branches"]
@@ -112,6 +121,63 @@ jobs:
         # runtime dependency would.
         working-directory: .
         run: npm audit --omit=dev --audit-level=high
+
+  # Coverage badges for the README, without a third-party service: SVGs are
+  # committed to the orphan `badges` branch and served from
+  # raw.githubusercontent.com. No loop: this workflow only triggers on pushes
+  # to master (and on pull requests), never on pushes to `badges`.
+  badges:
+    needs: [backend, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish coverage badges to the badges branch
+        env:
+          BACKEND_PCT: ${{ needs.backend.outputs.coverage }}
+          FRONTEND_PCT: ${{ needs.frontend.outputs.coverage }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q badges && cd badges
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin badges; then
+            git checkout -q -b badges FETCH_HEAD
+          else
+            git checkout -q --orphan badges
+          fi
+          python3 - <<'EOF'
+          import os
+
+          def badge(label, pct):
+              p = float(pct)
+              value = f"{p:.1f}%"
+              color = "#4c1" if p >= 90 else "#97ca00" if p >= 80 else "#dfb317" if p >= 70 else "#fe7d37" if p >= 60 else "#e05d44"
+              lw, vw = 7 * len(label) + 10, 7 * len(value) + 10
+              w = lw + vw
+              return (
+                  f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="20" role="img" aria-label="{label}: {value}">'
+                  f"<title>{label}: {value}</title>"
+                  f'<clipPath id="r"><rect width="{w}" height="20" rx="3" fill="#fff"/></clipPath>'
+                  f'<g clip-path="url(#r)"><rect width="{lw}" height="20" fill="#555"/>'
+                  f'<rect x="{lw}" width="{vw}" height="20" fill="{color}"/></g>'
+                  f'<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">'
+                  f'<text x="{lw / 2}" y="14">{label}</text><text x="{lw + vw / 2}" y="14">{value}</text></g></svg>\n'
+              )
+
+          for name, env in [("backend", "BACKEND_PCT"), ("frontend", "FRONTEND_PCT")]:
+              if os.environ.get(env):
+                  with open(f"{name}-coverage.svg", "w") as f:
+                      f.write(badge(f"{name} coverage", os.environ[env]))
+          EOF
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Badges unchanged."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "chore: update coverage badges (backend ${BACKEND_PCT}%, frontend ${FRONTEND_PCT}%)"
+          git push -q origin HEAD:badges
 
   pre-commit:
     runs-on: ubuntu-latest

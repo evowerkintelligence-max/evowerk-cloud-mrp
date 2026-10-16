@@ -1,5 +1,10 @@
 # EvoWerk Cloud MRP
 
+[![CI](https://github.com/evowerkintelligence-max/evowerk-cloud-mrp/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/evowerkintelligence-max/evowerk-cloud-mrp/actions/workflows/ci.yml)
+[![Backend coverage](https://raw.githubusercontent.com/evowerkintelligence-max/evowerk-cloud-mrp/badges/backend-coverage.svg)](#testing)
+[![Frontend coverage](https://raw.githubusercontent.com/evowerkintelligence-max/evowerk-cloud-mrp/badges/frontend-coverage.svg)](#testing)
+[![License: proprietary](https://img.shields.io/badge/license-proprietary-blue.svg)](LICENSE)
+
 Multi-tenant, cloud-hosted manufacturing system (BOM, procurement, lot tracking,
 forecasting). Industry-agnostic core; industry-specific customization (pharma,
 food, auto, etc.) is added later, config-driven, per customer.

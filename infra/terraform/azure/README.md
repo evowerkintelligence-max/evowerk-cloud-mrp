@@ -115,3 +115,43 @@ overnight. The tradeoffs:
   clock, so it's the bulk of an idle month. Stop it between sessions with
   `az postgres flexible-server stop -g <rg> -n <server>`; Azure restarts it
   automatically after 7 days, so it's not a permanent off switch.
+
+<!-- BEGIN_TF_DOCS -->
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|---|---|---|---|:---:|
+| `azure_location` | Azure region to deploy into | `string` | `"eastus"` | no |
+| `project_name` | Short name used as a prefix for every resource this module creates | `string` | `"evowerk-mrp"` | no |
+| `environment` | Deployment environment name (e.g. production, staging) - appended to resource names | `string` | `"production"` | no |
+| `vnet_cidr` | CIDR block for the VNet this module creates | `string` | `"10.30.0.0/16"` | no |
+| `image_tag` | Image tag to deploy for both the backend and frontend ACR repos this module creates - must already be pushed before applying the Container Apps. | `string` | `"latest"` | no |
+| `redis_image` | Redis image - pulled directly from Docker Hub (not mirrored into ACR), since it's an unmodified public image. | `string` | `"redis:7-alpine"` | no |
+| `db_sku_name` | Postgres Flexible Server SKU | `string` | `"B_Standard_B1ms"` | no |
+| `db_storage_mb` | Postgres Flexible Server storage in MB | `number` | `32768` | no |
+| `db_name` |  | `string` | `"evowerk_cloud_mrp"` | no |
+| `db_username` |  | `string` | `"evowerk"` | no |
+| `jwt_secret_key` | JWT signing secret. Leave empty to auto-generate a random one. | `string` | `""` | no |
+| `mfa_encryption_key` | Fernet key encrypting TOTP secrets at rest. Must be supplied - can't be safely auto-generated here (has to be a valid Fernet key, not just random bytes). Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" | `string` | n/a | yes |
+| `gemini_api_key` | Gemini API key for the LLM-backed features (data chat, report narration, computer vision). Get one from https://aistudio.google.com/apikey | `string` | n/a | yes |
+| `gemini_model` | Gemini model id. Pinned here so a retired model can be rolled forward without rebuilding the backend image - Google retires models for new API keys while still listing them in models.list(). | `string` | `"gemini-3.6-flash"` | no |
+| `dataset_storage_quota_gb` | Size of the Azure Files share backing the backend's data_dir (uploaded datasets, AutoML artifacts). Standard file shares bill for what you use, not the quota, so this is a cap rather than a cost. | `number` | `100` | no |
+| `backend_cpu` | vCPU for the backend Container App (Consumption plan requires specific valid cpu/memory pairs) | `number` | `0.5` | no |
+| `backend_memory` |  | `string` | `"1Gi"` | no |
+| `frontend_cpu` |  | `number` | `0.25` | no |
+| `frontend_memory` |  | `string` | `"0.5Gi"` | no |
+| `redis_cpu` |  | `number` | `0.25` | no |
+| `redis_memory` |  | `string` | `"0.5Gi"` | no |
+
+## Outputs
+
+| Name | Description | Sensitive |
+|---|---|:---:|
+| `frontend_url` | The app's HTTPS URL - Container Apps' default *.azurecontainerapps.io domain gets automatic HTTPS with zero setup, no custom domain needed to start. | no |
+| `acr_login_server` |  | no |
+| `acr_backend_repository` |  | no |
+| `acr_frontend_repository` |  | no |
+| `postgres_fqdn` |  | yes |
+| `db_password` | Only needed if you need to connect manually - the app itself reads DATABASE_URL from Key Vault | yes |
+| `key_vault_name` |  | no |
+<!-- END_TF_DOCS -->

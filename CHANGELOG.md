@@ -27,6 +27,13 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
   `@vitest/coverage-v8` (`npm run test:coverage`).
 
 ### Changed
+- Split `analytics/shared.tsx`, `RcaCases.tsx`, `Items.tsx` and `Boms.tsx`
+  into per-page folders; import paths are unchanged.
+- Split `services/reports.py` into a `reports/` package and moved helpers
+  out of `routes/forecasts.py` and `routes/work_orders.py`; imports and the
+  OpenAPI document are unchanged.
+- Split `test_planning_grid.py` and `test_work_orders.py` into per-feature
+  test files with shared helper modules (same 123 tests).
 - Ruff config moved from `backend/ruff.toml` to the root `pyproject.toml`
   (same rules), so it applies from anywhere in the repo.
 - CI path filters now only skip jobs on pull requests; pushes to `master`
@@ -39,4 +46,6 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
   smaller modules with no behavior change.
 
 ### Fixed
+- `backend/dev_server.py` no longer imports the removed
+  `inventory_snapshot` model.
 - `Sparkline` called `useId` after an early return (React rules-of-hooks).

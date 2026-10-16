@@ -136,7 +136,7 @@ describe("AutoMLRun existing run", () => {
     mockApi({ "/datasets": [], "/automl/algorithms": [], "/automl/runs/r1": { ...RUN, status: "running", retrained_from_run_id: "r0" } });
     renderAt("/automl/advanced/r1");
     expect(await screen.findByText(/Training in progress \(running\)/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "an earlier run" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "an earlier run" }).getAttribute("href")).toBe("/automl/advanced/r0");
   });
 
   it("renders results for a successful run", async () => {
@@ -148,7 +148,7 @@ describe("AutoMLRun existing run", () => {
     });
     renderAt("/automl/advanced/r1");
     expect(await screen.findByRole("heading", { name: "Late shipments" })).toBeTruthy();
-    // AutoMLRun.tsx renders RunResultsPanel twice for a successful run (see report); assert presence only.
-    expect((await screen.findAllByText("qty drives lateness")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("qty drives lateness")).toBeTruthy();
+    expect(screen.getAllByText("Leaderboard")).toHaveLength(1);
   });
 });

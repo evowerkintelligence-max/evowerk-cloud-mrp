@@ -265,5 +265,25 @@ describe("EngineScreen", () => {
       });
       expect(posts()).toBe(2);
     });
+
+    it("auto-refresh re-posts the last-run body, not mapping edits made since", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const api = mockApi(routes());
+      renderPage(<Screen />);
+      await screen.findByRole("option", { name: "Line data (1,200 rows)" });
+      await userEvent.selectOptions(control("Dataset"), "ds1");
+      await userEvent.click(screen.getByRole("button", { name: "Run widget" }));
+      await screen.findByText("Total 42 for ds1");
+      const posts = () => api.calls.filter((c) => c.method === "POST" && c.path === "/analytics/widget");
+
+      await userEvent.click(screen.getByRole("checkbox"));
+      await userEvent.selectOptions(control("Machine (optional)"), "");
+      await userEvent.selectOptions(control("Unit"), "hours");
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      await waitFor(() => expect(posts()).toHaveLength(2));
+      expect(posts()[1].body).toEqual(posts()[0].body);
+    });
   });
 });

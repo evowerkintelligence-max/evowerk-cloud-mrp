@@ -59,6 +59,15 @@ describe("ItemSelect", () => {
     expect(screen.getByRole("combobox")).toBeTruthy();
   });
 
+  it("gives the hidden mirror the custom message when picked from a blank form", async () => {
+    mockApi({});
+    renderPage(<Harness onChange={() => {}} />);
+    await userEvent.selectOptions(screen.getByRole("combobox"), "+ New item...");
+    expect((screen.getByLabelText("Item") as HTMLInputElement).validationMessage).toBe(
+      "Select an item, or finish creating the new one.",
+    );
+  });
+
   it("shows the server's error when creating fails, and Cancel returns to the dropdown", async () => {
     mockApi({ "POST /items": new Response(JSON.stringify({ detail: "SKU already exists" }), { status: 409 }) });
     renderPage(<Harness onChange={() => {}} />);

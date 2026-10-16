@@ -37,7 +37,14 @@ export function ToBuyPanel({ rows, canOrder }: { rows: GridToBuy[]; canOrder: bo
     },
     onSuccess: () => {
       justOrdered.current = true;
-      queryClient.invalidateQueries({ queryKey: ["planning-grid"] });
+      // The refetch can also leave `rows` unchanged (e.g. every row was
+      // unassigned), so stop waiting for it once it settles, or the next real
+      // change would be swallowed. react-query delivers the new rows on a
+      // setTimeout(0) after the fetch resolves; clearing on a later one lets a
+      // refetch that did change the rows be consumed by the effect below first.
+      queryClient
+        .invalidateQueries({ queryKey: ["planning-grid"] })
+        .finally(() => setTimeout(() => (justOrdered.current = false)));
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
     },
   });

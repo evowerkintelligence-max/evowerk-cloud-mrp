@@ -42,4 +42,4 @@ export interface ImportResult {
   errors: { row: number; sku: string | null; message: string }[];
 }
 
-export const TABLE_COLUMN_COUNT = 12;
+export const TABLE_COLUMN_COUNT = 13;

@@ -70,6 +70,7 @@ export function ReportBuilder() {
     setName("");
     setSections([]);
     setError(null);
+    setNarration(null);
   }
 
   function startEdit(r: SavedReportSummary) {
@@ -77,6 +78,7 @@ export function ReportBuilder() {
     setName(r.name);
     setSections(r.sections);
     setError(null);
+    setNarration(null);
   }
 
   const save = useMutation({

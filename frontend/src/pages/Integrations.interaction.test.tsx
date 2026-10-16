@@ -198,4 +198,39 @@ describe("Integrations", () => {
     await userEvent.click(within(d).getByRole("button", { name: "Create" }));
     expect(await within(d).findByText("Name already used")).toBeTruthy();
   });
+
+  it("shows the API's error when a connection test request fails", async () => {
+    api({ "POST /integrations/i1/test": new Response(JSON.stringify({ detail: "Host unreachable" }), { status: 502 }) });
+    renderPage(<Integrations />);
+    await screen.findByText("Odoo");
+    await userEvent.click(within(row("Odoo")).getByRole("button", { name: "Test" }));
+    expect(await within(row("Odoo")).findByText("Host unreachable")).toBeTruthy();
+  });
+
+  it("shows the upload error instead of the success message", async () => {
+    api({ "POST /integrations/i2/upload": new Response(JSON.stringify({ detail: "Unsupported file" }), { status: 400 }) });
+    const { container } = renderPage(<Integrations />);
+    await screen.findByText("Shift sheet");
+    await userEvent.click(within(row("Shift sheet")).getByRole("button", { name: "Upload file" }));
+    const file = new File(["x"], "shift.csv", { type: "text/csv" });
+    await userEvent.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file);
+    expect(await within(row("Shift sheet")).findByText("Unsupported file")).toBeTruthy();
+    expect(within(row("Shift sheet")).queryByText("File uploaded — ready to sync")).toBeNull();
+  });
+
+  it("shows the delete error and keeps the row", async () => {
+    api({ "DELETE /integrations/i1": new Response(JSON.stringify({ detail: "Integration in use" }), { status: 409 }) });
+    renderPage(<Integrations />);
+    await screen.findByText("Odoo");
+    await userEvent.click(within(row("Odoo")).getByRole("button", { name: "Delete" }));
+    expect(await within(row("Odoo")).findByText("Integration in use")).toBeTruthy();
+  });
+
+  it("falls back to a readable message when the error body isn't JSON", async () => {
+    api({ "POST /integrations/i1/sync": new Response("<html>oops</html>", { status: 500 }) });
+    renderPage(<Integrations />);
+    await screen.findByText("Odoo");
+    await userEvent.click(within(row("Odoo")).getByRole("button", { name: "Sync" }));
+    expect(await within(row("Odoo")).findByText("Sync failed")).toBeTruthy();
+  });
 });

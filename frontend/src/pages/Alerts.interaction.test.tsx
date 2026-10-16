@@ -257,4 +257,22 @@ describe("Alerts", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByText("New alert rule")).toBeNull();
   });
+
+  it("shows the toggle error and leaves the checkbox as it was", async () => {
+    api({ "PUT /alerts/rules/r1": new Response(JSON.stringify({ detail: "Rule is read-only" }), { status: 403 }) });
+    renderPage(<Alerts />);
+    await screen.findByText("Line 2 downtime");
+    await userEvent.click(screen.getByRole("checkbox"));
+    expect(await screen.findByText("Rule is read-only")).toBeTruthy();
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("shows the delete error, falling back when the body isn't JSON, and keeps the row", async () => {
+    api({ "DELETE /alerts/rules/r1": new Response("<html>oops</html>", { status: 500 }) });
+    renderPage(<Alerts />);
+    await screen.findByText("Line 2 downtime");
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText("Request failed")).toBeTruthy();
+    expect(screen.getByText("Line 2 downtime")).toBeTruthy();
+  });
 });

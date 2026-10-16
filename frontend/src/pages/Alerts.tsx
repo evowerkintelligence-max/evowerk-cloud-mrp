@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -82,12 +83,15 @@ export function Alerts() {
 
   const toggle = useMutation({
     mutationFn: (rule: AlertRule) =>
-      apiFetch(`/alerts/rules/${rule.id}`, { method: "PUT", body: JSON.stringify({ enabled: !rule.enabled }) }),
+      j(apiFetch(`/alerts/rules/${rule.id}`, { method: "PUT", body: JSON.stringify({ enabled: !rule.enabled }) })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["alert-rules"] }),
   });
 
   const remove = useMutation({
-    mutationFn: (id: string) => apiFetch(`/alerts/rules/${id}`, { method: "DELETE" }),
+    mutationFn: async (id: string) => {
+      const res = await apiFetch(`/alerts/rules/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Request failed");
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["alert-rules"] }),
   });
 
@@ -136,6 +140,9 @@ export function Alerts() {
           }}
         />
       )}
+
+      {toggle.isError && <Alert variant="destructive">{toggle.error.message}</Alert>}
+      {remove.isError && <Alert variant="destructive">{remove.error.message}</Alert>}
 
       <Card>
         <CardContent className="p-0">

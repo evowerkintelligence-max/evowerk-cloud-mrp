@@ -21,7 +21,7 @@ export function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: 
         method: "POST",
         body: JSON.stringify({ columns: Array.from(subsetCols), output_name: subsetName.trim() || undefined }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Subset failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Subset failed");
       return res.json() as Promise<{ dataset: Dataset; dropped_columns: string[] }>;
     },
   });
@@ -29,9 +29,22 @@ export function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: 
   const [direction, setDirection] = useState<"wide_to_tall" | "tall_to_wide">("wide_to_tall");
   const [timestampCol, setTimestampCol] = useState("");
   const [tagCols, setTagCols] = useState<Set<string>>(new Set());
-  const [tagCol, setTagCol] = useState("tag");
-  const [valueCol, setValueCol] = useState("value");
-  const [pivotName, setPivotName] = useState(`${d.name} (${direction})`);
+  const [tagColState, setTagCol] = useState("tag");
+  const [valueColState, setValueCol] = useState("value");
+  // When "tag"/"value" aren't real columns, default to the first text column for
+  // the tag and the first numeric one for the value, so the two differ and the
+  // <select> shows exactly what is sent.
+  const isNumeric = (dtype: string) => /INT|DOUBLE|FLOAT|DECIMAL|REAL|NUMERIC/i.test(dtype);
+  const isTime = (dtype: string) => /DATE|TIME/i.test(dtype);
+  const textCol = d.columns.find((c) => !isNumeric(c.dtype) && !isTime(c.dtype))?.name;
+  const numericCol = d.columns.find((c) => isNumeric(c.dtype))?.name;
+  const tagCol = names.includes(tagColState) ? tagColState : (textCol ?? names[0]);
+  const valueCol = names.includes(valueColState)
+    ? valueColState
+    : (numericCol ?? names.find((n) => n !== tagCol) ?? names[0]);
+  // null until the user types, so the default name follows the direction.
+  const [typedPivotName, setPivotName] = useState<string | null>(null);
+  const pivotName = typedPivotName ?? `${d.name} (${direction})`;
   const pivot = useMutation({
     mutationFn: async () => {
       const body: Record<string, unknown> = {
@@ -45,7 +58,7 @@ export function TransformPanel({ d, onCreated }: { d: DatasetDetail; onCreated: 
         body.value_col = valueCol;
       }
       const res = await apiFetch(`/datasets/${d.id}/transform/pivot`, { method: "POST", body: JSON.stringify(body) });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Pivot failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Pivot failed");
       return res.json() as Promise<Dataset>;
     },
   });

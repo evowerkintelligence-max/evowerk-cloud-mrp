@@ -281,6 +281,17 @@ describe("Items", () => {
     expect(screen.queryByText(/ana@acme\.test/)).toBeNull();
   });
 
+  it("spans the expanded history row across every table column", async () => {
+    mockApi(routes({ "/items/i2/audit-log": [] }));
+    renderPage(<Items />);
+    await screen.findByText("STEEL-1");
+    await userEvent.click(within(rowFor("STEEL-1")).getByRole("button", { name: "History" }));
+    const cell = (await screen.findByText("No history yet.")).closest("td")!;
+    const headers = cell.closest("table")!.querySelectorAll("thead th").length;
+    expect(headers).toBe(rowFor("STEEL-1").querySelectorAll("td").length);
+    expect(cell.colSpan).toBe(headers);
+  });
+
   it("imports from a chosen dataset and lists failed rows", async () => {
     const api = mockApi(
       routes({

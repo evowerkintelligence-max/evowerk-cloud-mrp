@@ -50,6 +50,8 @@ export function EngineScreen<T>({
   const [datasetId, setDatasetId] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
   const [result, setResult] = useState<T | null>(null);
+  // The request body behind `result` - rendered alongside it, so state, not a ref.
+  const [resultBody, setResultBody] = useState<Record<string, unknown>>({});
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -67,18 +69,17 @@ export function EngineScreen<T>({
   // datasetId) means auto-mapping actually applies once the dataset shows up,
   // rather than silently giving up because the first attempt saw an empty
   // column list.
-  const autoMappedFor = useRef<string | null>(null);
-  useEffect(() => {
-    const fromUrl = searchParams.get("dataset_id");
-    if (!fromUrl) return;
+  // Adjusted during render rather than in an effect, so nothing paints unmapped.
+  const fromUrl = searchParams.get("dataset_id");
+  const [autoMappedFor, setAutoMappedFor] = useState<string | null>(null);
+  if (fromUrl && autoMappedFor !== fromUrl) {
     if (!datasetId) setDatasetId(fromUrl);
-    if (autoMappedFor.current === fromUrl) return;
     const ds = datasets.data?.find((d) => d.id === fromUrl);
-    if (!ds) return;
-    autoMappedFor.current = fromUrl;
-    setForm(autoMapColumns(fields, ds.columns.map((c) => c.name)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, datasets.data]);
+    if (ds) {
+      setAutoMappedFor(fromUrl);
+      setForm(autoMapColumns(fields, ds.columns.map((c) => c.name)));
+    }
+  }
 
   const columns = useMemo(
     () => datasets.data?.find((d) => d.id === datasetId)?.columns.map((c) => c.name) ?? [],
@@ -108,11 +109,12 @@ export function EngineScreen<T>({
       lastComputeBody.current = body;
       const res = await apiFetch(path, { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Compute failed");
-      return res.json() as Promise<T>;
+      return { data: (await res.json()) as T, body };
     },
     onSuccess: (r) => {
       setError(null);
-      setResult(r);
+      setResult(r.data);
+      setResultBody(r.body);
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -276,9 +278,9 @@ export function EngineScreen<T>({
               {isFullscreen ? "Exit TV mode" : "TV mode"}
             </Button>
           </div>
-          {children(result, lastComputeBody.current ?? {})}
+          {children(result, resultBody)}
           <SendToReportButton
-            spec={{ type: "engine", engine_path: path, engine_body: lastComputeBody.current ?? {} }}
+            spec={{ type: "engine", engine_path: path, engine_body: resultBody }}
             label={`${title} — ${new Date().toLocaleString()}`}
           />
         </div>

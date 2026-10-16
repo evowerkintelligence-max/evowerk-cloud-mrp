@@ -32,10 +32,10 @@ function prefersReducedMotion(): boolean {
 export function useCountUp(value: number, durationMs = 600): number {
   const [display, setDisplay] = useState(value);
   const fromRef = useRef(value);
+  const reduced = prefersReducedMotion();
 
   useEffect(() => {
-    if (prefersReducedMotion()) {
-      setDisplay(value);
+    if (reduced) {
       fromRef.current = value;
       return;
     }
@@ -56,7 +56,7 @@ export function useCountUp(value: number, durationMs = 600): number {
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [value, durationMs]);
+  }, [value, durationMs, reduced]);
 
-  return display;
+  return reduced ? value : display;
 }

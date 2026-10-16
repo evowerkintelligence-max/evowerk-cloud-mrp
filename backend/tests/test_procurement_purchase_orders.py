@@ -5,39 +5,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tests.conftest import drain_background_tasks
+from tests._procurement_helpers import (
+    PASSWORD,
+    _register_and_login,
+    _create_item,
+    _create_supplier,
+)
 
 pytestmark = pytest.mark.asyncio
-
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit
-
-
-async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
-    reg = await client.post(
-        "/auth/register", json={"org_name": org_name, "email": email, "password": PASSWORD}
-    )
-    assert reg.status_code == 201
-    login = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
-    assert login.status_code == 200
-    return login.json()["access_token"]
-
-
-async def _create_item(client, token, sku="RAW-1", name="Steel Rod"):
-    res = await client.post(
-        "/items",
-        json={"sku": sku, "name": name, "item_type": "raw_material", "unit_of_measure": "ea"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert res.status_code == 201
-    return res.json()
-
-
-async def _create_supplier(client, token, name="Acme Metals"):
-    res = await client.post(
-        "/suppliers", json={"name": name, "email": "sales@acmemetals.example"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert res.status_code == 201
-    return res.json()
 
 
 async def test_supplier_create_and_duplicate_name_rejected(client):
@@ -182,65 +157,6 @@ async def test_po_submit_skips_email_when_supplier_email_is_whitespace(client, m
     assert submit.status_code == 200
 
 
-async def test_over_receipt_rejected(client):
-    token = await _register_and_login(client)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-
-    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
-    po_id = po.json()["id"]
-    lines = await client.patch(
-        f"/purchase-orders/{po_id}",
-        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
-        headers=headers,
-    )
-    line_id = lines.json()["lines"][0]["id"]
-    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
-
-    over = await client.post(
-        f"/purchase-orders/{po_id}/receive",
-        json=[{"po_line_id": line_id, "quantity": "11"}],
-        headers=headers,
-    )
-    assert over.status_code == 409
-
-
-async def test_over_receipt_rejected_across_duplicate_lines_in_one_request(client):
-    token = await _register_and_login(client)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-
-    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
-    po_id = po.json()["id"]
-    lines = await client.patch(
-        f"/purchase-orders/{po_id}",
-        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
-        headers=headers,
-    )
-    line_id = lines.json()["lines"][0]["id"]
-    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
-
-    # Two receipts against the same line in one request, each individually
-    # within bounds but exceeding quantity_ordered combined.
-    over = await client.post(
-        f"/purchase-orders/{po_id}/receive",
-        json=[
-            {"po_line_id": line_id, "quantity": "6"},
-            {"po_line_id": line_id, "quantity": "6"},
-        ],
-        headers=headers,
-    )
-    assert over.status_code == 409
-
-    # Nothing was applied - the line's quantity_received is untouched.
-    detail = await client.get(f"/purchase-orders/{po_id}", headers=headers)
-    assert detail.json()["lines"][0]["quantity_received"] == "0.0000"
-
-
 async def test_cancel_allowed_before_receiving_blocked_after(client):
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
@@ -315,7 +231,7 @@ async def test_rbac_blocks_non_owner_from_procurement_mutations(client, test_eng
     me = await client.get("/orgs/me", headers={"Authorization": f"Bearer {token}"})
     org_id = me.json()["id"]
 
-    # Same rationale as test_bom.py's RBAC test: register() always creates
+    # Same rationale as test_bom_lifecycle.py's RBAC test: register() always creates
     # "owner" users, so a non-owner has to be constructed directly.
     session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_factory() as session:
@@ -364,108 +280,6 @@ async def test_po_number_allocates_sequentially(client):
         numbers.append(res.json()["po_number"])
 
     assert numbers == [1, 2, 3, 4, 5]
-
-
-async def test_receive_with_rejected_quantity_only_applies_accepted_to_inventory(client):
-    token = await _register_and_login(client)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-
-    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
-    po_id = po.json()["id"]
-    lines = await client.patch(
-        f"/purchase-orders/{po_id}",
-        json=[{"item_id": item["id"], "quantity_ordered": "10", "unit_price": "1", "sequence": 0}],
-        headers=headers,
-    )
-    line_id = lines.json()["lines"][0]["id"]
-    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
-
-    receive = await client.post(
-        f"/purchase-orders/{po_id}/receive",
-        json=[
-            {
-                "po_line_id": line_id,
-                "quantity": "10",
-                "quantity_rejected": "3",
-                "reject_reason": "damaged",
-            }
-        ],
-        headers=headers,
-    )
-    assert receive.status_code == 200
-    # The full quantity (accepted + rejected) still closes out the line.
-    assert receive.json()["lines"][0]["quantity_received"] == "10.0000"
-    assert receive.json()["status"] == "received"
-
-    inventory = await client.get(f"/inventory/{item['id']}", headers=headers)
-    assert inventory.status_code == 200
-    # Only the accepted 7 units landed in inventory, not the full 10.
-    assert inventory.json()["quantity_on_hand"] == "7.0000"
-
-
-async def test_receive_fully_rejected_applies_no_inventory_transaction(client):
-    token = await _register_and_login(client)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-
-    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
-    po_id = po.json()["id"]
-    lines = await client.patch(
-        f"/purchase-orders/{po_id}",
-        json=[{"item_id": item["id"], "quantity_ordered": "5", "unit_price": "1", "sequence": 0}],
-        headers=headers,
-    )
-    line_id = lines.json()["lines"][0]["id"]
-    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
-
-    receive = await client.post(
-        f"/purchase-orders/{po_id}/receive",
-        json=[
-            {
-                "po_line_id": line_id,
-                "quantity": "5",
-                "quantity_rejected": "5",
-                "reject_reason": "wrong spec",
-            }
-        ],
-        headers=headers,
-    )
-    assert receive.status_code == 200
-    assert receive.json()["status"] == "received"
-
-    inventory = await client.get(f"/inventory/{item['id']}", headers=headers)
-    assert inventory.status_code == 200
-    assert inventory.json()["quantity_on_hand"] == "0.0000"
-
-
-async def test_receive_rejects_quantity_rejected_exceeding_quantity(client):
-    token = await _register_and_login(client)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    item = await _create_item(client, token)
-    supplier = await _create_supplier(client, token)
-
-    po = await client.post("/purchase-orders", json={"supplier_id": supplier["id"]}, headers=headers)
-    po_id = po.json()["id"]
-    lines = await client.patch(
-        f"/purchase-orders/{po_id}",
-        json=[{"item_id": item["id"], "quantity_ordered": "5", "unit_price": "1", "sequence": 0}],
-        headers=headers,
-    )
-    line_id = lines.json()["lines"][0]["id"]
-    await client.post(f"/purchase-orders/{po_id}/submit", headers=headers)
-
-    receive = await client.post(
-        f"/purchase-orders/{po_id}/receive",
-        json=[{"po_line_id": line_id, "quantity": "5", "quantity_rejected": "6"}],
-        headers=headers,
-    )
-    assert receive.status_code == 400
 
 
 async def test_create_po_defaults_expected_delivery_date_from_supplier_lead_time(client):

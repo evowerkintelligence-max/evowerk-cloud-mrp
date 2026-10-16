@@ -16,15 +16,16 @@ interface EnrollResponse {
 export function MfaChallenge() {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
+  const [submittedPassword, setSubmittedPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
   const [status, setStatus] = useState<"idle" | "ok" | "error">("idle");
 
   const enroll = useQuery<EnrollResponse>({
-    queryKey: ["mfa-enroll", needsPassword ? password : null],
+    queryKey: ["mfa-enroll", needsPassword ? submittedPassword : null],
     queryFn: async () => {
       const res = await apiFetch("/auth/mfa/enroll", {
         method: "POST",
-        body: JSON.stringify(needsPassword ? { password } : {}),
+        body: JSON.stringify(needsPassword ? { password: submittedPassword } : {}),
       });
       if (res.status === 403) {
         setNeedsPassword(true);
@@ -33,7 +34,7 @@ export function MfaChallenge() {
       if (!res.ok) throw new Error("Failed to start MFA enrollment");
       return res.json();
     },
-    enabled: !needsPassword || password.length > 0,
+    enabled: !needsPassword || submittedPassword.length > 0,
     retry: false,
   });
 
@@ -45,7 +46,7 @@ export function MfaChallenge() {
     setStatus(res.ok ? "ok" : "error");
   }
 
-  if (needsPassword && !password) {
+  if (needsPassword && !submittedPassword) {
     return (
       <AuthLayout
         title="Confirm your password"
@@ -57,10 +58,10 @@ export function MfaChallenge() {
               id="mfa-pw"
               type="password"
               onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && enroll.refetch()}
+              onKeyDown={(e) => e.key === "Enter" && setSubmittedPassword(password)}
             />
           </Field>
-          <Button className="w-full" onClick={() => enroll.refetch()}>
+          <Button className="w-full" onClick={() => setSubmittedPassword(password)}>
             Continue
           </Button>
         </div>

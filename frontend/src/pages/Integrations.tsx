@@ -102,7 +102,7 @@ export function Integrations() {
         method: "POST",
         body: JSON.stringify({ name: form.name, type: form.type, config }),
       });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to create integration");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to create integration");
       return res.json();
     },
     onSuccess: () => {
@@ -117,8 +117,9 @@ export function Integrations() {
   const remove = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiFetch(`/integrations/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete integration");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to delete integration");
     },
+    onError: (e: Error, id) => setTestMessages((m) => ({ ...m, [id]: e.message })),
     onSettled: () => {
       setBusyId(null);
       qc.invalidateQueries({ queryKey: ["integrations"] });
@@ -128,11 +129,12 @@ export function Integrations() {
   const test = useMutation({
     mutationFn: async (item: IntegrationDef) => {
       const res = await apiFetch(`/integrations/${item.id}/test`, { method: "POST" });
-      if (!res.ok) throw new Error("Test request failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Test request failed");
       return res.json();
     },
     onMutate: (item) => setBusyId(item.id),
     onSuccess: (data, item) => setTestMessages((m) => ({ ...m, [item.id]: data.message || (data.ok ? "Connected" : "Failed") })),
+    onError: (e: Error, item) => setTestMessages((m) => ({ ...m, [item.id]: e.message })),
     onSettled: () => {
       setBusyId(null);
       qc.invalidateQueries({ queryKey: ["integrations"] });
@@ -142,7 +144,7 @@ export function Integrations() {
   const preview = useMutation({
     mutationFn: async (item: IntegrationDef) => {
       const res = await apiFetch(`/integrations/${item.id}/preview?n=10`, { method: "POST" });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Preview failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Preview failed");
       return res.json();
     },
     onMutate: (item) => {
@@ -157,7 +159,7 @@ export function Integrations() {
   const sync = useMutation({
     mutationFn: async (item: IntegrationDef) => {
       const res = await apiFetch(`/integrations/${item.id}/sync`, { method: "POST", body: JSON.stringify({}) });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Sync failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Sync failed");
       return res.json();
     },
     onMutate: (item) => setBusyId(item.id),
@@ -175,11 +177,12 @@ export function Integrations() {
       const body = new FormData();
       body.append("file", file);
       const res = await apiFetch(`/integrations/${id}/upload`, { method: "POST", body });
-      if (!res.ok) throw new Error((await res.json()).detail ?? "Upload failed");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Upload failed");
       return res.json();
     },
     onMutate: ({ id }) => setBusyId(id),
     onSuccess: (_data, { id }) => setTestMessages((m) => ({ ...m, [id]: "File uploaded — ready to sync" })),
+    onError: (e: Error, { id }) => setTestMessages((m) => ({ ...m, [id]: e.message })),
     onSettled: () => {
       setBusyId(null);
       qc.invalidateQueries({ queryKey: ["integrations"] });

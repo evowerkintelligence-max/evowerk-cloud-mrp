@@ -33,6 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -100,6 +102,8 @@ jobs:
       - run: npm ci
       - name: Lint (eslint, rules in frontend/eslint.config.js)
         run: npm run lint
+      - name: Typecheck (tsc)
+        run: npm run typecheck
       - name: Tests (vitest, coverage floor in frontend/vite.config.ts)
         run: npm test -- --coverage
       - name: Build (tsc -b && vite build)
@@ -114,8 +118,8 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: pre-commit/action@v3.0.1

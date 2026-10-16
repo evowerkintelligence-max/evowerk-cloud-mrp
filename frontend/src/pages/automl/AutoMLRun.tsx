@@ -228,12 +228,10 @@ export function AutoMLRun() {
 
       {!isNew && isFailed && <Alert variant="destructive">{runData?.error ?? "Training failed."}</Alert>}
 
-      {!isNew && isDone && runData && <RunResultsPanel runData={runData} />}
-
       {!isNew && runData?.retrained_from_run_id && (
         <p className="text-xs text-muted-foreground">
           Auto-retrained from{" "}
-          <Link to={`/automl/${runData.retrained_from_run_id}`} className="underline underline-offset-2">
+          <Link to={`/automl/advanced/${runData.retrained_from_run_id}`} className="underline underline-offset-2">
             an earlier run
           </Link>
           .

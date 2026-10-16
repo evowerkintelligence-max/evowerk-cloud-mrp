@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { coverageConfigDefaults, defineConfig } from "vitest/config";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 
@@ -61,10 +61,17 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // jsdom interaction tests type into forms; 5s (vitest's default) is too
+    // tight on a loaded CI runner.
+    testTimeout: 15_000,
     coverage: {
-      // Floor just under the current numbers (15.8% lines over all of src,
-      // untested pages included). Ratchet up as coverage grows; CI fails below.
-      thresholds: { lines: 15, functions: 19, branches: 68 },
+      // The shared test harness is test code, not app code.
+      exclude: [...coverageConfigDefaults.exclude, "src/test/**"],
+      // Floor a few points under current (98.8% lines, 91.6% branches, 93.9%
+      // functions over all of src): pages are covered by jsdom interaction
+      // tests (*.interaction.test.tsx). Ratchet up as coverage grows; CI fails
+      // below.
+      thresholds: { lines: 95, functions: 90, branches: 88 },
     },
   },
 });

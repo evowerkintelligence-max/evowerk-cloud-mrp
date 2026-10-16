@@ -1,0 +1,25 @@
+# Encrypted remote state for a real deployment. Copy to backend.tf, fill in
+# the placeholders, then run `terraform init -migrate-state` once to move the
+# local state into Azure Storage. Not active by default: a fresh clone keeps
+# local state so it works with no extra setup (see README.md, "State").
+#
+# One-time setup (customer's own subscription). Azure Storage encrypts at rest
+# by default; versioning keeps prior state revisions, and blob locking
+# (leases) is built in, so no separate lock table is needed:
+#   az group create -n <state-rg> -l <location>
+#   az storage account create -n <stateaccount> -g <state-rg> -l <location> \
+#     --sku Standard_GRS --min-tls-version TLS1_2 --allow-blob-public-access false
+#   az storage account blob-service-properties update -n <stateaccount> -g <state-rg> \
+#     --enable-versioning true
+#   az storage container create -n tfstate --account-name <stateaccount> --auth-mode login
+
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "<state-rg>"
+    storage_account_name = "<stateaccount>"
+    container_name       = "tfstate"
+    key                  = "evowerk-cloud-mrp.tfstate"
+    # Entra ID auth instead of the storage account key.
+    use_azuread_auth = true
+  }
+}

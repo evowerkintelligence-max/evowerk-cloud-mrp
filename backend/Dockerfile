@@ -12,7 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.lock.txt .
-RUN pip install --no-cache-dir -r requirements.lock.txt
+# pip itself is uninstalled afterwards: the app never installs packages at
+# runtime, and pip's vendored copies of urllib3/msgpack/setuptools carry CVEs
+# that fail the Trivy image scan.
+RUN pip install --no-cache-dir -r requirements.lock.txt \
+    && pip uninstall -y pip
 
 COPY . .
 

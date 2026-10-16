@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -24,11 +24,8 @@ export const useStaffAuthStore = create<StaffAuthState>()(
   ),
 );
 
+const isHydrated = () => useStaffAuthStore.persist.hasHydrated();
+const onHydrated = (onChange: () => void) => useStaffAuthStore.persist.onFinishHydration(onChange);
 export function useStaffAuthHydrated(): boolean {
-  const [hydrated, setHydrated] = useState(useStaffAuthStore.persist.hasHydrated());
-  useEffect(() => {
-    setHydrated(useStaffAuthStore.persist.hasHydrated());
-    return useStaffAuthStore.persist.onFinishHydration(() => setHydrated(true));
-  }, []);
-  return hydrated;
+  return useSyncExternalStore(onHydrated, isHydrated, isHydrated);
 }

@@ -26,13 +26,15 @@ const PAINT: GridToBuy = {
   urgency: "unknown",
 };
 
+function stepper(steps: GridToBuy[][]) {
+  const fetches = { n: 0 };
+  return { fetches, next: () => steps[Math.min(fetches.n++, steps.length - 1)] };
+}
+
 /** Feeds the panel from a real "planning-grid" query, so the order's
  * invalidation refetches it; each fetch returns the next entry of `steps`. */
-function GridHarness({ steps, fetches }: { steps: GridToBuy[][]; fetches: { n: number } }) {
-  const grid = useQuery({
-    queryKey: ["planning-grid"],
-    queryFn: async () => steps[Math.min(fetches.n++, steps.length - 1)],
-  });
+function GridHarness({ next }: { next: () => GridToBuy[] }) {
+  const grid = useQuery({ queryKey: ["planning-grid"], queryFn: async () => next() });
   return (
     <>
       <button type="button" onClick={() => grid.refetch()}>
@@ -65,7 +67,7 @@ describe("ToBuyPanel", () => {
         unassigned: [{ item_id: "i2", item_sku: "PNT-1", item_name: "Paint" }],
       },
     });
-    renderPage(<GridHarness steps={[[BOLT, PAINT], []]} fetches={{ n: 0 }} />);
+    renderPage(<GridHarness next={stepper([[BOLT, PAINT], []]).next} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Order all missing materials" }));
     expect(await screen.findByText("Draft PO-17")).toBeTruthy();
@@ -81,7 +83,7 @@ describe("ToBuyPanel", () => {
 
   it("clears a stale result when the rows change for another reason", async () => {
     mockApi({ "POST /mrp/generate-pos": { created: [], unassigned: [] } });
-    renderPage(<GridHarness steps={[[BOLT], [], [PAINT]]} fetches={{ n: 0 }} />);
+    renderPage(<GridHarness next={stepper([[BOLT], [], [PAINT]]).next} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Order all missing materials" }));
     expect(await screen.findByText("Nothing to order.")).toBeTruthy();
@@ -96,8 +98,8 @@ describe("ToBuyPanel", () => {
 
   it("clears the result on the next change even when the post-order refetch left the rows unchanged", async () => {
     mockApi({ "POST /mrp/generate-pos": { created: [], unassigned: [{ item_id: "i2", item_sku: "PNT-1", item_name: "Paint" }] } });
-    const fetches = { n: 0 };
-    const { client } = renderPage(<GridHarness steps={[[PAINT], [PAINT], [BOLT]]} fetches={fetches} />);
+    const { fetches, next } = stepper([[PAINT], [PAINT], [BOLT]]);
+    const { client } = renderPage(<GridHarness next={next} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Order all missing materials" }));
     expect(await screen.findByText(/No supplier set for: Paint/)).toBeTruthy();

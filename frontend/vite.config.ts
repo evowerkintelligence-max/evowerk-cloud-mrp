@@ -65,12 +65,15 @@ export default defineConfig({
     // tight on a loaded CI runner.
     testTimeout: 15_000,
     coverage: {
+      // Vitest 4+ only reports files a test loaded unless `include` is set;
+      // keep counting never-imported source files against the floor.
+      include: ["src/**/*.{ts,tsx}"],
       // The shared test harness is test code, not app code.
       exclude: [...coverageConfigDefaults.exclude, "src/test/**"],
-      // Floor a few points under current (98.8% lines, 91.6% branches, 93.9%
-      // functions over all of src): pages are covered by jsdom interaction
-      // tests (*.interaction.test.tsx). Ratchet up as coverage grows; CI fails
-      // below.
+      // Floor under current (97.6% lines, 88.2% branches, 92.1% functions over
+      // all of src; vitest 4+'s AST-based v8 remapping counts more branches
+      // than vitest 2 did): pages are covered by jsdom interaction tests
+      // (*.interaction.test.tsx). Ratchet up as coverage grows; CI fails below.
       thresholds: { lines: 95, functions: 90, branches: 88 },
     },
   },

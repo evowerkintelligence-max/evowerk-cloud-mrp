@@ -35,16 +35,20 @@ export function CommandPalette({
     );
   }, [query, items]);
 
-  useEffect(() => {
+  // Reset on (re)open: adjust-state-during-render rather than an effect.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
     if (open) {
       setQuery("");
       setSelected(0);
-      // Focus after the overlay mounts.
-      requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [open]);
+  }
 
-  useEffect(() => setSelected(0), [query]);
+  useEffect(() => {
+    // Focus after the overlay mounts.
+    if (open) requestAnimationFrame(() => inputRef.current?.focus());
+  }, [open]);
 
   useEffect(() => {
     listRef.current
@@ -89,7 +93,10 @@ export function CommandPalette({
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelected(0);
+            }}
             placeholder="Go to page…"
             className="h-12 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { PageTabs } from "@/components/PageTabs";
@@ -30,13 +30,11 @@ export function Production() {
 
   const [searchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<Tab>(
+  const [pickedTab, setTab] = useState<Tab>(
     requestedTab && tabValues.has(requestedTab) ? (requestedTab as Tab) : "jobs",
   );
 
-  useEffect(() => {
-    if (!org.isLoading && !hasJobs && tab === "jobs") setTab("work-centers");
-  }, [org.isLoading, hasJobs, tab]);
+  const tab: Tab = !org.isLoading && !hasJobs && pickedTab === "jobs" ? "work-centers" : pickedTab;
 
   return (
     <div>

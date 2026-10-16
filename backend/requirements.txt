@@ -28,7 +28,7 @@ lifelines>=0.28.0  # Weibull survival analysis for CBM RUL (backend/app/services
 
 # Analytics (dataset layer + engines ported from the desktop app, ad-hoc query/BI)
 duckdb>=1.0.0
-pandas>=2.2.0
+pandas>=3.0.6
 openpyxl>=3.1.0
 python-multipart>=0.0.31
 

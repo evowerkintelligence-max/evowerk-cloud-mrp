@@ -195,7 +195,7 @@ packaging==26.3
     #   shap
 paho-mqtt==2.1.0
     # via -r requirements.txt
-pandas==2.3.3
+pandas==3.0.6
     # via
     #   -r requirements.txt
     #   formulaic

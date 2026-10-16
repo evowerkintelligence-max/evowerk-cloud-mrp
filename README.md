@@ -14,7 +14,7 @@ notes for why.
 Needs Python 3.12, Node 20 and Docker. From the repo root:
 
 ```bash
-make install   # backend deps from the pinned lockfile + `npm ci`
+make install   # `npm ci` (root npm workspace) + backend deps from the pinned lockfile
 make test      # backend pytest (in-memory SQLite + fake Redis) + frontend vitest
 make lint      # ruff + eslint
 make typecheck # tsc -b over the frontend
@@ -25,8 +25,9 @@ make up        # Postgres, Redis, migrations, backend :8000, frontend :5173
 
 No `make` (plain Windows)? The root `package.json` has the same targets:
 `npm run setup`, `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`,
-`npm run up`. CI runs these same commands on
-every push and pull request.
+`npm run up`. The root `package.json` is an npm workspace over `frontend/`,
+so there is one `package-lock.json`, at the repo root. CI runs these same
+commands on every push and pull request.
 
 ## Current state
 
@@ -162,10 +163,10 @@ cp .env.example .env    # edit JWT_SECRET_KEY, MFA_ENCRYPTION_KEY, and DATABASE_
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 
-# Frontend
-cd frontend
+# Frontend (npm workspace: install from the repo root, one lockfile there)
+cd ..
 npm ci
-npm run dev
+npm --workspace frontend run dev
 ```
 
 ### Logging and error tracking
@@ -196,7 +197,7 @@ a new backend router means adding its prefix to both `vite.config.ts` (dev)
 and `nginx.conf.template` (prod).
 
 ```bash
-docker build -t evowerk-frontend-prod -f frontend/Dockerfile.prod ./frontend
+docker build -t evowerk-frontend-prod -f frontend/Dockerfile.prod .   # repo root context
 docker run -p 8080:80 -e BACKEND_UPSTREAM=host.docker.internal:8000 evowerk-frontend-prod
 ```
 
@@ -216,8 +217,8 @@ proxy/load balancer in any real deployment.
 
 ```bash
 cd backend && pytest -q                  # ~1000 tests; add --cov=app for coverage
-cd frontend && npm test                  # vitest
-cd frontend && npm run test:coverage     # vitest with v8 coverage
+npm --workspace frontend test           # vitest
+npm --workspace frontend run test:coverage  # vitest with v8 coverage
 ```
 
 `backend/tests/conftest.py` supplies test-only defaults for every required

@@ -10,8 +10,9 @@ updates:
       python-minor:
         update-types: [minor, patch]
 
+  # Root package-lock.json covers the frontend workspace.
   - package-ecosystem: npm
-    directory: /frontend
+    directory: /
     schedule:
       interval: weekly
     groups:

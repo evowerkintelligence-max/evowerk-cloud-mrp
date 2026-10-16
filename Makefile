@@ -5,22 +5,22 @@
 .PHONY: install test lint typecheck build up lock
 
 install:
+	npm ci
 	cd backend && uv sync --frozen
-	cd frontend && npm ci
 
 test:
 	cd backend && uv run pytest -q
-	cd frontend && npm test
+	npm --workspace frontend test
 
 lint:
 	cd backend && uv run ruff check .
-	cd frontend && npm run lint
+	npm --workspace frontend run lint
 
 typecheck:
-	cd frontend && npm run typecheck
+	npm --workspace frontend run typecheck
 
 build:
-	cd frontend && npm run build
+	npm --workspace frontend run build
 	docker compose build
 
 up:

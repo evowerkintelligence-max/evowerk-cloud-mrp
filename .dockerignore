@@ -1,0 +1,26 @@
+# Applies to root-context builds only (frontend/Dockerfile*, Dockerfile.test).
+# The backend image builds with context ./backend and uses backend/.dockerignore.
+.git
+.claude
+.superdesign
+.github
+docs
+infra
+pitch-deck
+graphify-out
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/.vite
+**/*.tsbuildinfo
+**/.env
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.coverage
+**/*.db
+backend/data

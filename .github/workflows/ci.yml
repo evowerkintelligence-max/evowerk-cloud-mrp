@@ -75,8 +75,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+          # npm workspace: one lockfile at the repo root covers frontend/.
+          cache-dependency-path: package-lock.json
+      - name: Install (npm ci at the workspace root)
+        working-directory: .
+        run: npm ci
       - name: Lint (eslint, rules in frontend/eslint.config.js)
         run: npm run lint
       - name: Typecheck (tsc)
@@ -107,6 +110,7 @@ jobs:
         # ship in the production build, so a dev-server-only advisory there
         # (e.g. GHSA-67mh-4wv8-2f99) shouldn't block CI the way a vulnerable
         # runtime dependency would.
+        working-directory: .
         run: npm audit --omit=dev --audit-level=high
 
   pre-commit:
@@ -127,9 +131,10 @@ jobs:
       - name: Build backend image
         run: docker build -t evowerk-cloud-mrp-backend:ci ./backend
       - name: Build frontend image
-        run: docker build -t evowerk-cloud-mrp-frontend:ci ./frontend
+        # Repo root context: the npm workspace lockfile lives there.
+        run: docker build -t evowerk-cloud-mrp-frontend:ci -f frontend/Dockerfile .
       - name: Build frontend production image
-        run: docker build -t evowerk-cloud-mrp-frontend-prod:ci -f frontend/Dockerfile.prod ./frontend
+        run: docker build -t evowerk-cloud-mrp-frontend-prod:ci -f frontend/Dockerfile.prod .
       - name: Scan backend image (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -328,10 +333,16 @@ jobs:
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'
+              - 'package.json'
+              - 'package-lock.json'
               - '.github/workflows/ci.yml'
             docker:
               - 'backend/**'
               - 'frontend/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.dockerignore'
+              - 'docker-compose*.yml'
               - '.github/workflows/ci.yml'
             terraform:
               - 'infra/terraform/**'

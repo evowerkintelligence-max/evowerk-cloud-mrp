@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 from decimal import Decimal
 
@@ -14,7 +15,7 @@ def _dec(v) -> Decimal:
     # numeric value, not its string form.
     return Decimal(str(v))
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit
+PASSWORD = TEST_PASSWORD
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):

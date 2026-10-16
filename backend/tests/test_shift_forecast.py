@@ -1,5 +1,6 @@
 # backend/tests/test_shift_forecast.py
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register(client, email: str = "sf@example.com", org_name: str = "SfOrg"):

@@ -46,7 +46,7 @@ class Supplier(Base):
     # Expected days from PO submit to delivery - used to default a new PO's
     # expected_delivery_date when the caller doesn't supply one. See
     # app.api.routes.purchase_orders.create_purchase_order and
-    # app.api.routes.forecasts._new_draft_po.
+    # app.api.routes.forecasts_mrp._new_draft_po.
     lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Freeform, user-typed - same JSON-list convention as Kpi.tags
     # (app.models.kpi). No dedicated array type: SQLite (used by the

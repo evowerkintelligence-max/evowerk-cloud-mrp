@@ -12,9 +12,9 @@ terraform {
     }
   }
 
-  # No backend configured here on purpose - see infra/terraform/aws/README.md's
-  # state warning, which applies equally here (this state holds the DB
-  # password and JWT secret in plaintext).
+  # No backend configured here on purpose - real usage needs remote state
+  # (this state holds the DB password and JWT secret in plaintext). See
+  # backend.tf.example and README.md.
 }
 
 provider "azurerm" {

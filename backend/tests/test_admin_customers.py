@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -14,7 +15,7 @@ from app.models.user import User
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):
@@ -25,7 +26,7 @@ async def _register_and_login(client, email="owner@example.com", org_name="Acme"
     return login.json()["access_token"], reg.json()["user_id"]
 
 
-async def _make_staff_token(client, employee_id="staff1", password="correct-horse-battery-staple1"):
+async def _make_staff_token(client, employee_id="staff1", password=TEST_PASSWORD):
     async with db_session.async_session_factory() as db:
         db.add(StaffAccount(employee_id=employee_id, hashed_password=hash_password(password)))
         await db.commit()

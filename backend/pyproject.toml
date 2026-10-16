@@ -1,0 +1,98 @@
+# Backend dependencies, locked in uv.lock. After editing, run `uv lock`
+# (or `make lock` from the repo root). Ruff settings live in the root
+# pyproject.toml, not here.
+
+[project]
+name = "evowerk-cloud-mrp-backend"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic[email]>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "sqlalchemy>=2.0.29",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.1",
+    "apscheduler>=3.10.4",
+    "passlib[argon2]>=1.7.4",
+    "pyjwt>=2.13.0",
+    "fastapi-users[sqlalchemy]>=15.0.2,<16.0.0",
+    "httpx-oauth>=0.15.0,<1.0.0",
+    "boto3>=1.34.0",
+    "pyotp>=2.9.0",
+    "cryptography>=42.0.0",
+    "redis>=5.0.0",
+    "fakeredis>=2.20.0",
+    "python-dotenv>=1.0.0",
+    "python-json-logger>=3.1.0",  # JSON log formatter, app/core/logging.py
+    "sentry-sdk[fastapi]>=2.0.0",  # opt-in error tracking, off unless SENTRY_DSN set
+    "httpx>=0.27.0",
+    "pytest>=8.1.1",
+    "pytest-asyncio>=0.23.6",
+    "aiosqlite>=0.20.0",
+    "ruff>=0.4.0",
+    "scipy>=1.11.0",
+    "lifelines>=0.28.0",  # Weibull survival analysis for CBM RUL (backend/app/services/rul.py)
+
+    # Analytics (dataset layer + engines ported from the desktop app, ad-hoc query/BI)
+    "duckdb>=1.0.0",
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.0",
+    "python-multipart>=0.0.31",
+
+    # Quality analytics: KMeans clustering of defect-driving process parameters
+    "scikit-learn>=1.4.0",
+
+    # AutoML: boosted-tree candidates, Bayesian hyperparameter search, SHAP
+    # explainability. All optional at runtime - automl_engine.py degrades
+    # gracefully (falls back to sklearn GradientBoosting / random search /
+    # permutation importance) if any of these fail to import.
+    "xgboost>=2.0.0",
+    "lightgbm>=4.0.0",
+    "optuna>=3.6.0",
+    "shap>=0.45.0",
+
+    # Report exports. PDF only - the HTML and CSV renderers are stdlib.
+    "reportlab>=4.0.0",
+
+    # QR code image for the operator identity-capture check-in page - pure
+    # Python, the bundled SVG factory needs no Pillow.
+    "qrcode>=7.4.0",
+
+    # Gemini client for LLM-backed features (data chat, computer vision, report
+    # narration) ported from the desktop app. Each caller degrades to a
+    # deterministic fallback when GEMINI_API_KEY is unset, so this is a soft
+    # dependency at runtime even though it's a hard install dependency.
+    "google-genai>=1.0.0",
+
+    # Data integration connectors (app/services/connectors), ported from the desktop
+    # app. Each connector degrades gracefully (clear "pip install X" error) if its
+    # package is missing, so these are best-effort rather than hard requirements:
+    #   - REST/PI Web API: stdlib urllib only, no extra package.
+    #   - OPC-DA (connectors/opcda_connector.py): Windows-COM-only (OpenOPC-Python3x
+    #     or pywin32) - deliberately NOT listed here, would break the Linux build.
+    "pyodbc>=5.1.0",  # SQL Server - also needs the Microsoft ODBC driver installed
+                      # in the runtime image (see Dockerfile); the package alone isn't enough.
+    "oracledb>=2.0.0",  # Oracle - thin mode, no Oracle Instant Client needed
+    "psycopg2-binary>=2.9.9",  # Postgres (Azure Database for PostgreSQL / AWS RDS/Aurora Postgres)
+    "pymysql>=1.1.0",  # MySQL (Azure Database for MySQL / AWS RDS/Aurora MySQL)
+    "paho-mqtt>=2.1.0,<3",  # MQTT
+    "asyncua>=1.1.0",  # OPC-UA
+]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=5.0.0",
+
+    # Security tooling (Phase 1: CI/CD security gates)
+    "bandit>=1.7.9",
+    "pip-audit>=2.7.3",
+    "pre-commit>=3.7.0",
+    "detect-secrets>=1.5.0",
+]
+
+[tool.uv]
+# An application, not a library: uv installs the dependencies only, never
+# builds/installs this directory as a package.
+package = false

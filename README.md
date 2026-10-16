@@ -17,13 +17,15 @@ Needs Python 3.12, Node 20 and Docker. From the repo root:
 make install   # backend deps from the pinned lockfile + `npm ci`
 make test      # backend pytest (in-memory SQLite + fake Redis) + frontend vitest
 make lint      # ruff + eslint
+make typecheck # tsc -b over the frontend
 make build     # production frontend build + docker images
 cp .env.example .env   # fill in the three values, then:
 make up        # Postgres, Redis, migrations, backend :8000, frontend :5173
 ```
 
-No `make` (plain Windows)? Each target is two or three commands; run the
-lines from the [`Makefile`](Makefile) by hand. CI runs these same commands on
+No `make` (plain Windows)? The root `package.json` has the same targets:
+`npm run setup`, `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`,
+`npm run up`. CI runs these same commands on
 every push and pull request.
 
 ## Current state
@@ -95,17 +97,17 @@ Every push/PR runs lint (ruff, eslint), the backend and frontend test suites
   config scan (HIGH/CRITICAL) for both `infra/terraform/aws` and
   `infra/terraform/azure`. Accepted findings are suppressed inline with a
   `# trivy:ignore:<ID> <reason>` comment on the resource.
-- **Lockfile check**: fails if `backend/requirements*.txt` changed without
-  regenerating the pinned `requirements*.lock.txt` (`make lock`, needs `uv`).
-  Dependabot opens weekly update PRs for pip, npm, Actions, Docker and
+- **Lockfile check**: `uv lock --check` fails if `backend/pyproject.toml`
+  changed without regenerating `backend/uv.lock` (`make lock` or `uv lock`).
+  Dependabot opens weekly update PRs for uv, npm, Actions, Docker and
   Terraform.
 
 Locally, install the pre-commit hooks so the same secret-scan/lint checks run
 before you commit, not just in CI:
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && cd ..
-pre-commit install
+cd backend && uv sync && cd ..
+uv run --project backend pre-commit install
 ```
 
 If you add a new, real config value that looks like a secret, run
@@ -155,12 +157,10 @@ Or run each piece manually:
 ```bash
 # Backend
 cd backend
-python -m venv .venv
-.venv/Scripts/activate  # or `source .venv/bin/activate` on macOS/Linux
-pip install -r requirements-dev.lock.txt
+uv sync                 # creates .venv from uv.lock, dev tools included
 cp .env.example .env    # edit JWT_SECRET_KEY, MFA_ENCRYPTION_KEY, and DATABASE_URL
-alembic upgrade head
-uvicorn app.main:app --reload
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
 
 # Frontend
 cd frontend

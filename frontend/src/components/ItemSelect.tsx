@@ -41,7 +41,7 @@ export function ItemSelect({
     requiredMirrorRef.current?.setCustomValidity(
       required && !value ? "Select an item, or finish creating the new one." : "",
     );
-  }, [required, value]);
+  }, [required, value, adding]);
 
   const createItem = useMutation({
     mutationFn: async () => {

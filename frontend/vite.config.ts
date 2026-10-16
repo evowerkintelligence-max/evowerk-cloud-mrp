@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { coverageConfigDefaults, defineConfig } from "vitest/config";
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 
@@ -50,7 +50,7 @@ export default defineConfig({
       // instead of index.html. bypass() tells the difference: a page
       // navigation's Accept header leads with text/html; apiFetch's fetch()
       // calls never send that, so only real API calls get proxied.
-      "^/(auth|orgs|items|boms|suppliers|purchase-orders|customers|sales-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|sync-schedules|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm|admin|staff|planning|work-orders|operators|checkin)(/|$|\\?)":
+      "^/(auth|orgs|items|boms|suppliers|purchase-orders|customers|sales-orders|lots|locations|inventory|forecasts|mrp|datasets|analytics|ai|reports|bi|workflows|automl|kpis|kpi-dashboards|integrations|sync-schedules|simulation|health|alerts|computer-vision|data-chat|downtime-tracking|predictive|rca-cases|pace|machines|work-centers|routings|cbm|admin|staff|planning|work-orders|operators|checkin|client-errors)(/|$|\\?)":
         {
           target: `http://localhost:${backendPort}`,
           bypass(req) {
@@ -61,5 +61,17 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // jsdom interaction tests type into forms; 5s (vitest's default) is too
+    // tight on a loaded CI runner.
+    testTimeout: 15_000,
+    coverage: {
+      // The shared test harness is test code, not app code.
+      exclude: [...coverageConfigDefaults.exclude, "src/test/**"],
+      // Floor a few points under current (98.8% lines, 91.6% branches, 93.9%
+      // functions over all of src): pages are covered by jsdom interaction
+      // tests (*.interaction.test.tsx). Ratchet up as coverage grows; CI fails
+      // below.
+      thresholds: { lines: 95, functions: 90, branches: 88 },
+    },
   },
 });

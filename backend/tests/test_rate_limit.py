@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.config import get_settings
+from tests._test_secrets import WRONG_PASSWORD
 from tests.test_auth import PASSWORD, _register
 
 pytestmark = pytest.mark.asyncio
@@ -34,7 +35,7 @@ async def test_login_rate_limit_trips_per_ip_after_threshold(client):
     for i in range(limit + 5):
         res = await client.post(
             "/auth/login",
-            json={"email": f"never-registered-{i}@example.com", "password": "whatever-guess-1"},
+            json={"email": f"never-registered-{i}@example.com", "password": WRONG_PASSWORD},
         )
         last_status = res.status_code
         if last_status == 429:

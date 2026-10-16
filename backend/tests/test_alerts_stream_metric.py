@@ -9,13 +9,14 @@ from app.models.sync_tick import SyncTick
 from app.models.tenant import Org
 from app.models.user import User
 from app.services.alerts import eval_stream_metric
+from tests._test_secrets import WRONG_PASSWORD
 
 
 async def _make_schedule(db_session, *, email: str) -> SyncSchedule:
     org = Org(name="Acme")
     db_session.add(org)
     await db_session.flush()
-    user = User(org_id=org.id, email=email, hashed_password="x")
+    user = User(org_id=org.id, email=email, hashed_password=WRONG_PASSWORD)
     db_session.add(user)
     await db_session.flush()
     integration = Integration(org_id=org.id, name="Cloud DB", type="postgres", config={}, created_by=user.id)

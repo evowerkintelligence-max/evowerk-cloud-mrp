@@ -5,7 +5,6 @@ import { apiFetch } from "../api/client";
 import { useCharts, useCurrentUser, useDatasets, useInbox, type InboxItem } from "./analytics/shared";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { Field } from "@/components/Field";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -14,90 +13,20 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
-
-const SECTION_TYPES = [
-  "title", "exec_summary", "table", "bi_chart",
-  "findings", "risks", "recommendations", "caveats", "text",
-] as const;
-
-type SectionType = (typeof SECTION_TYPES)[number];
-
-const TEXT_TYPES = new Set<SectionType>(["title", "exec_summary", "text"]);
-const BULLET_TYPES = new Set<SectionType>(["findings", "risks", "recommendations", "caveats"]);
-const QUERY_TYPES = new Set<SectionType>(["table"]);
-
-interface SectionDraft {
-  type: SectionType;
-  title: string;
-  text: string; // TEXT_TYPES
-  itemsText: string; // BULLET_TYPES, newline-separated
-  dataset_id: string; // QUERY_TYPES
-  queryText: string; // QUERY_TYPES, DatasetQueryRequest JSON
-  chart_id: string; // bi_chart
-}
-
-interface SavedReportSummary {
-  id: string;
-  name: string;
-  sections: Record<string, unknown>[];
-  updated_at: string;
-}
-
-const NARRATION_STYLES = ["narrative", "bullets", "brief"] as const;
-type NarrationStyle = (typeof NARRATION_STYLES)[number];
-
-interface SectionNarrative {
-  title: string;
-  narrative: string;
-}
-
-interface ReportNarration {
-  executive_summary: string;
-  sections: SectionNarrative[];
-  error: string | null;
-}
-
-function blankSection(): SectionDraft {
-  return { type: "text", title: "", text: "", itemsText: "", dataset_id: "", queryText: '{"select":[]}', chart_id: "" };
-}
-
-function draftFromSection(s: Record<string, unknown>): SectionDraft {
-  const type = (s.type as SectionType) ?? "text";
-  return {
-    type,
-    title: (s.title as string) ?? "",
-    text: (s.text as string) ?? "",
-    itemsText: Array.isArray(s.items) ? (s.items as string[]).join("\n") : "",
-    dataset_id: (s.dataset_id as string) ?? "",
-    queryText: s.query ? JSON.stringify(s.query, null, 2) : '{"select":[]}',
-    chart_id: (s.chart_id as string) ?? "",
-  };
-}
-
-function sectionToPayload(d: SectionDraft): Record<string, unknown> {
-  const base: Record<string, unknown> = { type: d.type, title: d.title || undefined };
-  if (TEXT_TYPES.has(d.type)) return { ...base, text: d.text };
-  if (BULLET_TYPES.has(d.type)) {
-    return { ...base, items: d.itemsText.split("\n").map((s) => s.trim()).filter(Boolean) };
-  }
-  if (QUERY_TYPES.has(d.type)) {
-    let query: unknown;
-    try {
-      query = JSON.parse(d.queryText || "{}");
-    } catch {
-      throw new Error(`Section "${d.title || d.type}" has invalid query JSON`);
-    }
-    return { ...base, dataset_id: d.dataset_id, query };
-  }
-  return { ...base, chart_id: d.chart_id };
-}
-
-function sectionSummary(s: Record<string, unknown>): string {
-  if (TEXT_TYPES.has(s.type as SectionType)) return String(s.text ?? "").slice(0, 60);
-  if (BULLET_TYPES.has(s.type as SectionType)) return `${(s.items as unknown[] | undefined)?.length ?? 0} item(s)`;
-  if (QUERY_TYPES.has(s.type as SectionType)) return `dataset ${s.dataset_id ?? "?"}`;
-  return `chart ${s.chart_id ?? "?"}`;
-}
+import {
+  NARRATION_STYLES,
+  QUERY_TYPES,
+  blankSection,
+  draftFromSection,
+  sectionSummary,
+  sectionToPayload,
+  type NarrationStyle,
+  type ReportNarration,
+  type SavedReportSummary,
+  type SectionDraft,
+  type SectionNarrative,
+} from "./report-builder/types";
+import { SectionDialog } from "./report-builder/SectionDialog";
 
 export function ReportBuilder() {
   const qc = useQueryClient();
@@ -141,6 +70,7 @@ export function ReportBuilder() {
     setName("");
     setSections([]);
     setError(null);
+    setNarration(null);
   }
 
   function startEdit(r: SavedReportSummary) {
@@ -148,6 +78,7 @@ export function ReportBuilder() {
     setName(r.name);
     setSections(r.sections);
     setError(null);
+    setNarration(null);
   }
 
   const save = useMutation({
@@ -451,103 +382,17 @@ export function ReportBuilder() {
         </Card>
       )}
 
-      <Dialog
-        open={editingSectionIndex !== null}
-        onClose={() => setEditingSectionIndex(null)}
-        title={editingSectionIndex !== null && editingSectionIndex < sections.length ? "Edit section" : "Add section"}
-      >
-        <div className="space-y-4">
-          <Field label="Type">
-            <Select
-              value={sectionDraft.type}
-              onChange={(e) => setSectionDraft((d) => ({ ...d, type: e.target.value as SectionType }))}
-            >
-              {SECTION_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </Select>
-          </Field>
-
-          {sectionDraft.type !== "title" && (
-            <Field label="Title" hint="optional">
-              <Input value={sectionDraft.title} onChange={(e) => setSectionDraft((d) => ({ ...d, title: e.target.value }))} />
-            </Field>
-          )}
-          {sectionDraft.type === "title" && (
-            <Field label="Title">
-              <Input value={sectionDraft.title} onChange={(e) => setSectionDraft((d) => ({ ...d, title: e.target.value }))} />
-            </Field>
-          )}
-
-          {TEXT_TYPES.has(sectionDraft.type) && (
-            <Field label="Text">
-              <textarea
-                className="h-28 w-full rounded-md border border-input bg-background/60 p-2 text-sm"
-                value={sectionDraft.text}
-                onChange={(e) => setSectionDraft((d) => ({ ...d, text: e.target.value }))}
-              />
-            </Field>
-          )}
-
-          {BULLET_TYPES.has(sectionDraft.type) && (
-            <Field label="Items" hint="one per line">
-              <textarea
-                className="h-28 w-full rounded-md border border-input bg-background/60 p-2 text-sm"
-                value={sectionDraft.itemsText}
-                onChange={(e) => setSectionDraft((d) => ({ ...d, itemsText: e.target.value }))}
-              />
-            </Field>
-          )}
-
-          {QUERY_TYPES.has(sectionDraft.type) && (
-            <>
-              <Field label="Dataset">
-                <Select
-                  value={sectionDraft.dataset_id}
-                  onChange={(e) => setSectionDraft((d) => ({ ...d, dataset_id: e.target.value }))}
-                >
-                  <option value="">Select a dataset…</option>
-                  {datasets.data?.map((d) => (
-                    <option key={d.id} value={d.id}>{d.name}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field
-                label="Query (JSON)"
-                hint='DatasetQueryRequest shape, e.g. {"select":[{"column":"sku"},{"column":"qty","agg":"sum","alias":"total_qty"}],"group_by":["sku"]}'
-              >
-                <textarea
-                  className={`h-32 w-full rounded-md border bg-background/60 p-2 font-mono text-xs ${
-                    queryJsonError ? "border-destructive" : "border-input"
-                  }`}
-                  value={sectionDraft.queryText}
-                  onChange={(e) => setSectionDraft((d) => ({ ...d, queryText: e.target.value }))}
-                />
-                {queryJsonError && <p className="mt-1 text-xs text-destructive">Invalid JSON: {queryJsonError}</p>}
-              </Field>
-            </>
-          )}
-
-          {sectionDraft.type === "bi_chart" && (
-            <Field label="Chart">
-              <Select
-                value={sectionDraft.chart_id}
-                onChange={(e) => setSectionDraft((d) => ({ ...d, chart_id: e.target.value }))}
-              >
-                <option value="">Select a chart…</option>
-                {charts.data?.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </Select>
-            </Field>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setEditingSectionIndex(null)}>Cancel</Button>
-            <Button disabled={!!queryJsonError} onClick={confirmSection}>Save section</Button>
-          </div>
-        </div>
-      </Dialog>
+      <SectionDialog
+        editingSectionIndex={editingSectionIndex}
+        setEditingSectionIndex={setEditingSectionIndex}
+        sections={sections}
+        sectionDraft={sectionDraft}
+        setSectionDraft={setSectionDraft}
+        datasets={datasets}
+        charts={charts}
+        queryJsonError={queryJsonError}
+        confirmSection={confirmSection}
+      />
 
       <Dialog open={showInboxPicker} onClose={() => setShowInboxPicker(false)} title="Add from inbox">
         <div className="space-y-3">

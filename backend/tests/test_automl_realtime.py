@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -19,7 +20,7 @@ from app.models.sync_tick import SyncRow, SyncTick
 from app.models.user import User
 from app.services import alerts, automl_realtime, automl_storage
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 def _fitted_pipeline_path(tmp_path) -> str:

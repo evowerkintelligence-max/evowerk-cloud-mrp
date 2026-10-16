@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def _register_and_login(client, email="owner@example.com", org_name="Acme"):

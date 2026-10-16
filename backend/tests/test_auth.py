@@ -1,11 +1,12 @@
 from __future__ import annotations
+from tests._test_secrets import NO_DIGIT_PASSWORD, TEST_PASSWORD, TOO_SHORT_PASSWORD, WRONG_PASSWORD
 
 import pyotp
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit
+PASSWORD = TEST_PASSWORD
 
 
 async def _register(client, email="alice@example.com", org_name="Acme", password=PASSWORD):
@@ -53,7 +54,7 @@ async def test_delete_account_scrubs_email_and_revokes_access(client):
     tokens = login.json()
     auth = {"Authorization": f"Bearer {tokens['access_token']}"}
 
-    wrong_password = await client.request("DELETE", "/auth/me", json={"password": "wrong"}, headers=auth)
+    wrong_password = await client.request("DELETE", "/auth/me", json={"password": WRONG_PASSWORD}, headers=auth)
     assert wrong_password.status_code == 401
 
     deleted = await client.request("DELETE", "/auth/me", json={"password": PASSWORD}, headers=auth)
@@ -75,13 +76,13 @@ async def test_delete_account_scrubs_email_and_revokes_access(client):
 async def test_register_rejects_weak_password(client):
     res = await client.post(
         "/auth/register",
-        json={"org_name": "WeakCo", "email": "weak@example.com", "password": "short1"},
+        json={"org_name": "WeakCo", "email": "weak@example.com", "password": TOO_SHORT_PASSWORD},
     )
     assert res.status_code == 422
 
     res_no_digit = await client.post(
         "/auth/register",
-        json={"org_name": "WeakCo", "email": "weak2@example.com", "password": "all-letters-no-digits"},
+        json={"org_name": "WeakCo", "email": "weak2@example.com", "password": NO_DIGIT_PASSWORD},
     )
     assert res_no_digit.status_code == 422
 
@@ -97,13 +98,13 @@ async def test_register_duplicate_email_rejected(client):
 
 async def test_login_wrong_password_rejected(client):
     await _register(client, email="bob@example.com")
-    res = await client.post("/auth/login", json={"email": "bob@example.com", "password": "wrong"})
+    res = await client.post("/auth/login", json={"email": "bob@example.com", "password": WRONG_PASSWORD})
     assert res.status_code == 401
 
 
 async def test_login_nonexistent_user_rejected(client):
     res = await client.post(
-        "/auth/login", json={"email": "nobody@example.com", "password": "whatever-guess-1"}
+        "/auth/login", json={"email": "nobody@example.com", "password": WRONG_PASSWORD}
     )
     assert res.status_code == 401
 
@@ -113,7 +114,7 @@ async def test_account_lockout_after_repeated_failures(client):
 
     for _ in range(5):
         res = await client.post(
-            "/auth/login", json={"email": "lockout@example.com", "password": "wrong-password"}
+            "/auth/login", json={"email": "lockout@example.com", "password": WRONG_PASSWORD}
         )
         assert res.status_code == 401
 

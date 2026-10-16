@@ -55,7 +55,7 @@ class Item(Base):
     # (Guarded by test_is_lot_tracked_immutable.)
     is_lot_tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Default source of supply, used to auto-group MRP shortfalls into supplier
-    # POs (see app.api.routes.forecasts.generate_pos). Nullable - an item may
+    # POs (see app.api.routes.forecasts_mrp.generate_pos). Nullable - an item may
     # have no default supplier yet, in which case it's reported as "unassigned"
     # rather than ordered. ondelete SET NULL so deleting a supplier just clears
     # the preference instead of being blocked by / cascading through items.
@@ -81,7 +81,7 @@ class Item(Base):
     # -stock plan it had before.
     safety_stock_qty: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     # Catalog-only: hides/tags a discontinued SKU in the UI. Does NOT gate
-    # services.mrp.compute_mrp_plan or forecasts.generate_pos - an inactive
+    # services.mrp.compute_mrp_plan or forecasts_mrp.generate_pos - an inactive
     # item is still planned and ordered until that's deliberately wired in.
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -38,7 +38,6 @@ from app.models import (  # noqa: F401 - register models on the metadata
     downtime_tracking,
     forecast,
     inventory,
-    inventory_snapshot,
     integration,
     kpi,
     location,

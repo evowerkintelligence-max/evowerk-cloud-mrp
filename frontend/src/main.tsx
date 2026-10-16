@@ -9,6 +9,9 @@ import "@fontsource/inter/700.css";
 import "./index.css";
 import { App } from "./App";
 import { queryClient } from "./lib/queryClient";
+import { installGlobalErrorHandlers } from "./lib/telemetry";
+
+installGlobalErrorHandlers();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

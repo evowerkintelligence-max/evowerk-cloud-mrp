@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"
+PASSWORD = TEST_PASSWORD
 
 # Shift A: 90% avail x 95% qual = 85.5 OEE. Shift B: 80% x 90% = 72.0. A best, B worst.
 SHIFT_CSV = b"shift,planned,operating,total,good\nA,100,90,100,95\nB,100,80,100,90\n"

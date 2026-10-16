@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 from unittest.mock import AsyncMock, patch
 
@@ -11,10 +12,10 @@ pytestmark = pytest.mark.asyncio
 async def _register_with_mfa(client, email):
     await client.post(
         "/auth/register",
-        json={"org_name": "Acme", "email": email, "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
+        json={"org_name": "Acme", "email": email, "password": TEST_PASSWORD},
     )
     login = await client.post(
-        "/auth/login", json={"email": email, "password": "correct-horse-battery-staple1"}  # pragma: allowlist secret
+        "/auth/login", json={"email": email, "password": TEST_PASSWORD}
     )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
@@ -46,7 +47,7 @@ async def test_google_authorize_redirects_to_google(client):
 async def test_google_callback_logs_in_existing_account_when_email_verified(client):
     await client.post(
         "/auth/register",
-        json={"org_name": "Acme", "email": "provisioned@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
+        json={"org_name": "Acme", "email": "provisioned@example.com", "password": TEST_PASSWORD},
     )
     state = await _google_state(client)
 
@@ -104,7 +105,7 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
 
     await client.post(
         "/auth/register",
-        json={"org_name": "Acme", "email": "existing@example.com", "password": "correct-horse-battery-staple1"},  # pragma: allowlist secret
+        json={"org_name": "Acme", "email": "existing@example.com", "password": TEST_PASSWORD},
     )
     state = await _google_state(client)
 
@@ -126,7 +127,7 @@ async def test_google_callback_rejects_auto_link_when_email_not_verified(client)
 
     # The existing account itself is untouched - its real password still works.
     login = await client.post(
-        "/auth/login", json={"email": "existing@example.com", "password": "correct-horse-battery-staple1"}  # pragma: allowlist secret
+        "/auth/login", json={"email": "existing@example.com", "password": TEST_PASSWORD}
     )
     assert login.status_code == 200
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 from decimal import Decimal
 
@@ -6,7 +7,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit
+PASSWORD = TEST_PASSWORD
 
 
 def _dec(v) -> Decimal:

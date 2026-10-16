@@ -1,7 +1,8 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 OEE_CSV = (

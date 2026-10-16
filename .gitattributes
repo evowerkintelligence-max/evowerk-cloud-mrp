@@ -1,0 +1,3 @@
+# Dockerfile.test embeds a shell script; CRLF checkouts (core.autocrlf on
+# Windows) would break it inside the Linux container.
+Dockerfile.test text eol=lf

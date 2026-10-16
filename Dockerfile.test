@@ -27,6 +27,8 @@ RUN npm ci
 
 COPY backend/ backend/
 COPY frontend/ frontend/
+# test_env_example checks the root .env.example against what the code reads.
+COPY .env.example ./
 
 # Throwaway keys per run, so no key material is baked into the image.
 COPY <<'SH' /usr/local/bin/run-tests

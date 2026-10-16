@@ -1,0 +1,12 @@
+{
+  "name": "evowerk-cloud-mrp",
+  "private": true,
+  "description": "Root task runner, same commands as the Makefile, works without make (plain Windows). No dependencies of its own.",
+  "scripts": {
+    "setup": "cd backend && python -m pip install -r requirements-dev.lock.txt && cd ../frontend && npm ci",
+    "test": "cd backend && python -m pytest -q && cd ../frontend && npm test",
+    "lint": "cd backend && python -m ruff check . && cd ../frontend && npm run lint",
+    "build": "npm --prefix frontend run build && docker compose build",
+    "up": "docker compose up --build"
+  }
+}

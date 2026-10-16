@@ -61,5 +61,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    coverage: {
+      // Floor just under the current numbers (15.8% lines over all of src,
+      // untested pages included). Ratchet up as coverage grows; CI fails below.
+      thresholds: { lines: 15, functions: 19, branches: 68 },
+    },
   },
 });

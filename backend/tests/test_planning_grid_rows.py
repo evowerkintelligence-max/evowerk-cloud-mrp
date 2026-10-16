@@ -137,7 +137,7 @@ async def test_member_cannot_set_planned_quantity(client, test_engine):
 
     # No invite flow exists yet to produce a non-owner user via the API, so
     # construct one directly against the test DB, same as
-    # test_bom.test_rbac_blocks_non_owner_from_mutations.
+    # test_bom_lifecycle.test_rbac_blocks_non_owner_from_mutations.
     session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_factory() as session:
         member = User(

@@ -62,11 +62,11 @@ export default defineConfig({
   test: {
     environment: "node",
     coverage: {
-      // Floor just under the current numbers (15.7% lines over all of src,
+      // Floor just under the current numbers (16.7% lines over all of src,
       // untested pages included; splitting an untested file adds counted
       // branches, so file splits can nudge these). Ratchet up as coverage
       // grows; CI fails below.
-      thresholds: { lines: 15, functions: 19, branches: 67 },
+      thresholds: { lines: 16, functions: 21, branches: 68 },
     },
   },
 });

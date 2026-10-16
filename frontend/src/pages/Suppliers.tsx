@@ -1,48 +1,18 @@
 import { FormEvent, useState } from "react";
-import { Truck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { Field } from "@/components/Field";
-import { EmptyState } from "@/components/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Dialog } from "@/components/ui/dialog";
-import { Table, TBody, TD, TH, THead, TR, TableWrap } from "@/components/ui/table";
-
-interface SupplierResponse {
-  id: string;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  is_active: boolean;
-  address_line1: string | null;
-  address_line2: string | null;
-  city: string | null;
-  state: string | null;
-  postal_code: string | null;
-  country: string | null;
-  payment_terms_days: number | null;
-  lead_time_days: number | null;
-  tags: string[];
-}
-
-interface SupplierContactData {
-  id: string;
-  name: string;
-  role: string | null;
-  email: string | null;
-  phone: string | null;
-  is_primary: boolean;
-}
-
-interface SupplierScorecard {
-  on_time_pct: number | null;
-  defect_pct: number | null;
-  sample_size: number;
-}
+import { SupplierContactsSection } from "./suppliers/SupplierContactsSection";
+import { SupplierScorecardSection } from "./suppliers/SupplierScorecardSection";
+import { SupplierTagsField } from "./suppliers/SupplierTagsField";
+import { SuppliersTable } from "./suppliers/SuppliersTable";
+import type { SupplierContactData, SupplierResponse, SupplierScorecard } from "./suppliers/types";
 
 const PAGE_SIZE = 20;
 
@@ -352,60 +322,7 @@ export function SuppliersPanel() {
         </div>
       )}
 
-      {suppliers.data && suppliers.data.length === 0 ? (
-        <EmptyState
-          icon={<Truck />}
-          title="No suppliers yet"
-          description="Add a vendor to start creating purchase orders."
-        />
-      ) : (
-        <TableWrap>
-          <Table>
-            <THead>
-              <TR>
-                <TH>Name</TH>
-                <TH>Email</TH>
-                <TH>Phone</TH>
-                <TH>Status</TH>
-                <TH></TH>
-              </TR>
-            </THead>
-            <TBody>
-              {suppliers.data?.map((supplier) => (
-                <TR key={supplier.id}>
-                  <TD className="font-medium">{supplier.name}</TD>
-                  <TD className="text-muted-foreground">{supplier.email ?? "—"}</TD>
-                  <TD className="text-muted-foreground">{supplier.phone ?? "—"}</TD>
-                  <TD>
-                    <Badge variant={supplier.is_active ? "success" : "neutral"}>
-                      {supplier.is_active ? "Active" : "Inactive"}
-                    </Badge>
-                  </TD>
-                  <TD className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="outline" size="sm" onClick={() => openEdit(supplier)}>
-                        Edit
-                      </Button>
-                      <Button
-                        variant={supplier.is_active ? "secondary" : "outline"}
-                        size="sm"
-                        loading={
-                          setSupplierActive.isPending && setSupplierActive.variables?.id === supplier.id
-                        }
-                        onClick={() =>
-                          setSupplierActive.mutate({ id: supplier.id, active: !supplier.is_active })
-                        }
-                      >
-                        {supplier.is_active ? "Deactivate" : "Reactivate"}
-                      </Button>
-                    </div>
-                  </TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        </TableWrap>
-      )}
+      <SuppliersTable suppliers={suppliers} openEdit={openEdit} setSupplierActive={setSupplierActive} />
 
       <div className="mb-8 mt-4 flex items-center justify-between">
         <Button
@@ -516,39 +433,13 @@ export function SuppliersPanel() {
               />
             </Field>
           </div>
-          <Field label="Tags" htmlFor="edit-tag-input">
-            <div className="flex gap-2">
-              <Input
-                id="edit-tag-input"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addTag();
-                  }
-                }}
-                placeholder="Add a tag and press Enter"
-              />
-              <Button type="button" variant="outline" onClick={addTag}>
-                Add
-              </Button>
-            </div>
-            {editTags.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-2">
-                {editTags.map((t) => (
-                  <Badge
-                    key={t}
-                    variant="neutral"
-                    className="cursor-pointer"
-                    onClick={() => removeTag(t)}
-                  >
-                    {t} ×
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </Field>
+          <SupplierTagsField
+            tagInput={tagInput}
+            setTagInput={setTagInput}
+            addTag={addTag}
+            editTags={editTags}
+            removeTag={removeTag}
+          />
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={() => setEditing(null)}>
               Cancel
@@ -559,123 +450,24 @@ export function SuppliersPanel() {
           </div>
         </form>
 
-        {editing && (
-          <div className="mt-6 space-y-3 border-t border-border pt-4">
-            <h3 className="text-sm font-semibold">Contacts</h3>
-            {contactError && <Alert variant="destructive">{contactError}</Alert>}
-            {contacts.data && contacts.data.length > 0 && (
-              <ul className="space-y-2">
-                {contacts.data.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
-                    <div>
-                      <span className="font-medium">{c.name}</span>
-                      {c.role && <span className="text-muted-foreground"> · {c.role}</span>}
-                      {c.email && <span className="text-muted-foreground"> · {c.email}</span>}
-                      {c.phone && <span className="text-muted-foreground"> · {c.phone}</span>}
-                      {c.is_primary && (
-                        <Badge variant="primary" className="ml-2">
-                          Primary
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      {!c.is_primary && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          loading={
-                            setContactPrimary.isPending && setContactPrimary.variables?.id === c.id
-                          }
-                          onClick={() => setContactPrimary.mutate(c)}
-                        >
-                          Make primary
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        loading={deleteContact.isPending && deleteContact.variables === c.id}
-                        onClick={() => deleteContact.mutate(c.id)}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] sm:items-end">
-              <Field label="Name" htmlFor="contact-name">
-                <Input
-                  id="contact-name"
-                  value={contactName}
-                  onChange={(e) => setContactName(e.target.value)}
-                />
-              </Field>
-              <Field label="Role" htmlFor="contact-role">
-                <Input
-                  id="contact-role"
-                  value={contactRole}
-                  onChange={(e) => setContactRole(e.target.value)}
-                />
-              </Field>
-              <Field label="Email" htmlFor="contact-email">
-                <Input
-                  id="contact-email"
-                  type="email"
-                  value={contactEmail}
-                  onChange={(e) => setContactEmail(e.target.value)}
-                />
-              </Field>
-              <Field label="Phone" htmlFor="contact-phone">
-                <Input
-                  id="contact-phone"
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                />
-              </Field>
-              <Button
-                type="button"
-                variant="outline"
-                loading={addContact.isPending}
-                disabled={!contactName.trim()}
-                onClick={() => addContact.mutate()}
-              >
-                Add contact
-              </Button>
-            </div>
-          </div>
-        )}
+        <SupplierContactsSection
+          editing={editing}
+          contactError={contactError}
+          contacts={contacts}
+          setContactPrimary={setContactPrimary}
+          deleteContact={deleteContact}
+          contactName={contactName}
+          setContactName={setContactName}
+          contactRole={contactRole}
+          setContactRole={setContactRole}
+          contactEmail={contactEmail}
+          setContactEmail={setContactEmail}
+          contactPhone={contactPhone}
+          setContactPhone={setContactPhone}
+          addContact={addContact}
+        />
 
-        {editing && scorecard.data && (
-          <div className="mt-6 space-y-2 border-t border-border pt-4">
-            <h3 className="text-sm font-semibold">Performance</h3>
-            {scorecard.data.sample_size === 0 ? (
-              <p className="text-sm text-muted-foreground">Not enough data yet.</p>
-            ) : (
-              <div className="flex gap-4 text-sm">
-                <span>
-                  On-time delivery:{" "}
-                  <strong>
-                    {scorecard.data.on_time_pct != null
-                      ? `${Math.round(scorecard.data.on_time_pct * 100)}%`
-                      : "—"}
-                  </strong>
-                </span>
-                <span>
-                  Defect rate:{" "}
-                  <strong>
-                    {scorecard.data.defect_pct != null
-                      ? `${Math.round(scorecard.data.defect_pct * 100)}%`
-                      : "—"}
-                  </strong>
-                </span>
-              </div>
-            )}
-          </div>
-        )}
+        <SupplierScorecardSection editing={editing} scorecard={scorecard} />
       </Dialog>
     </div>
   );

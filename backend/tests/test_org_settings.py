@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from tests.test_inventory import (
+from tests._inventory_helpers import (
     _add_user_with_role,
     _create_item,
     _create_supplier,

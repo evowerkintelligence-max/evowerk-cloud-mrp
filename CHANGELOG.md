@@ -27,6 +27,12 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
   `@vitest/coverage-v8` (`npm run test:coverage`).
 
 ### Changed
+- Second file-split pass: no source or test file is over 500 lines. Seven
+  more backend test files, six services and six route modules split into
+  siblings (import paths and the OpenAPI document unchanged); twelve
+  frontend pages and the Planning render test split into per-page folders.
+- Frontend coverage floor raised to lines 16 / functions 21 / branches 68,
+  with unit tests for the report-section, simulation and PO helpers.
 - Split `analytics/shared.tsx`, `RcaCases.tsx`, `Items.tsx` and `Boms.tsx`
   into per-page folders; import paths are unchanged.
 - Split `services/reports.py` into a `reports/` package and moved helpers

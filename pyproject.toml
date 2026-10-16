@@ -1,5 +1,5 @@
-# Repo-wide tool config. Backend dependencies stay in backend/requirements*.txt
-# (pinned via `make lock`); this file only holds settings ruff reads from
+# Repo-wide tool config. Backend dependencies live in backend/pyproject.toml
+# (locked in backend/uv.lock); this file only holds settings ruff reads from
 # anywhere in the repo (CI, pre-commit, editors).
 
 [tool.ruff]

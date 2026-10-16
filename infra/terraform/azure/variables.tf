@@ -8,18 +8,35 @@ variable "project_name" {
   description = "Short name used as a prefix for every resource this module creates"
   type        = string
   default     = "evowerk-mrp"
+
+  validation {
+    # ACR and storage account names strip hyphens and must be lowercase alphanumeric.
+    condition     = can(regex("^[a-z][a-z0-9-]*$", var.project_name))
+    error_message = "project_name must start with a lowercase letter and contain only lowercase letters, digits and hyphens."
+  }
 }
 
 variable "environment" {
   description = "Deployment environment name (e.g. production, staging) - appended to resource names"
   type        = string
   default     = "production"
+
+  validation {
+    # ACR and storage account names strip hyphens and must be lowercase alphanumeric.
+    condition     = can(regex("^[a-z][a-z0-9-]*$", var.environment))
+    error_message = "environment must start with a lowercase letter and contain only lowercase letters, digits and hyphens."
+  }
 }
 
 variable "vnet_cidr" {
   description = "CIDR block for the VNet this module creates"
   type        = string
   default     = "10.30.0.0/16"
+
+  validation {
+    condition     = can(cidrhost(var.vnet_cidr, 0))
+    error_message = "vnet_cidr must be a valid CIDR block (e.g. 10.30.0.0/16)."
+  }
 }
 
 variable "image_tag" {
@@ -47,13 +64,15 @@ variable "db_storage_mb" {
 }
 
 variable "db_name" {
-  type    = string
-  default = "evowerk_cloud_mrp"
+  description = "Name of the application database created on the Postgres Flexible Server"
+  type        = string
+  default     = "evowerk_cloud_mrp"
 }
 
 variable "db_username" {
-  type    = string
-  default = "evowerk"
+  description = "Postgres administrator login (the password is generated and stored in Key Vault)"
+  type        = string
+  default     = "evowerk"
 }
 
 variable "jwt_secret_key" {
@@ -67,6 +86,12 @@ variable "mfa_encryption_key" {
   description = "Fernet key encrypting TOTP secrets at rest. Must be supplied - can't be safely auto-generated here (has to be a valid Fernet key, not just random bytes). Generate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
   type        = string
   sensitive   = true
+
+  validation {
+    # A Fernet key is 32 bytes, url-safe base64 encoded: 43 chars plus "=".
+    condition     = can(regex("^[A-Za-z0-9_-]{43}=$", var.mfa_encryption_key))
+    error_message = "mfa_encryption_key must be a Fernet key (44 url-safe base64 chars); see the description for how to generate one."
+  }
 }
 
 variable "gemini_api_key" {
@@ -85,6 +110,12 @@ variable "dataset_storage_quota_gb" {
   description = "Size of the Azure Files share backing the backend's data_dir (uploaded datasets, AutoML artifacts). Standard file shares bill for what you use, not the quota, so this is a cap rather than a cost."
   type        = number
   default     = 100
+
+  validation {
+    # Standard Azure file shares allow 1 GiB to 100 TiB.
+    condition     = var.dataset_storage_quota_gb >= 1 && var.dataset_storage_quota_gb <= 102400
+    error_message = "dataset_storage_quota_gb must be between 1 and 102400."
+  }
 }
 
 variable "backend_cpu" {
@@ -94,26 +125,31 @@ variable "backend_cpu" {
 }
 
 variable "backend_memory" {
-  type    = string
-  default = "1Gi"
+  description = "Memory for the backend Container App, paired with backend_cpu"
+  type        = string
+  default     = "1Gi"
 }
 
 variable "frontend_cpu" {
-  type    = number
-  default = 0.25
+  description = "vCPU for the frontend (nginx) Container App"
+  type        = number
+  default     = 0.25
 }
 
 variable "frontend_memory" {
-  type    = string
-  default = "0.5Gi"
+  description = "Memory for the frontend Container App, paired with frontend_cpu"
+  type        = string
+  default     = "0.5Gi"
 }
 
 variable "redis_cpu" {
-  type    = number
-  default = 0.25
+  description = "vCPU for the redis Container App"
+  type        = number
+  default     = 0.25
 }
 
 variable "redis_memory" {
-  type    = string
-  default = "0.5Gi"
+  description = "Memory for the redis Container App, paired with redis_cpu"
+  type        = string
+  default     = "0.5Gi"
 }

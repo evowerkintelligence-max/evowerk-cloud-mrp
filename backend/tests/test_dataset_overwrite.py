@@ -1,5 +1,6 @@
 # backend/tests/test_dataset_overwrite.py
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import uuid
 
@@ -10,7 +11,7 @@ from app.services import datasets as ds_service
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 
 async def test_overwrite_dataset_file_updates_content_and_keeps_id(client, test_engine):

@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 # A minimal valid 1x1 PNG (base64-decoded), just to exercise the upload path -
 # no GEMINI_API_KEY is set in tests, so this never reaches the vision API.

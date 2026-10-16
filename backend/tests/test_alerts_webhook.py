@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import json
 import threading
@@ -12,7 +13,7 @@ from app.db import session as db_session
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 # actual=80 vs target=100 -> 20% miss, above the 5% threshold -> triggered.
 PT_CSV = b"actual,target\n80,100\n"

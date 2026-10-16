@@ -1,10 +1,11 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 CSV_A = b"units_produced,operating_hours\n100,10\n"
 CSV_B = b"good_units,total_units\n90,100\n"

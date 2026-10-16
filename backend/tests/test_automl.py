@@ -1,11 +1,12 @@
 from __future__ import annotations
+from tests._test_secrets import TEST_PASSWORD
 
 import pandas as pd
 import pytest
 
 from app.services import automl_engine
 
-PASSWORD = "correct-horse-battery-staple1"  # satisfies policy: 12+ chars, letter + digit  # pragma: allowlist secret
+PASSWORD = TEST_PASSWORD
 
 # y = 1 whenever x1 + x2 > 0, an easily-separable synthetic classification set.
 CSV = b"x1,x2,y\n" + b"\n".join(

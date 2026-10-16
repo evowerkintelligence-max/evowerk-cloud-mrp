@@ -1,0 +1,112 @@
+{
+    "failed_checks": [
+        {
+            "file": "/acr.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_container_registry.main",
+                    "check_ids": [
+                        "CKV_AZURE_139",
+                        "CKV_AZURE_163",
+                        "CKV_AZURE_164",
+                        "CKV_AZURE_165",
+                        "CKV_AZURE_166",
+                        "CKV_AZURE_167",
+                        "CKV_AZURE_233",
+                        "CKV_AZURE_237"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/database.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_postgresql_flexible_server.main",
+                    "check_ids": [
+                        "CKV2_AZURE_57",
+                        "CKV_AZURE_136"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/keyvault.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_key_vault.main",
+                    "check_ids": [
+                        "CKV2_AZURE_32",
+                        "CKV_AZURE_109",
+                        "CKV_AZURE_110",
+                        "CKV_AZURE_189",
+                        "CKV_AZURE_42"
+                    ]
+                },
+                {
+                    "resource": "azurerm_key_vault_secret.database_url",
+                    "check_ids": [
+                        "CKV_AZURE_114",
+                        "CKV_AZURE_41"
+                    ]
+                },
+                {
+                    "resource": "azurerm_key_vault_secret.gemini_api_key",
+                    "check_ids": [
+                        "CKV_AZURE_114",
+                        "CKV_AZURE_41"
+                    ]
+                },
+                {
+                    "resource": "azurerm_key_vault_secret.jwt_secret",
+                    "check_ids": [
+                        "CKV_AZURE_114",
+                        "CKV_AZURE_41"
+                    ]
+                },
+                {
+                    "resource": "azurerm_key_vault_secret.mfa_key",
+                    "check_ids": [
+                        "CKV_AZURE_114",
+                        "CKV_AZURE_41"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/networking.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_subnet.container_apps",
+                    "check_ids": [
+                        "CKV2_AZURE_31"
+                    ]
+                },
+                {
+                    "resource": "azurerm_subnet.postgres",
+                    "check_ids": [
+                        "CKV2_AZURE_31"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/storage.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_storage_account.data",
+                    "check_ids": [
+                        "CKV2_AZURE_1",
+                        "CKV2_AZURE_33",
+                        "CKV2_AZURE_38",
+                        "CKV2_AZURE_40",
+                        "CKV2_AZURE_41",
+                        "CKV_AZURE_206",
+                        "CKV_AZURE_33",
+                        "CKV_AZURE_59"
+                    ]
+                }
+            ]
+        }
+    ]
+}

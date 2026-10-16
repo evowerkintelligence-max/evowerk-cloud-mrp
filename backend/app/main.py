@@ -15,6 +15,7 @@ from app.api.routes import (
     bi,
     boms,
     cbm,
+    client_errors,
     computer_vision,
     customers,
     data_chat,
@@ -160,6 +161,7 @@ app.include_router(computer_vision.router, dependencies=[Depends(require_feature
 app.include_router(data_chat.router, dependencies=[Depends(require_feature("data_chat"))])
 app.include_router(alerts.router)
 app.include_router(device_tokens.router)
+app.include_router(client_errors.router)
 app.include_router(cbm.router, dependencies=[Depends(require_feature("predictive"))])
 
 

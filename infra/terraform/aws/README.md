@@ -114,9 +114,11 @@ test deploy. To send real email:
 No backend is configured in `versions.tf` - it defaults to local state,
 which is fine to experiment with but **not what you want for a real
 deployment**: this state file contains the RDS password and JWT secret in
-plaintext. Configure a remote backend (S3 + a DynamoDB lock table, or
-Terraform Cloud) with tightly restricted access before using this for real,
-and never commit `terraform.tfstate` (already gitignored here).
+plaintext. Before using this for real, switch to encrypted remote state:
+[`backend.tf.example`](backend.tf.example) configures S3 with KMS encryption,
+versioning and a DynamoDB lock table, and lists the one-time setup commands.
+Copy it to `backend.tf`, fill it in, and run `terraform init -migrate-state`.
+Never commit `terraform.tfstate` (already gitignored here).
 
 ## Updating
 

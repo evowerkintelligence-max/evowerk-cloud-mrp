@@ -82,8 +82,11 @@ terraform apply
 Same warning as the AWS module: no backend is configured in `versions.tf`,
 so this defaults to local state - fine to experiment with, **not fine for a
 real deployment**, since the state file holds the DB password and JWT secret
-in plaintext. Configure a remote backend (Azure Storage Account + a state
-container, with access tightly restricted) before using this for real.
+in plaintext. Before using this for real, switch to remote state:
+[`backend.tf.example`](backend.tf.example) configures an Azure Storage
+container (encrypted at rest, versioned, Entra ID auth) and lists the
+one-time setup commands. Copy it to `backend.tf`, fill it in, and run
+`terraform init -migrate-state`.
 
 ## Updating
 

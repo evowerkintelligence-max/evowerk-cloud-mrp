@@ -6,13 +6,11 @@ import { Alert } from "@/components/ui/alert";
 export function VerifyEmail() {
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token") ?? "";
-  const [status, setStatus] = useState<"pending" | "ok" | "error">("pending");
+  const [fetched, setStatus] = useState<"pending" | "ok" | "error">("pending");
+  const status = token ? fetched : "error";
 
   useEffect(() => {
-    if (!token) {
-      setStatus("error");
-      return;
-    }
+    if (!token) return;
     fetch("/auth/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

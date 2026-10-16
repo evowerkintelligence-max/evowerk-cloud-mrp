@@ -6,6 +6,13 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 
 ### Added
+- Root `package.json` mirroring the Makefile targets (`npm run setup`,
+  `npm test`, `npm run lint`, `npm run build`, `npm run up`) for machines
+  without `make`.
+- Frontend coverage floor (`frontend/vite.config.ts`), enforced in CI via
+  `npm run test:coverage`.
+- Optional outside-Docker variables (`DATABASE_URL`, `PORT`, `BACKEND_PORT`,
+  `DEV_PASSWORD`) documented in the root `.env.example`.
 - Root `Makefile` (`install`, `test`, `lint`, `build`, `up`, `lock`) and a
   Quickstart section in the README covering a fresh clone end to end.
 - Root `.env.example` for `docker compose up`.
@@ -20,6 +27,10 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
   `@vitest/coverage-v8` (`npm run test:coverage`).
 
 ### Changed
+- Ruff config moved from `backend/ruff.toml` to the root `pyproject.toml`
+  (same rules), so it applies from anywhere in the repo.
+- CI path filters now only skip jobs on pull requests; pushes to `master`
+  run every job.
 - CI now runs ruff, eslint, vitest, the production frontend build, a
   lockfile-sync check, and a Trivy IaC scan of both Terraform modules.
 - AWS ALB drops invalid HTTP headers; the ECS backend's EFS volume uses

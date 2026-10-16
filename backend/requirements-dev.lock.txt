@@ -267,7 +267,7 @@ pre-commit==4.7.0
     # via -r requirements-dev.txt
 psycopg2-binary==2.9.13
     # via -r requirements.txt
-pwdlib==0.3.0
+pwdlib==0.3.1
     # via fastapi-users
 py-serializable==2.1.0
     # via cyclonedx-python-lib
@@ -396,7 +396,7 @@ sortedcontainers==2.4.0
     #   asyncua
     #   cyclonedx-python-lib
     #   fakeredis
-sqlalchemy==2.0.54
+sqlalchemy==2.1.4
     # via
     #   -r requirements.txt
     #   alembic
@@ -406,7 +406,7 @@ starlette==1.8.0
     # via fastapi
 stevedore==5.9.1
     # via bandit
-tenacity==9.1.4
+tenacity==9.2.1
     # via google-genai
 threadpoolctl==3.7.0
     # via scikit-learn

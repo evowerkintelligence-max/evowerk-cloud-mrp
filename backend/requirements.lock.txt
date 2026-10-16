@@ -211,7 +211,7 @@ pluggy==1.6.0
     # via pytest
 psycopg2-binary==2.9.13
     # via -r requirements.txt
-pwdlib==0.3.0
+pwdlib==0.3.1
     # via fastapi-users
 pyasn1==0.6.4
     # via pyasn1-modules
@@ -318,7 +318,7 @@ sortedcontainers==2.4.0
     # via
     #   asyncua
     #   fakeredis
-sqlalchemy==2.0.54
+sqlalchemy==2.1.4
     # via
     #   -r requirements.txt
     #   alembic
@@ -326,7 +326,7 @@ sqlalchemy==2.0.54
     #   optuna
 starlette==1.8.0
     # via fastapi
-tenacity==9.1.4
+tenacity==9.2.1
     # via google-genai
 threadpoolctl==3.7.0
     # via scikit-learn

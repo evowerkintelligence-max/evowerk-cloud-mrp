@@ -1,5 +1,10 @@
 # EvoWerk Cloud MRP
 
+[![CI](https://github.com/evowerkintelligence-max/evowerk-cloud-mrp/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/evowerkintelligence-max/evowerk-cloud-mrp/actions/workflows/ci.yml)
+[![Backend coverage](https://raw.githubusercontent.com/evowerkintelligence-max/evowerk-cloud-mrp/badges/backend-coverage.svg)](#testing)
+[![Frontend coverage](https://raw.githubusercontent.com/evowerkintelligence-max/evowerk-cloud-mrp/badges/frontend-coverage.svg)](#testing)
+[![License: proprietary](https://img.shields.io/badge/license-proprietary-blue.svg)](LICENSE)
+
 Multi-tenant, cloud-hosted manufacturing system (BOM, procurement, lot tracking,
 forecasting). Industry-agnostic core; industry-specific customization (pharma,
 food, auto, etc.) is added later, config-driven, per customer.
@@ -14,7 +19,7 @@ notes for why.
 Needs Python 3.12, Node 20 and Docker. From the repo root:
 
 ```bash
-make install   # backend deps from the pinned lockfile + `npm ci`
+make install   # `npm ci` (root npm workspace) + backend deps from the pinned lockfile
 make test      # backend pytest (in-memory SQLite + fake Redis) + frontend vitest
 make lint      # ruff + eslint
 make typecheck # tsc -b over the frontend
@@ -25,8 +30,9 @@ make up        # Postgres, Redis, migrations, backend :8000, frontend :5173
 
 No `make` (plain Windows)? The root `package.json` has the same targets:
 `npm run setup`, `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`,
-`npm run up`. CI runs these same commands on
-every push and pull request.
+`npm run up`. The root `package.json` is an npm workspace over `frontend/`,
+so there is one `package-lock.json`, at the repo root. CI runs these same
+commands on every push and pull request.
 
 ## Current state
 
@@ -162,10 +168,10 @@ cp .env.example .env    # edit JWT_SECRET_KEY, MFA_ENCRYPTION_KEY, and DATABASE_
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 
-# Frontend
-cd frontend
+# Frontend (npm workspace: install from the repo root, one lockfile there)
+cd ..
 npm ci
-npm run dev
+npm --workspace frontend run dev
 ```
 
 ### Logging and error tracking
@@ -196,7 +202,7 @@ a new backend router means adding its prefix to both `vite.config.ts` (dev)
 and `nginx.conf.template` (prod).
 
 ```bash
-docker build -t evowerk-frontend-prod -f frontend/Dockerfile.prod ./frontend
+docker build -t evowerk-frontend-prod -f frontend/Dockerfile.prod .   # repo root context
 docker run -p 8080:80 -e BACKEND_UPSTREAM=host.docker.internal:8000 evowerk-frontend-prod
 ```
 
@@ -214,11 +220,31 @@ proxy/load balancer in any real deployment.
 
 ## Testing
 
+Two suites: backend pytest (~1000 tests in `backend/tests/`) and frontend
+vitest (`frontend/src/**/*.test.ts(x)`, including jsdom interaction tests).
+Any of these runs them from the repo root:
+
 ```bash
-cd backend && pytest -q                  # ~1000 tests; add --cov=app for coverage
-cd frontend && npm test                  # vitest
-cd frontend && npm run test:coverage     # vitest with v8 coverage
+uv run --project backend pytest  # backend suite; plain `pytest` also works with backend/.venv active
+npm test                         # both suites (also: npm run test:backend, npm run test:frontend)
+make test                        # both suites
+npm --workspace frontend run test:coverage  # vitest with v8 coverage
 ```
+
+Only Docker installed? One command builds a container with Python 3.12, uv
+and Node 22 and runs both suites, exiting non-zero if either fails (CI runs
+it too):
+
+```bash
+docker compose -f docker-compose.test.yml run --rm --build test
+# same as: make test-docker / npm run test:docker
+```
+
+Coverage floors, enforced in CI (`.github/workflows/ci.yml`): backend
+`--cov-fail-under=70` in the `backend` job; frontend lines 95%, functions
+90%, branches 88%, set in `frontend/vite.config.ts` and repeated on the
+vitest command line in the `frontend` job. Each run writes a coverage table
+to the job summary, and pushes to `master` refresh the coverage badges above.
 
 `backend/tests/conftest.py` supplies test-only defaults for every required
 secret, so no `.env` is needed to run the suite.

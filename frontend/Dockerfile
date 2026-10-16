@@ -1,3 +1,5 @@
+# Build from the repo root (npm workspace, one root package-lock.json):
+#   docker build -f frontend/Dockerfile .
 FROM node:25-alpine
 
 # The upstream node:20-alpine tag can lag a patch release behind Alpine's own
@@ -8,9 +10,11 @@ RUN apk update && apk upgrade --no-cache
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY frontend/package.json frontend/
 RUN npm ci
 
-COPY . .
+COPY frontend/ frontend/
 
+WORKDIR /app/frontend
 EXPOSE 5173
 CMD ["npm", "run", "dev", "--", "--host"]

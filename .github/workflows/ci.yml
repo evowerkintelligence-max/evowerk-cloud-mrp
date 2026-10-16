@@ -31,6 +31,8 @@ jobs:
       docker: ${{ steps.filter.outputs.docker }}
       terraform: ${{ steps.filter.outputs.terraform }}
     steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v4
         id: filter
@@ -58,8 +60,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
@@ -91,7 +93,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -127,7 +129,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build backend image
         run: docker build -t evowerk-cloud-mrp-backend:ci ./backend
       - name: Build frontend image
@@ -194,8 +196,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
@@ -238,8 +240,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
@@ -259,7 +261,7 @@ jobs:
       run:
         working-directory: infra/terraform/${{ matrix.cloud }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4.0.1
         with:
           terraform_version: "1.9.8"

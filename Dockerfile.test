@@ -5,9 +5,9 @@
 # fakeredis (backend/tests/conftest.py). Build context is the repo root.
 FROM ghcr.io/astral-sh/uv:0.13.1 AS uv
 
-# Node 22 (same as CI) for the frontend; uv fetches Python 3.12 (same as CI)
+# Node 24 LTS (same as CI) for the frontend; uv fetches Python 3.12 (same as CI)
 # for the backend, so one image holds both toolchains.
-FROM node:25-bookworm-slim
+FROM node:24-bookworm-slim
 
 # libgomp1: OpenMP runtime that lightgbm's bundled shared library loads.
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \

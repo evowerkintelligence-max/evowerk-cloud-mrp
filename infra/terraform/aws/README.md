@@ -109,6 +109,17 @@ test deploy. To send real email:
    request production access in the SES console before relying on this for
    real users.
 
+## Monitoring
+
+[`monitoring.tf`](monitoring.tf) creates CloudWatch alarms on ALB 5xx
+(target and ELB), unhealthy frontend targets, backend CPU/memory above 85%,
+RDS CPU above 80% and RDS free storage under 2 GiB. Every alarm and its
+recovery publish to one SNS topic (encrypted with a rotated customer-managed
+KMS key that grants CloudWatch publish rights; the AWS-managed SNS key can't).
+Set `alarm_email` to subscribe an address (confirm the email AWS sends), or
+subscribe a pager/Slack endpoint to the `alarm_topic_arn` output yourself.
+Container logs already go to CloudWatch Logs (`/ecs/<prefix>/*`, see `ecs.tf`).
+
 ## State
 
 No backend is configured in `versions.tf` - it defaults to local state,
@@ -169,6 +180,7 @@ trivy config --severity HIGH,CRITICAL .
 
 | Name | Description | Type | Default | Required |
 |---|---|---|---|:---:|
+| `alarm_email` | Email that receives monitoring alerts (see Monitoring). Empty = alerts fire with no email receiver. | `string` | `""` | no |
 | `aws_region` | AWS region to deploy into | `string` | `"us-east-1"` | no |
 | `project_name` | Short name used as a prefix for every resource this module creates | `string` | `"evowerk-mrp"` | no |
 | `environment` | Deployment environment name (e.g. production, staging) - appended to resource names | `string` | `"production"` | no |

@@ -79,6 +79,14 @@ terraform apply
 
 (`<acr-login-server>` is the `acr_login_server` output from phase 1.)
 
+## Monitoring
+
+[`monitoring.tf`](monitoring.tf) creates Azure Monitor metric alerts on
+frontend 5xx responses, backend container restarts (crash loop / OOM),
+Postgres CPU above 80% and Postgres storage above 85%. All route to one
+action group; set `alarm_email` to add an email receiver, or add another
+receiver (SMS, webhook, Teams) to the action group yourself.
+
 ## State
 
 Same warning as the AWS module: no backend is configured in `versions.tf`,
@@ -154,6 +162,7 @@ trivy config --severity HIGH,CRITICAL .
 
 | Name | Description | Type | Default | Required |
 |---|---|---|---|:---:|
+| `alarm_email` | Email that receives monitoring alerts (see Monitoring). Empty = alerts fire with no email receiver. | `string` | `""` | no |
 | `azure_location` | Azure region to deploy into | `string` | `"eastus"` | no |
 | `project_name` | Short name used as a prefix for every resource this module creates | `string` | `"evowerk-mrp"` | no |
 | `environment` | Deployment environment name (e.g. production, staging) - appended to resource names | `string` | `"production"` | no |

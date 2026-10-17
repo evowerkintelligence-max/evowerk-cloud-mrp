@@ -40,3 +40,8 @@ output "db_password" {
   value       = random_password.db_password.result
   sensitive   = true
 }
+
+output "alarm_topic_arn" {
+  description = "SNS topic every CloudWatch alarm publishes to - subscribe pager/Slack endpoints here."
+  value       = aws_sns_topic.alarms.arn
+}

@@ -22,3 +22,6 @@ jwt_secret_key = ""
 # Must already be pushed to the ECR repos this module creates before you
 # apply the ECS resources - see README.md for the two-phase apply.
 image_tag = "latest"
+
+# Who gets monitoring alerts (see monitoring.tf). Empty = no email receiver.
+# alarm_email = "ops@example.com"

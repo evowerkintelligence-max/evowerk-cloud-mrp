@@ -176,3 +176,31 @@ run "rejects_invalid_fargate_cpu" {
 
   expect_failures = [var.backend_cpu]
 }
+
+run "every_alarm_notifies_the_alarm_topic" {
+  command = plan
+
+  variables {
+    alarm_email = "ops@example.com"
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.this) >= 7
+    error_message = "ALB, backend and RDS alarms must all exist."
+  }
+
+  assert {
+    condition     = alltrue([for a in aws_cloudwatch_metric_alarm.this : length(a.alarm_actions) == 1])
+    error_message = "Every alarm must notify the alarm SNS topic."
+  }
+
+  assert {
+    condition     = length(aws_sns_topic_subscription.alarm_email) == 1
+    error_message = "alarm_email must subscribe to the alarm topic."
+  }
+
+  assert {
+    condition     = aws_kms_key.alarms.enable_key_rotation
+    error_message = "Alarm topic must be encrypted with a rotated customer-managed key."
+  }
+}

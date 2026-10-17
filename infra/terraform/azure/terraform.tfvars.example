@@ -25,3 +25,6 @@ gemini_api_key = "REPLACE_ME"
 # Must already be pushed to the ACR repos this module creates before you
 # apply the Container Apps - see README.md for the two-phase apply.
 image_tag = "latest"
+
+# Who gets monitoring alerts (see monitoring.tf). Empty = no email receiver.
+# alarm_email = "ops@example.com"

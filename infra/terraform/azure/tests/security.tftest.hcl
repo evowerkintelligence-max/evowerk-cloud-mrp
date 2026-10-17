@@ -111,3 +111,26 @@ run "rejects_invalid_vnet_cidr" {
 
   expect_failures = [var.vnet_cidr]
 }
+
+run "every_alert_notifies_the_action_group" {
+  command = plan
+
+  variables {
+    alarm_email = "ops@example.com"
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.this) >= 4
+    error_message = "Frontend, backend and Postgres alerts must all exist."
+  }
+
+  assert {
+    condition     = alltrue([for a in azurerm_monitor_metric_alert.this : length(a.action) == 1])
+    error_message = "Every alert must notify the alarm action group."
+  }
+
+  assert {
+    condition     = length(azurerm_monitor_action_group.alarms.email_receiver) == 1
+    error_message = "alarm_email must be an action group receiver."
+  }
+}

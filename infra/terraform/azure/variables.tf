@@ -153,3 +153,9 @@ variable "redis_memory" {
   type        = string
   default     = "0.5Gi"
 }
+
+variable "alarm_email" {
+  description = "Email that receives monitoring alerts (see monitoring.tf). Empty = alerts fire with no email receiver; subscribe one yourself."
+  type        = string
+  default     = ""
+}

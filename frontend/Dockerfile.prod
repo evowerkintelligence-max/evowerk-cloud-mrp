@@ -5,7 +5,7 @@
 # Build from the repo root (npm workspace, one root package-lock.json):
 #   docker build -f frontend/Dockerfile.prod .
 
-FROM node:25-alpine AS build
+FROM node:24-alpine AS build
 
 RUN apk update && apk upgrade --no-cache
 

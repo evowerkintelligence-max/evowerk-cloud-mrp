@@ -28,6 +28,10 @@ updates:
     directories: [/, /backend, /frontend]
     schedule:
       interval: weekly
+    ignore:
+      # Odd Node majors never reach LTS; move to the next even LTS by hand.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: terraform
     directories: [/infra/terraform/aws, /infra/terraform/azure]

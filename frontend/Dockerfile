@@ -1,8 +1,8 @@
 # Build from the repo root (npm workspace, one root package-lock.json):
 #   docker build -f frontend/Dockerfile .
-FROM node:25-alpine
+FROM node:24-alpine
 
-# The upstream node:20-alpine tag can lag a patch release behind Alpine's own
+# The upstream node:24-alpine tag can lag a patch release behind Alpine's own
 # package index (e.g. openssl) - pull current packages at build time instead
 # of waiting on the next upstream image rebuild.
 RUN apk update && apk upgrade --no-cache

@@ -5,6 +5,8 @@ change it describes. Format follows [Keep a Changelog](https://keepachangelog.co
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
 ### Added
 - Client error telemetry: the SPA reports render crashes, uncaught errors,
   unhandled rejections and 5xx/network API failures to `POST /client-errors`

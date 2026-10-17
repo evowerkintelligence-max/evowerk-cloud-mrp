@@ -4,7 +4,7 @@
 
 [project]
 name = "evowerk-cloud-mrp-backend"
-version = "0.0.0"
+version = "0.2.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.111.0",

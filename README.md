@@ -191,6 +191,14 @@ level. Setting `SENTRY_DSN` turns on Sentry error tracking; it is off by
 default and should point at your own Sentry (self-hosted or your account),
 since EvoWerk never receives customer data. PII sending stays disabled.
 
+The frontend has its own error tracking (`frontend/src/lib/telemetry.ts`):
+render crashes (error boundary), uncaught errors, unhandled promise
+rejections and 5xx/network API failures are reported to `POST /client-errors`
+on the same deployment's backend, which logs them as structured JSON lines
+and forwards them to Sentry when `SENTRY_DSN` is set. Reports are deduped and
+capped per page load and rate limited per IP; nothing is sent to a third
+party.
+
 ## Production frontend image
 
 `frontend/Dockerfile` (used by `docker-compose`) is dev-only — it runs the

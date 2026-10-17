@@ -1,4 +1,7 @@
 version: 2
+# One grouped PR per ecosystem per week (minor/patch and majors separately),
+# capped at 2 open PRs each, so updates land as a few reviewable commits
+# instead of a burst of one-package bumps.
 updates:
   # Bumps backend/pyproject.toml and backend/uv.lock together (CI runs
   # `uv lock --check`).
@@ -6,28 +9,42 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
     groups:
       python-minor:
         update-types: [minor, patch]
+      python-major:
+        update-types: [major]
 
   # Root package-lock.json covers the frontend workspace.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
     groups:
       npm-minor:
         update-types: [minor, patch]
+      npm-major:
+        update-types: [major]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directories: [/, /backend, /frontend]
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      docker:
+        patterns: ["*"]
     ignore:
       # Odd Node majors never reach LTS; move to the next even LTS by hand.
       - dependency-name: node
@@ -37,3 +54,7 @@ updates:
     directories: [/infra/terraform/aws, /infra/terraform/azure]
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      terraform:
+        patterns: ["*"]

@@ -83,8 +83,12 @@ then asserts both UPDATE and DELETE raise).
 
 ### CI/CD security gates
 
-Every push/PR runs lint (ruff, eslint), the backend and frontend test suites
-(backend with a coverage floor), a production frontend build, and:
+Every push/PR runs lint (ruff, eslint), typecheck (tsc), the backend and
+frontend test suites, a production frontend build, and:
+- **Coverage gates (both suites)**: backend `pytest --cov-fail-under=70`;
+  frontend vitest v8 coverage with lines 95% / functions 90% / branches 88%
+  (`thresholds` in `frontend/vite.config.ts`, repeated on the CI command
+  line). Either suite dropping below its floor fails the build.
 - **SAST**: `bandit` over `app/` (backend).
 - **Dependency scanning**: `pip-audit` (backend) and `npm audit
   --audit-level=high` (frontend).
@@ -99,9 +103,12 @@ Every push/PR runs lint (ruff, eslint), the backend and frontend test suites
   Postgres service container (the test suite itself runs against SQLite, so
   this is the only place migrations are validated against the database
   engine they're actually written for) and verifies audit-log immutability.
-- **IaC checks**: `terraform fmt -check`, `terraform validate` and a Trivy
-  config scan (HIGH/CRITICAL) for both `infra/terraform/aws` and
-  `infra/terraform/azure`. Accepted findings are suppressed inline with a
+- **IaC checks** for both `infra/terraform/aws` and `infra/terraform/azure`:
+  `terraform fmt -check`, `terraform validate`, `terraform test` (plan-only
+  tests against mocked providers asserting security invariants), TFLint with
+  the AWS/Azure rulesets, **Checkov policy-as-code** (fails on any finding
+  not in the reviewed `.checkov.baseline`) and a Trivy config scan
+  (HIGH/CRITICAL). Accepted Trivy findings are suppressed inline with a
   `# trivy:ignore:<ID> <reason>` comment on the resource.
 - **Lockfile check**: `uv lock --check` fails if `backend/pyproject.toml`
   changed without regenerating `backend/uv.lock` (`make lock` or `uv lock`).
@@ -184,6 +191,14 @@ level. Setting `SENTRY_DSN` turns on Sentry error tracking; it is off by
 default and should point at your own Sentry (self-hosted or your account),
 since EvoWerk never receives customer data. PII sending stays disabled.
 
+The frontend has its own error tracking (`frontend/src/lib/telemetry.ts`):
+render crashes (error boundary), uncaught errors, unhandled promise
+rejections and 5xx/network API failures are reported to `POST /client-errors`
+on the same deployment's backend, which logs them as structured JSON lines
+and forwards them to Sentry when `SENTRY_DSN` is set. Reports are deduped and
+capped per page load and rate limited per IP; nothing is sent to a third
+party.
+
 ## Production frontend image
 
 `frontend/Dockerfile` (used by `docker-compose`) is dev-only — it runs the
@@ -232,7 +247,7 @@ npm --workspace frontend run test:coverage  # vitest with v8 coverage
 ```
 
 Only Docker installed? One command builds a container with Python 3.12, uv
-and Node 22 and runs both suites, exiting non-zero if either fails (CI runs
+and Node 24 LTS and runs both suites, exiting non-zero if either fails (CI runs
 it too):
 
 ```bash
@@ -264,8 +279,9 @@ test yet.
 
 Terraform modules for customer-hosted deployment live under
 `infra/terraform/`: `aws/` (ECS + ALB + RDS) and `azure/` (Container Apps +
-Key Vault). See each module's `README.md` for prerequisites and the
-deploy/update flow.
+Key Vault). See [`infra/terraform/README.md`](infra/terraform/README.md) for
+state, secrets, monitoring and policy checks, and each module's `README.md`
+for prerequisites and the deploy/update flow.
 
 ## Deferred / not yet built
 
